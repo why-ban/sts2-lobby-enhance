@@ -5,6 +5,21 @@
 > **COMPANION** = `D:\zhuanban\sts2m\work\companion\`，**WS** = `D:\zhuanban\sts2m`。
 > 游戏 0.113 反编译源：`WS\work\compat\decompiled-v0.113.0`（下称 **DEC113**，commit `16ac0fe3`，见日志目录名 `v0.113.0-16ac0fe3`）。
 
+> **⚠ 2026-11-14 事实更正（先看这条，再看全文）**
+>
+> 本文多处写「只有 Android 验证过 / PC 端未测」。那是**从 `lobby-port-v113.md` 抄来的、针对「12 文件源码移植」的说法**，
+> 不能套到整个项目上。实际验证矩阵是：
+>
+> | 组合 | 状态 | 证据 |
+> |---|---|---|
+> | **Windows 桌面版房主 + Android 客户端** | **反复验证**（加入 / 开局 / 打完一层 / 局中重开 / 结算页新开一局） | 每次会话的 PC `godot.log` 有 `NetHostGameService` + `hosting …`，手机日志是 `NetClientGameService` |
+> | **Android 房主** | 验证过（至少一次） | `WS\work\logs\2043\...\godot.log` 有 `hosting …` |
+> | **PC 作为加入方（客户端）** | **未验证** | 所有日志里 PC 一直是房主 |
+> | **12 文件源码移植在 Windows 上** | **未验证**（移植版只在 Android 跑过） | `lobby-port-v113.md:100`、`:184-188` |
+>
+> 也就是说：**「PC 端没测过」是错的；「PC 客户端没测过」「移植版没在 Windows 上跑过」是对的。**
+> 对外（issue / PR）只能按上表写。
+
 ---
 
 ## 0. 结论摘要（先给答案）
@@ -328,11 +343,12 @@ the 0.6.3 DLL cannot be made to work by patching around these.
 ## Testing
 
 - Built against `sts2.dll` 0.113.0: **16 errors → 0 errors**, one pre-existing CS8604 warning remains.
-- Real-device: **Android only** (Redmi K20 Pro, Android 11, Vulkan).
+- Real-device for **this port**: Android only (Redmi K20 Pro, Android 11, Vulkan).
   - host on Android / join from Android: OK (`Lobby join accepted. Mode=Standard IsCustom=False`)
   - host on Android / join from an unpatched PC 0.6.3 client: still fails, because that client itself
     reads the removed `InitialGameInfoMessage.gameMode` — nothing the host can do.
-- **PC side untested.** I do not claim PC behaviour.
+- **This port has not been run on Windows.** (A separate runtime-patch companion mod, which does not
+  touch your files, is used daily with a Windows host + Android client — but that is not this PR.)
 
 ## Known gap (not in this PR)
 

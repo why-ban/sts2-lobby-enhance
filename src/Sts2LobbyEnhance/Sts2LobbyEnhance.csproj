@@ -34,6 +34,19 @@
     <FileVersion>$(ModManifestVersion)</FileVersion>
     <InformationalVersion>$(ModManifestVersion)</InformationalVersion>
     <AssemblyVersion>$(ModManifestVersion)</AssemblyVersion>
+
+    <!--
+      Do NOT let the SDK append "+<commit-sha>" to InformationalVersion.
+
+      The SDK does that by default (IncludeSourceRevisionInInformationalVersion), which makes the
+      produced DLL depend on the git state rather than on the source tree. That breaks the release
+      gate for real: ReleasePackageTests.ContentAssemblyIsTheCurrentBuild asserts that
+      packaging/content/<id>.dll is byte-identical to the current build output, so a plain
+      "commit, then build again" would flip the DLL hash and fail the gate even though nothing in
+      the source changed. The mod's version already comes from the manifest and that is what the
+      game and the Workshop display, so the commit hash buys nothing here.
+    -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!-- Fail loudly instead of shipping a DLL whose FileVersion is empty. -->
