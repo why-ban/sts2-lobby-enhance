@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Regression suite for the 0.113 compatibility patch.
+
+    Design notes:
+      * This project deliberately does NOT reference Sts2LobbyEnhance.csproj. That project needs
+        the game DLLs at build time; referencing it would make `dotnet test` unbuildable on a machine
+        without Slay the Spire 2 installed. The suite instead scans the *shipped* binaries as data.
+      * Tests must run without Godot and without Steam. Nothing here starts a game process or touches
+        MegaCrit's Log class (which resolves Godot.OS in its static constructor and crashes with
+        0xC0000005 outside a Godot host).
+      * Missing inputs (game directory, official mod DLL) produce a *skip*, never a failure.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Sts2LobbyEnhance.Tests</RootNamespace>
+    <AssemblyName>Sts2LobbyEnhance.Tests</AssemblyName>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <!--
+    GameOverLayout.cs is linked, not referenced. It is the only file of the patch that is pure geometry: it
+    must not touch a Godot type so this suite can compile and assert on it on a machine without the game.
+    Compiling the real file (instead of a copy) is the point — the assertions below are about the code that
+    ships, so a regression cannot pass by being absent from the test build.
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\src\Sts2LobbyEnhance\Scripts\Restart\GameOverLayout.cs"
+             Link="Layout\GameOverLayout.cs" />
+  </ItemGroup>
+
+</Project>

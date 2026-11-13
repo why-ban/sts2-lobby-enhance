@@ -1,0 +1,241 @@
+# 更新日志
+
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循语义化版本。
+
+## [1.7.0] - 2026-11-14
+
+目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项仍为 **9**。
+
+### 更名
+
+- 模组 id 由 `sts2_lan_connect_0113_fix` 改为 **`sts2_lobby_enhance`**，显示名改为 **「游戏大厅增强」**，
+  程序集与命名空间改为 `Sts2LobbyEnhance`，日志前缀由 `[0113fix]` 改为 `[lobby-enhance]`。
+  原因：功能早已不止「兼容 0.113」，而 id 里带死版本号会在游戏后续更新时变得荒谬。
+- **联机双方必须同时换成新版本**：握手报文里报的是 `id-version`，新旧 id 会互相认不出，
+  旧对端会被判「没装补丁」而走保守分支（不崩，但「新开一局」等功能不对等）。
+- 游戏按 `manifest.id + ".dll"` 找程序集，所以 DLL / 清单 / 安装目录同步改名：
+  `sts2_lobby_enhance.dll`、`sts2_lobby_enhance.json`、`mods/sts2_lobby_enhance/`。
+
+### 新增
+
+- **大厅房间卡片标注「极速」「恐惧」模式。** 官方 0.6.3 的 `GetRoomGameModePill` 只认
+  `daily` 与 `custom`，其余一律显示 `STD`，所以这两种新模式的房间在列表里看不出类型。
+  现在给该方法加了 postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红框），
+  其余输入原样返回；选中摘要与无障碍播报走的是同一个方法，因此一并生效。
+
+### 改进
+
+- **创意工坊封面重做**：512×512，暗色木纹/血色底 + 金色标题 + 五条功能卡，尺寸 177 KB（Steam 上限 1 MiB）。
+  生成脚本 `packaging/make-image.py` 只用 Pillow，连续两次输出 sha256 相同。
+
+## [1.6.1] - 2026-11-14
+
+目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项仍为 **9**。
+1.6.0 真机测试通过后收尾的三处 UI 细节。
+
+### 修复
+
+- **重开成功后自动关闭「房间管理」面板。** 那个面板是独立的 CanvasLayer 浮层，不属于局内场景也不属于暂停菜单，
+  所以「回到主菜单」并不会销毁它 —— 重开成功后它仍盖在新加载的局面上，文字停在「正在准备重开并通知队友...」。
+  现在重开成功即调用面板自己的 `ClosePanel()`（与它的「关闭」按钮同一条路径）。
+- **「新开一局」按钮改为点「继续」之后才出现。** 之前它在结算屏一出现就注入；现在挪到
+  `NGameOverScreen.OpenSummaryScreen` 之后（即本局数据页），并在 `HideSummary` 时隐藏。注入幂等，
+  反复开关不会叠出多份节点。客户端提示仍留在第一屏（玩家需要知道要不要等）。
+- **客户端提示按会话状态分支。** 之前只看「房主有没有装补丁」，所以房主**放弃游戏**后客户端仍显示
+  「房主可以直接新开一局」—— 而那时 `[RunLobby] Disconnected. Reason: HostAbandoned` 已经发生。
+  现在按 `service.IsConnected` 分四种情况，并把文案压到一行内（标签宽 520 px、字号 24，约 21 汉字上限）：
+  断连「房主已结束联机，请退出后重新加入」、房主有补丁「房主可以新开一局，不着急退出游戏」、
+  房主无补丁「房主未装补丁，本局结束需退出重进」、未知「房主补丁未知，可能直接新开或需重进」。
+  断连发生在提示注入**之后**也会就地更新，不再留陈旧文案。
+
+## [1.6.0] - 2026-11-14
+
+目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项 **10 → 9**：移除 `treasure-vote`。
+本版重点是让「局中重开」真正跑通 —— 在此之前它必定在客户端被 Tail 的 roster 校验拒掉，
+然后两端各自空等到超时。
+
+### 修复
+
+- **局中「重开」在客户端被协议校验拒绝（本版主因）。** 客户端报
+  `lan_protocol_version_mismatch: Current-state snapshots must repeat the accepted revision byte-for-byte.`
+  原因是重开复用同一条会话，客户端 Tail 的 roster 权威仍持有上一纪元的 `StartRunLobbyPlayer` 快照，
+  而房主发的是 `LoadRunLobbyPlayer` 快照 —— 载体类型不同、长度不同，`CurrentState` 的逐字节比对必然失败
+  （`LanConnectRosterAuthorityState.cs:86`）。现在客户端在发重开请求前先丢弃自己的 roster 纪元
+  （`Core/TailRoster.cs`），房主侧保持单调递增 —— 未打补丁的对端仍按旧行为工作。
+- **重开 / 新开一局不再空等。** 客户端等 begin 的上限 15s → 180s、房主 30s → 150s（客户端必须长于房主，
+  否则客户端先断开会让房主必然超时）；所有回来的玩家都离开时房主立刻失败，不再干等满额。
+- **重开失败不再留下关不掉的僵尸房间。** 自动重开与原生确认屏都失败时关闭房主会话，
+  而不是把「没有局、没有大厅、但会话还活着」的状态留给玩家。
+- **协议拒绝不再被拆局抑制吞掉。** 拆局时只抑制 `NetError.Quit` 那一次断连；
+  `NetError.ModMismatch` 之类的协议断连照常执行，不再留下「绑定未摘、传输仍在」的半拆解状态。
+- **回退路径不再向已断开的 peer 发送。** 重开回退前逐个校验 peer 仍在线；否则一次发往死连接
+  会被放大成「终止整个 Tail 绑定并踢掉所有 peer」。
+- **标准模式建房恢复邀请按钮**（补回漏调的 `ScheduleEnsureInviteButton`）。
+- **加入「已开局」房间时给正确提示**：按游戏自己的行为弹 `RunInProgress` 并断开，而不是抛异常。
+- **加入失败时上报 Tail 的真实拒绝码**，不再一律显示笼统的 `ModMismatch`。
+- **任何一项修复安装失败时整体回滚**，不再让半套补丁继续运行。
+
+### 移除
+
+- **`treasure-vote`（宝物室投票复刻）已删除**，连同 `src/Sts2LobbyEnhance/Scripts/Gameplay/TreasureVoteFix.cs`
+  与 `tools/treasure-vote-test/`。理由与证据：
+  1. 0.113 原生的 `TreasureRoomRelicSynchronizer.OnPicked(Player, int?)` + `AwardRelics` 已完整支持「跳过」票
+     （`TreasureRoomRelicSynchronizer.cs:204-251`、`:253-334`）；
+  2. 官方 0.6.3 在 0.113 上自己就跳过了那条补丁（`dec-official/TreasurePatches.cs:122-127`、`:137-140`、
+     `:163-167`），所以本补丁原本要修的「断点 #5」在 0.113 上并不需要修；
+  3. 复刻与原生在含跳过票时可观测不同：安慰奖配对（同一份票、同一颗种子，p1 拿到索引 1 而原生是 3）、
+     全员跳过时的结果集（原生每条遗物一条 `Skipped`，复刻是空结果，并因此少一轮 `MoveToFallback`）。
+- 启动探测**不变**：`GenerateRelicFight` 多一个 `relicIndex` 仍是「这是不是 0.113」的判据之一
+  （`Core/CompatProbe.cs:62-74`），所以日志里 `game probe` 那行仍带 `generateRelicFight4=True`。
+- `tools/contract-check` 里 3 条 `TreasurePatches` 契约随之删除（补丁源码已不再引用该类型），
+  契约总数 **33 → 30**。
+
+### 你会看到的变化
+
+- 启动日志的 `applied` 少一项：`summary: applied=9[...] skipped=0[] failed=0`（不再有 `treasure-vote`）。
+- 宝物室投票完全回到 0.113 原生实现：单机点「跳过」不再立刻关箱，而是等 `OnRoomExited` 收尾
+  （`TreasureRoomRelicSynchronizer.cs:223-227`、`:340-346`）。
+- 局中「重开」会多一行 `mid-run-restart: dropped the accepted Tail roster epoch on this session
+  (before the reload join request).` —— 看到它就说明客户端已经按新逻辑处理，不再是被拒后空等。
+- 重开失败时屏幕上给的是具体原因（房主没回应 / 有人离开 / 存档读不出），不再是「点了没反应」。
+
+### 验证
+
+- `tools/smoke-test`：`applied` **9 项**，不含 `treasure-vote`；现在它加载的是
+  `packaging/content` 里的**出货 DLL**（不再是源码），并逐项断言每处修复至少有一处真实 Harmony 接缝。
+- `tools/contract-check`：**30 条**契约全部满足。
+- `dotnet test tests\Sts2LobbyEnhance.Tests\Sts2LobbyEnhance.Tests.csproj -c Release`：
+  **通过 61 / 失败 0 / 跳过 0**（本机实跑输出，非引用历史数字）。
+- 新增 `RosterEpochRegressionTests`：用**真实**的 0.6.3 类型与 0.113 类型离线复现了本版主因 ——
+  复现出的异常消息与真机日志逐字相同，并证明 `Reset()` 之后同一帧能被接受（`T1`–`T4`）。
+- 新增 `FixRegistryTests`（修复清单与分派表断言）、`GameDependentCoverageTests`（反假绿闸门）、
+  `tools/pack-release`（发布包闸门：输入硬编码、逐文件比对 sha256、打完重新解包复核）。
+
+## [1.5.0] - 2026-11-13
+
+目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项从 9 项增加到 **10 项**。
+发布包：`sts2-lan-connect-0113-fix-v1.5.zip`（v1.5 发行时的模组名；v1.6.1 起模组改名为 `sts2_lobby_enhance`，本行保留当时的真实包名）。
+
+### 你会看到的变化
+
+1. **可以加入极速 / 恐惧房间了。** 之前客户端加入这两种房间会立刻弹 InternalError —— 加入握手其实
+   已经成功，卡在"加入后该推哪个准备页"：官方模组的 `PushJoinedScreen` 只认标准 / 每日 / 自定义，
+   遇到 0.113 新增的模式直接抛 `ArgumentOutOfRangeException: Unhandled multiplayer game mode.`。
+   现在按 `GameMode` 推对应的准备页（自定义局仍优先判定，分派顺序与原实现一致）。
+2. **局中「重开本层」第一次就能成功。** v1.4 真机反馈的"重开没成功"，根因不在重开逻辑，而在
+   **加入成功后 tail_v1 绑定被提前解绑**：补丁原来在 `finally` 里无条件解绑，而上游只在**失败**时
+   解绑（`LanConnectLobbyManagedJoinFlow.BeginAsync` 的 `catch` 里 `Unbind`，`finally` 只注销自己的
+   handler）。结果是每个客户端加入成功后都处于"扩展帧发不出去、也收不到"的状态（日志表现为
+   `prepare skipped ... writerBindings=0`，入站 `LanConnectNativeBusMessage` 无 handler），
+   局中重开需要的两次扩展帧握手因此全部丢失。现在绑定会随会话存活到房间真正结束。
+3. **重开失败不再空等。** 拆局前（房主）与发 `LoadJoinRequest` 前（客户端）各加一次 tail 绑定探针，
+   没绑定就立刻报错 + 弹窗，不再等满 2000ms / 15s。
+4. **结算页的「新开一局」不会点了没反应。** 会话已断开时不再注入按钮，原位置改为显示
+   「联机会话已断开，无法新开一局」；按钮已出现而会话在结算页停留期间断开，会立刻收回
+   （`NClickableControl.Disable()` → `OnDisable()` → `Visible = false`）；本局未结束 / 游戏未就绪 /
+   队友都没装补丁，各自弹窗说明原因，不再静默。
+
+### 修复项变动
+
+| id | 变动 | 说明 |
+|----|------|------|
+| `join-screen-modes` | **新增** | 客户端加入极速 / 恐惧房间时的准备页推屏 |
+| `join-flow` | 修改 | tail_v1 绑定生命周期：只在加入失败时解绑，成功则保留到会话结束 |
+| `mid-run-restart` | 修改 | 增加 tail 绑定前置探针（房主拆局前 / 客户端发 `LoadJoinRequest` 前） |
+| `new-run-button` | 修改 | 按钮可见性（会话断开即收回）+ 拒绝原因弹窗 |
+
+完整 10 项清单见 [`README.md`](README.md#九项修复清单)（该小节现为「九项修复清单」——`treasure-vote` 已在 `[Unreleased]` 移除）。
+
+### 验证
+
+- 构建：**0 warning / 0 error**。
+- `dotnet test tests`：**47 通过**。
+- `tools/smoke-test`：**10 项**修复全部挂载成功。
+- `tools/treasure-vote-test`：**19/19** 通过（与 0.6.3 语义逐字段差分）。
+
+### 已知限制
+
+- **自定义局里把大厅模式切成极速 / 恐惧的下拉框仍不提供这两项**：官方那条路径用
+  `new UnlockState(SaveManager.Instance.Progress)` 直接读存档，绕过了本补丁的两个接缝。
+  直接建房时选极速 / 恐惧不受影响。
+- 其余限制不变：联机双方都要装本补丁；局终「新开一局」要求至少一名已连接队友也装了补丁；
+  tail_v1 绑定在异常路径上仍可能超时（正常联机不受影响，局中重开已加前置探针）。
+
+## [1.4.0] - 2026-11-13
+
+> **历史条目重建说明（本节原标题为 `[1.0.0]`）。**
+> 本节记录的状态是 **9 项修复 / 47 个测试 / smoke-test 9 项 applied**，正是 `[1.5.0]` 的直接前驱；
+> 而 `[1.5.0]` 正文（「v1.4 真机反馈」那一条）把这个前驱称作 **v1.4**，所以标题由 `[1.0.0]`
+> 改为 `[1.4.0]`。
+> `[1.0.0]`–`[1.3.0]` 的条目**缺失**：本仓库不是 git 仓库，工作区内（`docs/`、`packaging/`、`tests/`、
+> `tools/`、`src/`）也搜不到 v1.1 / v1.2 / v1.3 的任何版本痕迹（全量 grep 零命中）。因此这里
+> **不补写、不推测** —— 可追溯的版本记录从本节开始。
+
+目标游戏：Slay the Spire 2 **0.113.0**（`release_info.json` 中 commit `16ac0fe3`，
+2026-11-12）；依赖：`sts2_lan_connect` **0.6.3**。
+
+### 修复
+
+0.113 改动了 6 个成员的签名或存在性，官方 0.6.3 的对应引用全部无法解析。这 6 个方法既不能 JIT，
+Harmony 也读不出它们的 IL，因此修复都落在可读的调用者或异步存根上。
+
+| # | 断点 | 修复项 | 用户可见的效果 |
+|---|------|--------|----------------|
+| 1 | `InitialGameInfoMessage.gameMode` 被删除 | `join-flow` | 客机可以加入房间（改用游戏自带的 `JoinFlow`） |
+| 2 | `ClientLobbyJoinRequestMessage.maxAscensionUnlocked` 被拆分 | `join-flow` | 同上；加入流程不再读取该字段 |
+| 3 | `NetHostGameService.DisconnectClient` 增加第 4 个参数 | `tail-error-paths` | 拒绝/踢人/中止路径不再崩溃 |
+| 4 | `NetHostGameService.ConnectedPeers` 改为 `IReadOnlyList` | `tail-error-paths` | 同上 |
+| 5 | `RelicPickingResult.GenerateRelicFight` 增加 `relicIndex` | `treasure-vote` | 宝物室"跳过"投票的结算恢复，行为与 0.6.3 一致 |
+| 6 | `SaveManager.UpdateProgressWithRunData` 改为有返回值 | `abandon-run` | "备份并放弃本局"流程恢复；进度写入失败会记日志 |
+
+### 新增功能
+
+| 功能 | 修复项 | 说明 |
+|------|--------|------|
+| 局终「新开一局」 | `new-run-button` | 一局结束（胜利或死亡）后，房主一键让全房回到准备页，保持同一房间与同一批人。覆盖标准 / 每日 / 自定义 / 极速 / 恐惧五种模式。未安装补丁的队友会留在结算页，房主侧显示准确人数。 |
+| 局中「重开」 | `mid-run-restart` | 接管房间管理里的「重开一局」，全房直接回到**本层开头**继续（零确认）。不删存档、不删房间绑定。 |
+| 极速 / 恐惧模式建房 | `extra-game-modes` | 大厅建房下拉框新增这两项。 |
+| 解锁极速 / 恐惧模式 | `unlock-extra-modes` | 装补丁即可使用这两个模式（两处接缝：上报状态 + 菜单闸门）。 |
+
+另含工程性改动：`host-wire`（桌面房主加入响应报文按 0.113 布局重写）、启动探测（6 个签名变化不全时完全静默）、
+`tools/smoke-test` / `tools/probe-check` / `tools/contract-check`（无 Godot 冒烟与契约校验）、
+`packaging/`（创意工坊上传工作区）。
+
+### ⚠ 公平性说明
+
+解锁极速 / 恐惧模式是**真实的进度捷径，不只是界面解锁**。
+
+游戏的 `GameModeHelper.AreAchievementsAndEpochsLocked` 只把「每日挑战」与「自定义局」排除在成就和时间线进度之外，
+**极速与恐惧局完全计入**。因此：
+
+- 在这两个模式里打完一局，可以正常获得成就与时间线 epoch，与正常解锁后的行为一致；
+- 补丁**不修改进度存档**、不伪造「已获得」、不碰 `TotalUnlocks`（离线验证：`IsEpochObtained == false`、
+  `TotalUnlocks == 0`、`Epochs.Count == 0`）；
+- **本局存档**的 `player.unlockState` 会带上这两个 id —— 这是游戏既有机制（本局各玩家解锁集合取并集），
+  不是新增写盘点。
+
+介意提前获得这部分进度的玩家，可以不使用解锁功能，或等正常解锁后再用。
+
+### 验证
+
+- `dotnet test tests`：**47 通过**。包含断点回归（官方 DLL 的 22,774 个元数据候选中**恰好 6 个**无法解析）、
+  游戏侧签名形态、产物自身可解析性、发布工作区合规性、以及 **12 条 UI 布局几何断言**（两视口 × 六种矩形 × 两种形态，
+  断言按钮/说明/提示互不相交且不越界）。
+- `tools/smoke-test`：不启动游戏即可确认 **9 项修复**全部挂载成功。
+- `tools/contract-check`：**33 条上游契约**全部满足（补丁依赖的每个反射成员逐个校验）。
+- 真机：Windows 桌面版 + Android 移动端（第三方启动器）双机联机验证，双向加入、开局、宝物室、局终重开均已跑过。
+
+### 已知限制
+
+- 只针对 0.113.0 验证；探测只识别这 6 个断点，不识别未来版本新增的断点。
+- 必须安装官方模组 0.6.3 或更高版本，否则补丁静默不生效。
+- **联机双方都要安装本补丁**：房主校验的是加入方上报的解锁状态，只装一边不够。
+- 「新开一局」要求至少一名已连接队友装了补丁，否则不显示按钮；未安装者会留在结算页。
+- 自定义局里把大厅模式切成极速 / 恐惧的下拉框仍不提供这两项（房主那条解锁状态不经补丁接缝）。
+  直接建房时选极速 / 恐惧不受影响。
+- tail_v1 会话绑定在异常路径上仍可能超时（正常联机不受影响）。
+
+### 许可
+
+GPL-3.0。本项目不打包官方模组的任何文件，但源码含从该 GPL-3.0 项目移植的逻辑，详见
+[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) 与 [`LICENSE`](LICENSE)。

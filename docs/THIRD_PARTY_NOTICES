@@ -1,0 +1,85 @@
+THIRD PARTY NOTICES
+===================
+
+This file covers every third-party work that this project (`sts2_lobby_enhance`) interacts with.
+
+
+1. STS2 LAN Connect (the mod this patch repairs)
+-----------------------------------------------
+Project : STS2 LAN Connect / 游戏大厅, mod id `sts2_lan_connect`, version 0.6.3
+Author  : "mac"
+Licence : GNU General Public License v3.0
+Source  : https://github.com/emptylower/STS2-Game-Lobby
+Workshop: https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330
+
+No file, binary or archive from that project is redistributed here. This mod is published as a
+separate Workshop item that *declares* the item above as a required dependency, and it locates the
+upstream assembly at runtime through `AppDomain.CurrentDomain.GetAssemblies()`.
+
+The source code, however, does contain logic ported from that project, and this is deliberate:
+
+  * `Scripts/Tail/TailErrorPathFix.cs` reimplements `LanConnectTailMessageRuntime.AbortActiveBinding`
+    and `RejectAndDisconnect` as line-for-line ports, changing only the game API calls whose
+    signatures 0.113 altered.
+  * `Scripts/Gameplay/AbandonRunFix.cs` replays the upstream "abandon current run" flow step by step,
+    calling the upstream mod's own helpers through reflection.
+  * `Scripts/Join/JoinTakeoverFix.cs` reuses the upstream mod's net-service factory and tail_v1
+    binding, again by reflection.
+
+Because those parts are derivative works of GPL-3.0 code, this project as a whole is distributed
+under GPL-3.0. The complete licence text is in `LICENSE`; it is byte-identical to the upstream copy.
+If you redistribute this mod, or a modified version of it, the GPL-3.0 obligations apply.
+
+
+2. Slay the Spire 2 game files
+------------------------------
+Project : Slay the Spire 2, © MegaCrit Games
+Licence : proprietary
+
+`sts2.dll`, `GodotSharp.dll`, `0Harmony.dll` and the game's `.pck` archives are NOT included in this
+project or in its Workshop upload. They are read from the player's installation at build time (for
+compilation only) and at run time (by the game itself). This project is not affiliated with, endorsed
+by, or supported by MegaCrit Games.
+
+
+3. Harmony (0Harmony.dll)
+-------------------------
+Project : Harmony, https://github.com/pardeike/Harmony
+Licence : MIT
+
+Harmony is used to install the runtime patches. It is shipped with Slay the Spire 2 and is not
+redistributed here; this project only references it at compile time and expects the game to load it.
+
+
+4. Godot Engine / GodotSharp
+----------------------------
+Project : Godot Engine, https://godotengine.org
+Licence : MIT
+
+`GodotSharp.dll` is part of the game installation and is not redistributed here. The patch uses it only
+for the types that appear in game method signatures (for example `Godot.SceneTree`).
+
+
+5. Build and test tooling
+-------------------------
+.NET SDK and runtime (MIT), xUnit.net (Apache-2.0), Microsoft.NET.Test.Sdk (MIT) and Pillow
+(MIT-CMU licence, used once to generate `image.png`). None of these are redistributed in the Workshop
+upload; they are development-time dependencies only.
+
+
+Contact
+-------
+This is an unofficial community patch. Please report problems with this patch here, not to MegaCrit or
+to the STS2 LAN Connect author.
+
+
+----------------------------------------------------------------------------------------------------
+
+中文摘要
+--------
+* 本模组不打包官方模组 `sts2_lan_connect`（工坊物品 3749766330）的任何文件，只在工坊页面上声明依赖，
+  运行时通过反射使用玩家已安装的那一份。
+* 但源码里确实含有从该 GPL-3.0 项目移植过来的逻辑（tail_v1 错误路径、放弃本局流程），
+  因此本项目整体以 GPL-3.0 发布；`LICENSE` 与上游副本逐字节一致。
+* 游戏本体文件（sts2.dll / GodotSharp.dll / 0Harmony.dll / pck）与 Harmony、Godot 均未随本模组分发。
+* 本项目为社区补丁，与 MegaCrit Games 及官方模组作者无关，未获其背书。

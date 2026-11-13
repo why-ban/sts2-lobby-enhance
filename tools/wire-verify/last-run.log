@@ -1,0 +1,98 @@
+# wire-verify 最近一次运行记录（本文件由人工重定向生成，工具自己不写它）
+#
+# 生成时间 : 2026-11-13 23:56:06 +08:00
+# 退出码   : 0
+#
+# 本工具把 src/**/*.cs 编译进自己（wire-verify.csproj），所以它验证的是**源码**，
+# 不是 packaging/content 里那个出货 DLL。出货 DLL 的验证由 tools/smoke-test 负责
+# （它会打印被验证 DLL 的 sha256，并断言 9 项修复的 applied 列表与每项的真实 Harmony 接缝）。
+#
+# 参考：运行时刻 packaging/content 的 DLL = 182272 B / A479E8828898A87AF7A18066222C0032DB83ADE4A7DAE4F5764374FB816EC22B
+# 2026-11-13：本文件曾是一份 18:58 的旧记录，第 9 行还写着只有 5 项 applied、且包含已删除的
+# treasure-vote —— 那种「日志说成功但说的不是当前构建」正是本轮要清掉的东西。
+# 另外 (a)(b) 两处 Check(..., true, ...) 恒真断言已改成有内容的断言（34 项总数不变）。
+
+SentryGodotInitializer: Sentry GDExtension not loaded in this process; skipping. If you see this in a running game (not during project export or IDE script analysis), check Godot's log for extension load failures.
+game dir : D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64
+host dll : D:\zhuanban\sts2m\work\lobby\STS2-Game-Lobby\releases\sts2_lan_connect\sts2_lan_connect.dll
+host mod : sts2_lan_connect 0.6.3.0
+
+
+---- 1. 补丁安装（走真实入口 Entry.RunSilently） ----
+[PASS] Entry.RunSilently() 无失败项
+[PASS] host-wire 被 applied  (join-flow,join-screen-modes,host-wire,tail-error-paths,abandon-run,new-run-button,mid-run-restart,extra-game-modes,unlock-extra-modes)
+[PASS] Harmony 已挂在 SerializeJoinResponseBody 上  (LanConnectLobbyManagedJoinFlow::BeginAsync, LanConnectLobbyJoinFlow::PushJoinedScreen, LanConnectSerializationPatches::SerializeJoinResponseBody, LanConnectTailMessageRuntime::TryPrepareConcreteOutgoing, LanConnectTailMessageRuntime::CompleteConcreteOutgoing, LanConnectTailMessageRuntime::BeginNativeTransport, LanConnectTailMessageRuntime::CompleteNativeTransport, LanConnectTailMessageRuntime::HandleNativeTransportFailure, LanConnectTailMessageRuntime::HandleIncomingFailure, LanConnectRemoteLobbyPlayerPatches::ScheduleDelayedDisconnect, LanConnectMultiplayerSaveCompatibility::AbandonCurrentRunAsync, NGameOverScreen::_Ready, NetHostGameService::Disconnect, NetClientGameService::Disconnect, NetClientGameService::HandshakeSucceeded, StartRunLobby::AdmitClientsConnectedBeforeLobbyExisted, LanConnectLobbyRuntime::StartHostedRunRestartAsync, LanConnectRoomManagementPanel::StartRestartFlowAsync, LanConnectLobbyOverlay::BuildCreateDialog, LanConnectLobbyOverlay::GameModeFromCreateId, LanConnectLobbyOverlay::GetSelectedCreateGameMode, LanConnectLobbyOverlay::IsCreateGameModeAvailable, LanConnectHostFlow::PushHostScreen, LanConnectMultiplayerSaveRoomBinding::GetLobbyGameMode, LanConnectMultiplayerSaveRoomBinding::GetLobbyGameModeLabel, SaveManager::GenerateUnlockStateFromProgress, ProgressState::IsEpochRevealed)
+
+---- 2. 位宽来源与触发条件（模拟 compat_4x5_v1 会话选择） ----
+[PASS] 可注入 Compat4x5V1 会话选择  (reflection into LanConnectSessionProtocolState.Shared)
+[PASS] LanConnectProtocolProfiles.GetActiveLobbyListBitWidth() == 5  (5)
+[PASS] LanConnectCompatWirePatches.GetLobbyListBitWidth() == 5  (5)
+[PASS] ShouldForceCompatWireAtMessageBusBoundary() == true  (True)
+[PASS] ShouldPatchCompatMessageBusBoundary(isAndroid:false) == true  (True)
+[PASS] ShouldPatchCompatMessageBusBoundary(isAndroid:true) == false  (False)
+
+---- 3. Harmony 位置参数绑定 (__0 / __1 / __2) ----
+[PASS] prefix 被调用（探针命中 1 次）  (calls=1)
+[PASS] __0 与调用方传入的 writer 同一实例  (ReferenceEquals)
+[PASS] __1 与调用方传入的 message 一致  (players=0 daily=False gameMode=Dread isCustom=True ascension=20 seed=TESTSEED123 modifiers=0)
+[PASS] __2 等于调用方传入的 lobbyListBitWidth=5  (__2=5)
+[PASS] __2 随调用方变化（width=3）  (__2=3)
+[PASS] prefix 每次调用都被命中  (calls=1)
+[PASS] 位宽参数生效：5bit 比 3bit 多 2 bit  (bits3=166, bits5=168)
+
+---- 4. 与 0.113 原版 Serialize 逐字节比对（宽度取 3 时唯一差异应消失） ----
+[PASS] 空列表 / 无 seed / None: 与 0.113 Serialize 逐字节一致  (46 bits / 6 B)
+[PASS] Dread / 自定义 / 20 级: 与 0.113 Serialize 逐字节一致  (166 bits / 21 B)
+[PASS] Blitz / 自定义 / 31 级 + dailyTime: 与 0.113 Serialize 逐字节一致  (238 bits / 30 B)
+[PASS] Daily / 无自定义 / 无 seed + dailyTime: 与 0.113 Serialize 逐字节一致  (174 bits / 22 B)
+[PASS] 非 ASCII seed（多字节 UTF-8）: 与 0.113 Serialize 逐字节一致  (190 bits / 24 B)
+
+---- 5. 接收端可解析性（用游戏自己的 0.113 Deserialize 回读） ----
+[PASS] 宽度 3（原版布局）: 0.113 Deserialize 回读全部字段一致  (gameMode=Dread isCustom=True ascension=20 seed=TESTSEED123)
+[PASS] 宽度 5（compat_4x5_v1，先按 5bit 读表头再回灌）: 0.113 Deserialize 回读全部字段一致  (gameMode=Dread isCustom=True ascension=20 seed=TESTSEED123)
+[PASS] 宽度 5 + dailyTime: 0.113 Deserialize 回读全部字段一致  (gameMode=Blitz isCustom=True ascension=31 seed=SEED)
+
+---- 6. 复现 0.6.3 的 0.111 报文（确认症状来自这里） ----
+0.111 报文 164 bits / 21 B  vs  0.113 报文 168 bits / 21 B  (差 4 bit)
+[PASS] 0.111 报文比 0.113 少 4 bit（gameMode 3 + isCustom 1）  (4)
+  (a) 同档位接收端解析结果: gameMode=Blitz isCustom=False ascension=1 modifiers=0 seed=TESTSEED123
+      期望值           : gameMode=Dread isCustom=True ascension=20 modifiers=0 seed=TESTSEED123
+[PASS] (a) 同档位接收端解出错误字段（这就是现场症状的成因）  (gameMode Dread->Blitz, isCustom True->False, ascension 20->1)
+  (b) 3bit 表头接收端解析结果: gameMode=6 isCustom=True ascension=2 modifiers=0 seed=<null>
+[PASS] (b) 3bit 表头接收端无法正确解析  (gameMode Dread->6, isCustom True->True, ascension 20->2, modifiers 0->0)
+  (c) 接收端读 modifiers 计数的窗口 = bit 134..165，报文只有 162 bit（21 字节）
+[PASS] (c) modifiers 计数窗口越过报文末尾（越界读的机制）  (166 > 162)
+  (d) 把 0.111 报文里的 modifiers 计数设为 16 后，接收端解出的计数 = 1
+[PASS] (d1) 计数非 0，接收端会进入元素解析  (1)
+  (d2) 从 bit 166 读 32 bit（报文只有 162 bit）-> IndexOutOfRangeException
+[PASS] (d2) 元素起点已在报文之外 -> IndexOutOfRangeException  (IndexOutOfRangeException)
+  (d3) Deserialize 抛异常: InvalidOperationException: ModelIdSerializationCache used before it was initialized!
+[PASS] (d3) Deserialize 失败（越界，或先被 ModelId 缓存守卫拦下）  (InvalidOperationException)
+
+---- 7. 字段位偏移实测（宽度 5，seed=TESTSEED123, Dread, isCustom, ascension=20） ----
+  bit    0..4    (  5 bit)  playersInLobby.count                       WriteList(list, 5) → WriteInt(count, 5)              = 0
+  bit    5..5    (  1 bit)  dailyTime.HasValue                         WriteBool                                            = False
+  bit    6..6    (  1 bit)  seed != null                               WriteBool                                            = True
+  bit    7..38   ( 32 bit)  seed.length                                WriteString → WriteInt(len, 32)                      = 11
+  bit   39..126  ( 88 bit)  seed.bytes                                 WriteBytes(len×8)                                    = 88 bit
+  bit  127..129  (  3 bit)  gameMode                                   WriteEnum → WriteInt(v, 3)                           = Dread (3)
+  bit  130..130  (  1 bit)  isCustom                                   WriteBool                                            = True
+  bit  131..135  (  5 bit)  ascension                                  WriteInt(v, 5)                                       = 20
+  bit  136..167  ( 32 bit)  modifiers.count                            WriteList(modifiers) → WriteInt(count, 32)           = 0
+  合计 168 bit = 21 字节（含尾部填充 0 bit）
+
+---- 8. 补丁覆盖面证据 ----
+目标方法 IL 字节数        : 182
+[PASS] 目标方法 IL 足够大，JIT 不会把它内联进调用方（>64 字节）  (182 bytes)
+调用点（IL call/callvirt 扫描）:
+  Sts2LanConnect.Scripts.LanConnectSerializationPatches+<>c__DisplayClass47_0::<SerializeJoinResponseAtMessageBusPrefix>b__0  (IL_0012, opcode 0x28)
+[PASS] SerializeJoinResponseBody 只有 1 个调用点  (Sts2LanConnect.Scripts.LanConnectSerializationPatches+<>c__DisplayClass47_0::<SerializeJoinResponseAtMessageBusPrefix>b__0  (IL_0012, opcode 0x28))
+[PASS] 唯一调用点就是 message-bus 边界 prefix  (Sts2LanConnect.Scripts.LanConnectSerializationPatches+<>c__DisplayClass47_0::<SerializeJoinResponseAtMessageBusPrefix>b__0  (IL_0012, opcode 0x28))
+
+---- 9. bodyBytes 换算 ----
+host 的 WriteCompatHeaderAndMeasure 计算 length = ceil((8 + 64 + bodyBits) / 8)
+  样例 bodyBits(width=5) = 168 -> bodyBytes = 30
+  样例 bodyBits(width=3) = 166 -> bodyBytes = 30
+  0.111 破损 body 少写 4 bit，故同一消息的 bodyBytes 可能相同、但字段边界已整体错位
+
+OK — 34 项检查全部通过。

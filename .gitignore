@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+
+# Generated release content (rebuilt by packaging/build-content.ps1)
+packaging/content/
+
+# Local staging / archives
+zip-stage/
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vs/
+.idea/
+Thumbs.db
+desktop.ini

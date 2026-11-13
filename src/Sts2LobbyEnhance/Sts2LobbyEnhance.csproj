@@ -1,0 +1,80 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <AssemblyName>sts2_lobby_enhance</AssemblyName>
+    <RootNamespace>Sts2LobbyEnhance</RootNamespace>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DebugType>none</DebugType>
+
+    <!--
+      Version / FileVersion / AssemblyVersion are NOT set here. They are read from
+      sts2_lobby_enhance.json (the mod manifest) by the ReadVersionFromManifest target below, so the
+      version has exactly one home.
+
+      Why: until 1.5.0 this project hard-coded 1.0.0 while the manifest said 1.5.0, so every shipped DLL
+      reported FileVersion 1.0.0.0 and ProductVersion 1.0.0. The game and the Workshop show the manifest
+      version, so users saw the right number - but a crash dump, a file-properties dialog or an
+      "assemblies in this process" listing pointed at a version that was never released. Editing the
+      manifest is now the only place a version bump is needed on the build side.
+    -->
+  </PropertyGroup>
+
+  <!--
+    The version is read out of the mod manifest at evaluation time, so it has exactly one home and the
+    assembly attributes can never drift from what the game and the Workshop display.
+  -->
+  <PropertyGroup>
+    <ModManifestVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\sts2_lobby_enhance.json')), '"version"\s*:\s*"([^"]+)"').Groups[1].Value)</ModManifestVersion>
+    <Version>$(ModManifestVersion)</Version>
+    <FileVersion>$(ModManifestVersion)</FileVersion>
+    <InformationalVersion>$(ModManifestVersion)</InformationalVersion>
+    <AssemblyVersion>$(ModManifestVersion)</AssemblyVersion>
+  </PropertyGroup>
+
+  <!-- Fail loudly instead of shipping a DLL whose FileVersion is empty. -->
+  <Target Name="RequireModManifestVersion" BeforeTargets="BeforeCompile;CoreCompile">
+    <Error Condition="'$(ModManifestVersion)' == ''"
+           Text="Could not read &quot;version&quot; from sts2_lobby_enhance.json next to this project. The assembly version would be empty." />
+    <Message Importance="normal" Text="mod version (from sts2_lobby_enhance.json): $(ModManifestVersion)" />
+  </Target>
+
+  <PropertyGroup>
+    <Sts2Root Condition="'$(Sts2Root)' == '' and '$(OS)' == 'Windows_NT'">D:\SteamLibrary\steamapps\common\Slay the Spire 2</Sts2Root>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and '$(OS)' == 'Windows_NT'">$(Sts2Root)\data_sts2_windows_x86_64</Sts2DataDir>
+    <Sts2ModsDir Condition="'$(Sts2ModsDir)' == ''">$(Sts2Root)\mods\sts2_lobby_enhance</Sts2ModsDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Scripts\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="sts2">
+      <HintPath>$(Sts2DataDir)\sts2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(Sts2DataDir)\GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(Sts2DataDir)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="sts2_lobby_enhance.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CopyModToModsDir" AfterTargets="Build" Condition="Exists('$(Sts2DataDir)\sts2.dll') and '$(SkipModCopy)' != 'true'">
+    <MakeDir Directories="$(Sts2ModsDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(Sts2ModsDir)" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\sts2_lobby_enhance.json" DestinationFolder="$(Sts2ModsDir)" />
+  </Target>
+</Project>
