@@ -88,7 +88,11 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// <summary>How long the one-shot daily admission filter may stay armed before it gives up.</summary>
     private const int DailyAdmitFilterWindowMs = 60000;
 
+    /// <summary>Set by <see cref="Applies"/>, consumed by <see cref="Apply"/>. Non-null once <see cref="Applies"/> said yes.</summary>
     private static Shape? _shape;
+
+    /// <summary>Patched methods, resolved by <see cref="Applies"/> together with <see cref="_shape"/>.</summary>
+    private static PatchTargets _targets;
 
     // ---- injected UI (host side) ------------------------------------------------------------------------
     //
@@ -115,6 +119,15 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// <summary>Set while a finished multiplayer run's game-over screen is on screen. The guard for #1.</summary>
     private static bool _gameOverScreenVisible;
 
+    /// <summary>
+    /// The client session whose reassemble handlers are registered, used only as a de-duplication key.
+    ///
+    /// It used to double as "the current session" for the handlers, which was a real defect: after a reconnect the
+    /// slot points at the new session while the old session's handlers are still registered on the old one, so a
+    /// message arriving there was answered on the wrong session. The handlers no longer read this field — each one is
+    /// bound to the session it was registered on (see <see cref="RegisterClientHandlers"/>) — so a stale value can
+    /// only cause a duplicate registration, never an answer sent on the wrong session.
+    /// </summary>
     private static INetGameService? _handlersRegisteredFor;
     private static bool? _hostHasPatch;
     private static bool _reassemblePending;
@@ -152,19 +165,50 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         Dread
     }
 
-    public bool Applies(in CompatSnapshot snapshot) => snapshot.RequiresPatch;
+    public FixGroup Group => FixGroup.NewRun;
+
+    /// <summary>
+    /// Answers "can this repair run on the build that is actually loaded", and resolves every anchor on the way.
+    ///
+    /// <paramref name="snapshot"/> is deliberately not read: none of the six 0.113 breakpoints is a precondition for a
+    /// game-over "start a new run" button. That flow rides the vanilla <c>StartRunLobby</c> protocol and only touches
+    /// the game-over screen, so it is versioned independently of those flags. Gating on them is what made a one-line
+    /// game patch disable a feature it has nothing to do with.
+    ///
+    /// Resolving here rather than in <see cref="Apply"/> is what keeps the startup report honest: a missing anchor
+    /// becomes "skipped, here is why" instead of a repair that reports itself as applied and then does nothing.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = $"host mod '{Entry.HostModAssemblyName}' is not loaded";
+            return false;
+        }
+
+        if (!TryCapture(host, out Shape? shape, out PatchTargets targets, out string missing))
+        {
+            reason = "missing: " + missing;
+            return false;
+        }
+
+        _shape = shape;
+        _targets = targets;
+        reason = string.Empty;
+        return true;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-
-        _shape = Shape.Capture(host, typeof(NGameOverScreen), typeof(NetHostGameService), typeof(StartRunLobby));
+        // Applies() resolved and cached these; reaching Apply without them is a host-contract violation, not a build
+        // problem, so it must not be silently tolerated. The shape itself is only needed at runtime, not here.
+        PatchTargets targets = _targets;
 
         // _Ready still owns the *client* hint (the client must know whether to wait for the host while it sits
         // on the first page of the screen).
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(NGameOverScreen), "_Ready"),
+            targets.GameOverReady,
             postfix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(GameOverReadyPostfix))
             {
                 priority = Priority.First
@@ -176,7 +220,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // screen, because the continue button it disables (NGameOverScreen.cs:590) is only re-enabled by the
         // screen's own intro animation (NGameOverScreen.cs:1082).
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(NGameOverScreen), "OpenSummaryScreen", typeof(NButton)),
+            targets.OpenSummary,
             postfix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(SummaryOpenedPostfix))
             {
                 priority = Priority.First
@@ -186,7 +230,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // nodes have to leave with it — they are siblings of the container, not children, and would otherwise
         // stay on top of the leaderboard (NGameOverScreen.cs:899-902 fades the summary out and shows it).
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(NGameOverScreen), "HideSummary"),
+            targets.HideSummary,
             postfix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(SummaryClosedPostfix))
             {
                 priority = Priority.First
@@ -195,14 +239,14 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // The teardown of a finished run is the only place we must keep the socket alive. Both sides need it:
         // the host's RunManager.CleanUp and the client's RunManager.CleanUp each call Disconnect().
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(NetHostGameService), "Disconnect", typeof(NetError), typeof(bool)),
+            targets.HostDisconnect,
             prefix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(HostDisconnectPrefix))
             {
                 priority = Priority.First
             });
 
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(NetClientGameService), "Disconnect", typeof(NetError), typeof(bool)),
+            targets.ClientDisconnect,
             prefix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(ClientDisconnectPrefix))
             {
                 priority = Priority.First
@@ -211,11 +255,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // The client discards the host's PeerVersionInfo after the handshake, which is the only place that knows
         // whether the host runs this patch. Capture it (and register the reassemble handlers) here.
         harmony.Patch(
-            Reflect.RequireInstanceMethod(
-                typeof(NetClientGameService),
-                "HandshakeSucceeded",
-                typeof(ulong),
-                typeof(PeerVersionInfo)),
+            targets.HandshakeSucceeded,
             postfix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(HandshakeSucceededPostfix))
             {
                 priority = Priority.First
@@ -225,7 +265,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // connected peer. That single admission has to be filtered while we restart into a daily run, otherwise an
         // unpatched client would be put on the ten-second ClientResponseTimeout and kicked.
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(StartRunLobby), "AdmitClientsConnectedBeforeLobbyExisted"),
+            targets.AdmitClientsConnected,
             prefix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(AdmitConnectedPeersPrefix))
             {
                 priority = Priority.First
@@ -283,9 +323,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// The run summary is on screen: this is where the host's "新开一局" button and its caption appear.
     ///
     /// The hook is <c>NGameOverScreen.OpenSummaryScreen(NButton)</c> (NGameOverScreen.cs:587), i.e. the method
-    /// the "继续" button is wired to (NGameOverScreen.cs:444). It is private, but Harmony patches private
-    /// instance methods as long as the signature matches, which is verified by <c>Reflect.RequireInstanceMethod</c>
-    /// at install time.
+    /// the "继续" button is wired to (NGameOverScreen.cs:444). It is private, but Harmony patches private instance
+    /// methods as long as the signature matches; <see cref="TryCapture"/> resolves it by name and exact parameter
+    /// types before anything is patched.
     /// </summary>
     private static void SummaryOpenedPostfix(NGameOverScreen __instance)
     {
@@ -1388,10 +1428,23 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     private static int GetEffectiveMaxPlayers(Shape shape)
     {
-        object? value = shape.GetEffectiveMaxPlayers.Invoke(null, null);
-        int maxPlayers = value is int number ? number : 4;
-        // LanConnectConstants.ProtocolMinPlayers .. ProtocolMaxPlayers; the host flow clamps the same way.
-        return Math.Clamp(maxPlayers, 2, 8);
+        // A missing or renamed host helper must not turn "how many players may join" into a failed restart: the whole
+        // rebuild is a best-effort operation and 4 is the game's own default. Before this was wrapped, a throwing
+        // Invoke escalated a degradable value into RollbackHost (which disconnects the room).
+        try
+        {
+            object? value = shape.GetEffectiveMaxPlayers.Invoke(null, null);
+            int resolved = value is int number ? number : 4;
+            // LanConnectConstants.ProtocolMinPlayers .. ProtocolMaxPlayers; the host flow clamps the same way.
+            return Math.Clamp(resolved, 2, 8);
+        }
+        catch (Exception exception)
+        {
+            Entry.Warn(
+                $"new-run-button: could not read the host mod's effective max players ({Describe(exception)}); " +
+                "using 4.");
+            return 4;
+        }
     }
 
     // =====================================================================================================
@@ -1422,12 +1475,30 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             return;
         }
 
-        service.RegisterMessageHandler<InitialGameInfoMessage>(OnInitialGameInfoMessage);
+        // Bind the handler to the session that owns it instead of letting it read the static slot back.
+        //
+        // The slot is a single field that is also the de-duplication key, so after a reconnect it points at the new
+        // session while the previous session's handlers are still registered on the previous session: a message
+        // arriving there used to be answered on the *new* session. Capturing the instance removes the shared mutable
+        // state — the handler can only ever answer on the session that received the message. Same shape as
+        // MidRunRestartFix's own <c>HandshakeSucceededPostfix</c>, which was fixed for exactly this defect.
+        INetGameService session = service;
+        service.RegisterMessageHandler<InitialGameInfoMessage>(
+            (message, sender) => OnInitialGameInfoMessage(session, message, sender));
         service.RegisterMessageHandler<ClientLobbyJoinResponseMessage>(OnJoinResponseMessage);
         _handlersRegisteredFor = service;
     }
 
-    private static void OnInitialGameInfoMessage(InitialGameInfoMessage message, ulong senderId)
+    /// <summary>
+    /// Handles the host's "the room is reassembling into a new lobby" announcement.
+    ///
+    /// <paramref name="service"/> is the session this handler was registered on — passed in, never read back from a
+    /// static field, so the answer always goes out on the session that actually received the message.
+    /// </summary>
+    private static void OnInitialGameInfoMessage(
+        INetGameService service,
+        InitialGameInfoMessage message,
+        ulong senderId)
     {
         try
         {
@@ -1442,13 +1513,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             if (!IsAwaitingHostReassemble())
             {
                 Entry.Info("new-run-button: ignoring InitialGameInfoMessage (not waiting for a reassemble).");
-                return;
-            }
-
-            INetGameService? service = _handlersRegisteredFor;
-            if (service == null)
-            {
-                Entry.Warn("new-run-button: no client session to answer the reassemble request on.");
                 return;
             }
 
@@ -1864,15 +1928,35 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// <summary>
     /// Drops exactly one <c>NetService.Disconnect</c> — the one issued by <c>RunManager.CleanUp</c> while we are
     /// deliberately keeping the session. Everything else (a real quit, a kick, the rollback) passes through.
+    ///
+    /// The <c>NetError</c> filter is load-bearing, not defensive. While the teardown runs, the host mod's Tail runtime
+    /// can reject an inbound frame on this very service and disconnect with <c>ModMismatch</c>
+    /// (LanConnectTailMessageRuntime.cs:1428). Swallowing that one leaves the session half torn down: the Tail binding
+    /// is still registered, ENet is still up, and nothing ever reports the rejection. Only the teardown's own
+    /// <c>Quit</c> may be dropped. <see cref="MidRunRestartFix"/> already applies exactly this rule
+    /// (its <c>HostDisconnectPrefix</c> / <c>ShouldKeepSession</c> pair); field log 2026-11-13 566639 → 566660/566679 is
+    /// the sequence that taught it.
+    ///
+    /// Both prefixes therefore take the reason: the game's signature is
+    /// <c>Disconnect(NetError reason, bool now = false)</c>, and <see cref="Apply"/> binds it by exact parameter types.
     /// </summary>
-    private static bool HostDisconnectPrefix(NetHostGameService __instance) => ShouldKeepSession(__instance);
+    private static bool HostDisconnectPrefix(NetHostGameService __instance, NetError reason) =>
+        ShouldKeepSession(__instance, reason);
 
-    private static bool ClientDisconnectPrefix(NetClientGameService __instance) => ShouldKeepSession(__instance);
+    private static bool ClientDisconnectPrefix(NetClientGameService __instance, NetError reason) =>
+        ShouldKeepSession(__instance, reason);
 
-    private static bool ShouldKeepSession(object instance)
+    private static bool ShouldKeepSession(object instance, NetError reason)
     {
         if (!_suppressDisconnect || !ReferenceEquals(instance, _suppressedService))
         {
+            return true;
+        }
+
+        if (reason != NetError.Quit)
+        {
+            Entry.Warn(
+                $"new-run-button: letting the teardown's {reason} disconnect through instead of suppressing it.");
             return true;
         }
 
@@ -1882,13 +1966,502 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     private readonly record struct PeerCounts(int Total, int Patched, int Unknown);
 
+    // =====================================================================================================
+    // Installability probe
+    // =====================================================================================================
+
+    private const string GameOverScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen.NGameOverScreen";
+    private const string ReturnToMainMenuButtonTypeName =
+        "MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen.NReturnToMainMenuButton";
+    private const string ButtonTypeName = "MegaCrit.Sts2.Core.Nodes.GodotExtensions.NButton";
+    private const string ClickableControlTypeName = "MegaCrit.Sts2.Core.Nodes.GodotExtensions.NClickableControl";
+    private const string StartRunLobbyTypeName = "MegaCrit.Sts2.Core.Multiplayer.Game.Lobby.StartRunLobby";
+    private const string NetHostGameServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetHostGameService";
+    private const string NetClientGameServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetClientGameService";
+    private const string PostRunResultTypeName = "MegaCrit.Sts2.Core.Entities.Save.PostRunProgressUpdateResult";
+    private const string RunStateTypeName = "MegaCrit.Sts2.Core.Runs.RunState";
+    private const string GameModeTypeName = "MegaCrit.Sts2.Core.Runs.GameMode";
+    private const string MegaLabelTypeName = "MegaCrit.Sts2.addons.mega_text.MegaLabel";
+    private const string NSubmenuTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenu";
+    private const string NMainMenuTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMainMenu";
+    private const string NSubmenuStackTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenuStack";
+    private const string CharacterSelectScreenTypeName =
+        "MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectScreen";
+    private const string DailyRunScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.DailyRun.NDailyRunScreen";
+    private const string CustomRunScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen";
+    private const string BlitzScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Blitz.NBlitzScreen";
+    private const string DreadScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Dread.NDreadScreen";
+    private const string ErrorPopupTypeName = "MegaCrit.Sts2.Core.Nodes.CommonUi.NErrorPopup";
+    private const string ModalContainerTypeName = "MegaCrit.Sts2.Core.Nodes.CommonUi.NModalContainer";
+    private const string ControlTypeName = "Godot.Control";
+
     /// <summary>
-    /// Every reflection anchor, captured once during <see cref="Apply"/>. Anything missing throws with the member
-    /// name, which the host turns into "this repair failed" — the feature never runs half-wired.
+    /// Decides whether this repair can be installed at all, without throwing and without touching the engine.
+    ///
+    /// Rules this method obeys, each for a concrete reason:
+    /// <list type="bullet">
+    /// <item>Every game type is looked up by *name* (<see cref="FindType"/>), never with <c>typeof</c>. A
+    /// <c>typeof</c> of a type that a future game build renamed makes this very method fail to JIT, which would turn
+    /// "one anchor moved" into "the probe itself is broken".</item>
+    /// <item>No <c>Invoke</c>, no <c>Activator</c>, no Godot node, no file system. Resolving a
+    /// <see cref="MethodInfo"/> does not JIT the target, so probing is safe before the game has created anything.</item>
+    /// <item>Every missing anchor is collected, not just the first one: one log line has to say what to fix.</item>
+    /// <item>Nothing is thrown to the caller. The host treats an exception as "this repair failed" and, today,
+    /// removes every patch of the whole mod — a missing anchor must not do that.</item>
+    /// </list>
+    /// </summary>
+    private static bool TryCapture(
+        Assembly host,
+        out Shape? shape,
+        out PatchTargets targets,
+        out string missing)
+    {
+        List<string> problems = new();
+
+        // ---- host mod: the three helpers reached through reflection ----
+        Type? compatibility = HostType(host, CompatibilityTypeName, problems);
+        MethodInfo? getMaxPlayers = StaticMethod(problems, compatibility, "GetEffectiveMaxPlayers");
+
+        Type? bindingType = HostType(host, BindingTypeName, problems);
+        MethodInfo? buildSaveKey = StaticMethod(
+            problems,
+            bindingType,
+            "BuildSaveKey",
+            "MegaCrit.Sts2.Core.Saves.SerializableRun");
+
+        Type? configType = HostType(host, ConfigTypeName, problems);
+        MethodInfo? removeBinding = StaticMethod(problems, configType, "RemoveSaveRoomBinding", "System.String");
+
+        // ---- game: the game-over screen ----
+        Type? screenType = GameType(GameOverScreenTypeName, problems);
+        FieldInfo? mainMenuButton = Field(problems, screenType, "_mainMenuButton");
+        FieldInfo? resultField = Field(problems, screenType, "_result");
+        FieldInfo? runStateField = Field(problems, screenType, "_runState");
+        FieldInfo? uiNode = Field(problems, screenType, "_uiNode");
+
+        if (mainMenuButton != null && mainMenuButton.FieldType.FullName != ReturnToMainMenuButtonTypeName)
+        {
+            problems.Add(
+                $"{GameOverScreenTypeName}._mainMenuButton is {mainMenuButton.FieldType.Name}, expected " +
+                "NReturnToMainMenuButton");
+        }
+
+        if (resultField != null && resultField.FieldType.FullName != PostRunResultTypeName)
+        {
+            problems.Add(
+                $"{GameOverScreenTypeName}._result is {resultField.FieldType.Name}, expected " +
+                "PostRunProgressUpdateResult");
+        }
+
+        if (runStateField != null && runStateField.FieldType.FullName != RunStateTypeName)
+        {
+            problems.Add($"{GameOverScreenTypeName}._runState is {runStateField.FieldType.Name}, expected RunState");
+        }
+
+        if (uiNode != null && !InheritsFrom(uiNode.FieldType, ControlTypeName))
+        {
+            problems.Add($"{GameOverScreenTypeName}._uiNode is {uiNode.FieldType.Name}, expected a Control");
+        }
+
+        MethodInfo? ready = InstanceMethod(problems, screenType, "_Ready");
+        MethodInfo? openSummary = InstanceMethod(
+            problems,
+            screenType,
+            "OpenSummaryScreen",
+            "MegaCrit.Sts2.Core.Nodes.GodotExtensions.NButton");
+        MethodInfo? hideSummary = InstanceMethod(problems, screenType, "HideSummary");
+
+        // ---- game: the button we duplicate ----
+        Type? buttonType = GameType(ReturnToMainMenuButtonTypeName, problems);
+        FieldInfo? showPosition = Field(problems, buttonType, "_showPosition");
+        FieldInfo? shaderMaterial = Field(problems, buttonType, "_hsv");
+
+        if (showPosition != null && showPosition.FieldType.FullName != "Godot.Vector2")
+        {
+            problems.Add(
+                $"{ReturnToMainMenuButtonTypeName}._showPosition is {showPosition.FieldType.Name}, expected Vector2");
+        }
+
+        if (shaderMaterial != null && shaderMaterial.FieldType.FullName != "Godot.ShaderMaterial")
+        {
+            problems.Add(
+                $"{ReturnToMainMenuButtonTypeName}._hsv is {shaderMaterial.FieldType.Name}, expected ShaderMaterial");
+        }
+
+        Type? nButtonType = GameType(ButtonTypeName, problems);
+        MethodInfo? unregisterHotkeys = InstanceMethod(problems, nButtonType, "UnregisterHotkeys");
+
+        // ---- game: the lobby we rebuild and the two services we suppress ----
+        Type? lobbyType = GameType(StartRunLobbyTypeName, problems);
+        MethodInfo? admitPeer = InstanceMethod(problems, lobbyType, "OnConnectedToClientAsHost", "System.UInt64");
+        MethodInfo? admitClients = InstanceMethod(
+            problems,
+            lobbyType,
+            "AdmitClientsConnectedBeforeLobbyExisted");
+
+        if (admitPeer != null && admitPeer.ReturnType.FullName != "System.Void")
+        {
+            problems.Add($"{StartRunLobbyTypeName}.OnConnectedToClientAsHost no longer returns void");
+        }
+
+        Type? hostService = GameType(NetHostGameServiceTypeName, problems);
+        MethodInfo? hostDisconnect = InstanceMethod(
+            problems,
+            hostService,
+            "Disconnect",
+            "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
+            "System.Boolean");
+
+        Type? clientService = GameType(NetClientGameServiceTypeName, problems);
+        MethodInfo? clientDisconnect = InstanceMethod(
+            problems,
+            clientService,
+            "Disconnect",
+            "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
+            "System.Boolean");
+        MethodInfo? handshake = InstanceMethod(
+            problems,
+            clientService,
+            "HandshakeSucceeded",
+            "System.UInt64",
+            "MegaCrit.Sts2.Core.Multiplayer.PeerVersionInfo");
+
+        // The prefixes/postfixes below take these parameters by name; a rename would break the binding silently.
+        RequireParameterNames(problems, hostDisconnect, "reason");
+        RequireParameterNames(problems, clientDisconnect, "reason");
+        RequireParameterNames(problems, handshake, "peerId", "versionInfo");
+
+        // ---- game: types only referenced inside patch bodies ----
+        //
+        // These are the ones no "install-time" check would otherwise catch: they appear in handler bodies, so a rename
+        // surfaces as a TypeLoadException inside the game's own method the first time the handler runs, where a
+        // try/catch inside the handler cannot help (parameter types are resolved when the method is JITted).
+        GameType(CharacterSelectScreenTypeName, problems);
+        GameType(DailyRunScreenTypeName, problems);
+        GameType(CustomRunScreenTypeName, problems);
+        GameType(BlitzScreenTypeName, problems);
+        GameType(DreadScreenTypeName, problems);
+        GameType(MegaLabelTypeName, problems);
+        GameType(NSubmenuTypeName, problems);
+        GameType(NMainMenuTypeName, problems);
+        GameType(NSubmenuStackTypeName, problems);
+        GameType(PostRunResultTypeName, problems);
+        GameType(RunStateTypeName, problems);
+        GameType(ErrorPopupTypeName, problems);
+        GameType(ModalContainerTypeName, problems);
+
+        Type? clickable = GameType(ClickableControlTypeName, problems);
+        if (clickable != null)
+        {
+            Type? signalNames = clickable.GetNestedType("SignalName", BindingFlags.Public | BindingFlags.NonPublic);
+            if (signalNames == null)
+            {
+                problems.Add($"{ClickableControlTypeName}.SignalName (nested type)");
+            }
+            else
+            {
+                StaticField(problems, signalNames, "Released");
+            }
+        }
+
+        Type? gameMode = GameType(GameModeTypeName, problems);
+        if (gameMode != null)
+        {
+            // Enum.GetNames throws on a non-enum, so the kind check comes first: the probe must never throw.
+            if (!gameMode.IsEnum)
+            {
+                problems.Add($"{GameModeTypeName} is no longer an enum");
+            }
+            else if (!HasEnumNames(gameMode, "None", "Standard", "Daily", "Blitz", "Dread"))
+            {
+                problems.Add($"{GameModeTypeName} lost one of None/Standard/Daily/Blitz/Dread");
+            }
+        }
+
+        if (problems.Count > 0
+            || getMaxPlayers == null
+            || buildSaveKey == null
+            || removeBinding == null
+            || mainMenuButton == null
+            || resultField == null
+            || runStateField == null
+            || uiNode == null
+            || ready == null
+            || openSummary == null
+            || hideSummary == null
+            || showPosition == null
+            || shaderMaterial == null
+            || unregisterHotkeys == null
+            || admitPeer == null
+            || admitClients == null
+            || hostDisconnect == null
+            || clientDisconnect == null
+            || handshake == null)
+        {
+            shape = null;
+            targets = default;
+            missing = problems.Count > 0 ? string.Join("; ", problems) : "an anchor resolved to null";
+            return false;
+        }
+
+        shape = new Shape(
+            mainMenuButton,
+            resultField,
+            runStateField,
+            uiNode,
+            showPosition,
+            shaderMaterial,
+            admitPeer,
+            getMaxPlayers,
+            buildSaveKey,
+            removeBinding,
+            unregisterHotkeys);
+
+        targets = new PatchTargets(
+            ready,
+            openSummary,
+            hideSummary,
+            hostDisconnect,
+            clientDisconnect,
+            handshake,
+            admitClients);
+        missing = string.Empty;
+        return true;
+    }
+
+    /// <summary>Methods this repair patches. Separated from <see cref="Shape"/> because they are install-time only.</summary>
+    private readonly record struct PatchTargets(
+        MethodInfo GameOverReady,
+        MethodInfo OpenSummary,
+        MethodInfo HideSummary,
+        MethodInfo HostDisconnect,
+        MethodInfo ClientDisconnect,
+        MethodInfo HandshakeSucceeded,
+        MethodInfo AdmitClientsConnected);
+
+    private static Type? HostType(Assembly host, string fullName, List<string> problems)
+    {
+        Type? type = host.GetType(fullName, throwOnError: false, ignoreCase: false);
+        if (type == null)
+        {
+            problems.Add($"type {fullName} (host mod)");
+        }
+
+        return type;
+    }
+
+    private static Type? GameType(string fullName, List<string> problems)
+    {
+        Type? type = FindType(fullName);
+        if (type == null)
+        {
+            problems.Add($"type {fullName} (game)");
+        }
+
+        return type;
+    }
+
+    /// <summary>
+    /// Finds a type by full name across the loaded assemblies. No <c>typeof</c>, so a game build that renamed the type
+    /// costs this anchor, not the whole probe.
+    /// </summary>
+    private static Type? FindType(string fullName)
+    {
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try
+            {
+                Type? type = assembly.GetType(fullName, throwOnError: false, ignoreCase: false);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+            catch (Exception)
+            {
+                // Dynamic and reflection-only assemblies refuse GetType; none of them can own a game type.
+            }
+        }
+
+        return null;
+    }
+
+    private static bool InheritsFrom(Type? type, string baseTypeFullName)
+    {
+        for (Type? current = type; current != null; current = current.BaseType)
+        {
+            if (string.Equals(current.FullName, baseTypeFullName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasEnumNames(Type enumType, params string[] required)
+    {
+        HashSet<string> names = new(Enum.GetNames(enumType), StringComparer.Ordinal);
+        foreach (string name in required)
+        {
+            if (!names.Contains(name))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Finds one instance method by name and *exact* parameter types.
+    ///
+    /// Arity alone is not enough to bind a patch: two overloads can share a parameter count and differ in types, and
+    /// patching the wrong one would silently hook an unrelated path. Every call site below spells out the parameter
+    /// types it expects.
+    /// </summary>
+    private static MethodInfo? InstanceMethod(
+        List<string> problems,
+        Type? owner,
+        string name,
+        params string[] parameterTypeNames) =>
+        MatchMethod(problems, owner, name, BindingFlags.Instance, parameterTypeNames);
+
+    private static MethodInfo? StaticMethod(
+        List<string> problems,
+        Type? owner,
+        string name,
+        params string[] parameterTypeNames) =>
+        MatchMethod(problems, owner, name, BindingFlags.Static, parameterTypeNames);
+
+    private static MethodInfo? MatchMethod(
+        List<string> problems,
+        Type? owner,
+        string name,
+        BindingFlags scope,
+        string[] parameterTypeNames)
+    {
+        // A missing owner type was already reported by HostType/GameType; repeating it here would bury the reason.
+        if (owner == null)
+        {
+            return null;
+        }
+
+        MethodInfo[] byName = owner
+            .GetMethods(scope | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal)
+                             && method.GetParameters().Length == parameterTypeNames.Length)
+            .ToArray();
+
+        MethodInfo[] exact = byName
+            .Where(method => ParametersMatch(method.GetParameters(), parameterTypeNames))
+            .ToArray();
+
+        if (exact.Length == 1)
+        {
+            return exact[0];
+        }
+
+        string expected = $"{owner.FullName}.{name}({string.Join(", ", parameterTypeNames)})";
+        if (exact.Length > 1)
+        {
+            problems.Add($"{expected} is ambiguous ({exact.Length} overloads)");
+        }
+        else if (byName.Length > 0)
+        {
+            problems.Add($"{expected} has {byName.Length} same-arity overload(s) with different parameter types");
+        }
+        else
+        {
+            problems.Add($"{expected} (not found)");
+        }
+
+        return null;
+    }
+
+    private static bool ParametersMatch(ParameterInfo[] parameters, string[] parameterTypeNames)
+    {
+        for (int index = 0; index < parameters.Length; index++)
+        {
+            // By-ref parameters report "T&" as their FullName; the call sites spell that out explicitly so a
+            // by-value overload can never be mistaken for the by-ref one.
+            if (!string.Equals(parameters[index].ParameterType.FullName, parameterTypeNames[index], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+
+    /// <summary>
+    /// Verifies the parameter *names* of a method we patch.
+    ///
+    /// Harmony binds a prefix/postfix argument to the target parameter with the same name, so a rename
+    /// (<c>reason</c> to <c>error</c>) silently breaks the binding: the patch either fails to apply or, worse, binds
+    /// nothing and the guard stops guarding. Parameter types are checked separately; this is the name half.
+    /// </summary>
+    private static void RequireParameterNames(List<string> problems, MethodInfo? method, params string[] names)
+    {
+        if (method == null)
+        {
+            return;
+        }
+
+        ParameterInfo[] parameters = method.GetParameters();
+        for (int index = 0; index < parameters.Length && index < names.Length; index++)
+        {
+            if (!string.Equals(parameters[index].Name, names[index], StringComparison.Ordinal))
+            {
+                problems.Add(
+                    $"{method.DeclaringType?.Name}.{method.Name} parameter {index} is '{parameters[index].Name}', " +
+                    $"expected '{names[index]}' (Harmony binds by name)");
+            }
+        }
+    }
+
+    private static FieldInfo? Field(List<string> problems, Type? owner, string name)
+    {
+        if (owner == null)
+        {
+            return null;
+        }
+
+        FieldInfo? field = owner.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (field == null)
+        {
+            problems.Add($"{owner.FullName}.{name}");
+        }
+
+        return field;
+    }
+
+    private static FieldInfo? StaticField(List<string> problems, Type? owner, string name)
+    {
+        if (owner == null)
+        {
+            return null;
+        }
+
+        FieldInfo? field = owner.GetField(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        if (field == null)
+        {
+            problems.Add($"{owner.FullName}.{name} (static)");
+        }
+
+        return field;
+    }
+
+    /// <summary>
+    /// Every reflection anchor the runtime path uses, filled in by <see cref="TryCapture"/> only after all of them
+    /// resolved. Nothing here can be null once <see cref="Apply"/> installed the repair.
     /// </summary>
     private sealed class Shape
     {
-        private Shape(
+        // internal, not private: TryCapture lives in a sibling nested type, and a private
+        // constructor of a nested class is only reachable from its own containing type.
+        internal Shape(
             FieldInfo mainMenuButton,
             FieldInfo resultField,
             FieldInfo runStateField,
@@ -1940,97 +2513,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         /// <summary><c>NButton.UnregisterHotkeys()</c>; drops the hotkey a duplicated button re-registered.</summary>
         internal MethodInfo UnregisterHotkeys { get; }
 
-        internal static Shape Capture(Assembly host, Type screenType, Type hostServiceType, Type lobbyType)
-        {
-            FieldInfo mainMenuButton = Reflect.RequireField(screenType, "_mainMenuButton");
-            if (mainMenuButton.FieldType != typeof(NReturnToMainMenuButton))
-            {
-                throw new MissingMemberException(
-                    screenType.FullName,
-                    $"_mainMenuButton ({mainMenuButton.FieldType.Name} is not {nameof(NReturnToMainMenuButton)})");
-            }
-
-            FieldInfo resultField = Reflect.RequireField(screenType, "_result");
-            if (resultField.FieldType != typeof(PostRunProgressUpdateResult))
-            {
-                throw new MissingMemberException(
-                    screenType.FullName,
-                    $"_result ({resultField.FieldType.Name} is not {nameof(PostRunProgressUpdateResult)})");
-            }
-
-            FieldInfo runStateField = Reflect.RequireField(screenType, "_runState");
-            if (runStateField.FieldType != typeof(RunState))
-            {
-                throw new MissingMemberException(
-                    screenType.FullName, $"_runState ({runStateField.FieldType.Name} is not {nameof(RunState)})");
-            }
-
-            FieldInfo uiNode = Reflect.RequireField(screenType, "_uiNode");
-            if (!typeof(Control).IsAssignableFrom(uiNode.FieldType))
-            {
-                throw new MissingMemberException(
-                    screenType.FullName, $"_uiNode ({uiNode.FieldType.Name} is not a Control)");
-            }
-
-            FieldInfo showPosition = Reflect.RequireField(typeof(NReturnToMainMenuButton), "_showPosition");
-            if (showPosition.FieldType != typeof(Vector2))
-            {
-                throw new MissingMemberException(
-                    typeof(NReturnToMainMenuButton).FullName,
-                    $"_showPosition ({showPosition.FieldType.Name} is not {nameof(Vector2)})");
-            }
-
-            FieldInfo shaderMaterial = Reflect.RequireField(typeof(NReturnToMainMenuButton), "_hsv");
-            if (shaderMaterial.FieldType != typeof(ShaderMaterial))
-            {
-                throw new MissingMemberException(
-                    typeof(NReturnToMainMenuButton).FullName,
-                    $"_hsv ({shaderMaterial.FieldType.Name} is not {nameof(ShaderMaterial)})");
-            }
-
-            MethodInfo unregisterHotkeys = Reflect.RequireInstanceMethod(typeof(NButton), "UnregisterHotkeys");
-            if (unregisterHotkeys.ReturnType != typeof(void))
-            {
-                throw new MissingMemberException(typeof(NButton).FullName, "UnregisterHotkeys()");
-            }
-
-            MethodInfo admitPeer = Reflect.RequireInstanceMethod(lobbyType, "OnConnectedToClientAsHost", typeof(ulong));
-            if (admitPeer.ReturnType != typeof(void))
-            {
-                throw new MissingMemberException(lobbyType.FullName, "OnConnectedToClientAsHost(ulong)");
-            }
-
-            Type compatibility = Reflect.RequireType(host, CompatibilityTypeName);
-            MethodInfo getMaxPlayers = Reflect.RequireStaticMethod(compatibility, "GetEffectiveMaxPlayers");
-            if (getMaxPlayers.ReturnType != typeof(int))
-            {
-                throw new MissingMemberException(compatibility.FullName, "GetEffectiveMaxPlayers()");
-            }
-
-            Type binding = Reflect.RequireType(host, BindingTypeName);
-            MethodInfo buildSaveKey = Reflect.RequireStaticMethod(binding, "BuildSaveKey", typeof(SerializableRun));
-
-            Type config = Reflect.RequireType(host, ConfigTypeName);
-            MethodInfo removeBinding = Reflect.RequireStaticMethod(config, "RemoveSaveRoomBinding", typeof(string));
-
-            // Sanity: the lobby we create must be driven by the service type we suppress on.
-            if (!typeof(INetGameService).IsAssignableFrom(hostServiceType))
-            {
-                throw new MissingMemberException(hostServiceType.FullName, "INetGameService");
-            }
-
-            return new Shape(
-                mainMenuButton,
-                resultField,
-                runStateField,
-                uiNode,
-                showPosition,
-                shaderMaterial,
-                admitPeer,
-                getMaxPlayers,
-                buildSaveKey,
-                removeBinding,
-                unregisterHotkeys);
-        }
+        // Resolution lives in TryCapture: it collects every missing anchor instead of throwing on the first one, and
+        // it resolves game types by name so a rename cannot break the probe itself.
     }
 }

@@ -42,6 +42,21 @@ internal sealed class HostWireFix : ICompatFix
     private const string BodyMethodName = "SerializeJoinResponseBody";
     private const int AscensionBits = 5;
 
+    // Probe targets. Every one of these is a *string* on purpose: a probe method that contains
+    // typeof(<game type>) cannot be JITted once that type is gone, which is exactly the failure the probe
+    // exists to survive (see Core/Reflect.cs and the 2026-11-14 gating audit).
+    private const string GameAssemblyName = "sts2";
+    private const string GameAssemblyAnchorTypeName = "MegaCrit.Sts2.Core.Multiplayer.Serialization.PacketWriter";
+    private const string PacketWriterTypeName = "MegaCrit.Sts2.Core.Multiplayer.Serialization.PacketWriter";
+    private const string JoinResponseTypeName = "MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.ClientLobbyJoinResponseMessage";
+    private const string GameModeTypeName = "MegaCrit.Sts2.Core.Runs.GameMode";
+
+    /// <summary>The <see cref="PacketWriter"/> members <see cref="SerializeJoinResponseBodyPrefix"/> calls.</summary>
+    private static readonly string[] WriterMembers =
+    {
+        "WriteList", "WriteBool", "Write", "WriteString", "WriteEnum", "WriteInt"
+    };
+
     /// <summary>Body-only bit count the message-bus boundary adds its 8-bit id and 64-bit sender to.</summary>
     private const int MessageBusHeaderBits = 8 + 64;
 
@@ -50,28 +65,214 @@ internal sealed class HostWireFix : ICompatFix
 
     public string Id => "host-wire";
 
-    public bool Applies(in CompatSnapshot snapshot) => snapshot.InitialGameInfoLostGameMode;
+    public FixGroup Group => FixGroup.Wire;
+
+    /// <summary>
+    /// No snapshot flag on purpose. The precise test is the message's own field set, which <see cref="TryCapture"/>
+    /// checks: <c>gameMode</c> + <c>isCustom</c> present on <c>ClientLobbyJoinResponseMessage</c> and the seven
+    /// fields the body writes. Those are exactly what the shipped 0.111 hand-written body omits, so "fields
+    /// present" is the condition under which this repair is both needed and meaningful — and if a future build
+    /// reshapes the message, the field checks fail and the repair stands down.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        _ = snapshot;
+
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod '" + Entry.HostModAssemblyName + "' is not loaded";
+            return false;
+        }
+
+        if (!TryCapture(host, out Shape shape, out string missing))
+        {
+            reason = "missing: " + missing;
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Everything <see cref="Apply"/> and the prefix body need, resolved *before* a single patch is installed.
+    ///
+    /// The seven message fields are stored for detection only — the body reads them through the compiler — so a
+    /// renamed or removed field skips the repair at startup instead of failing the JIT of the prefix on the one
+    /// frame that carries a join response.
+    /// </summary>
+    internal sealed class Shape
+    {
+        internal MethodInfo Body = null!;
+
+        internal FieldInfo? PlayersInLobby;
+
+        internal FieldInfo? DailyTime;
+
+        internal FieldInfo? Seed;
+
+        internal FieldInfo? GameMode;
+
+        internal FieldInfo? IsCustom;
+
+        internal FieldInfo? Ascension;
+
+        internal FieldInfo? Modifiers;
+    }
+
+    internal static Shape? _shape;
+
+    /// <summary>
+    /// Resolves every anchor this repair needs. Never throws, never invokes anything, never touches Godot:
+    /// pure metadata over the already-loaded host assembly and the game assembly. The returned reason lists
+    /// *all* missing items, so one log line says everything that has to be fixed.
+    /// </summary>
+    private static bool TryCapture(Assembly host, out Shape shape, out string reason)
+    {
+        shape = new Shape();
+        var missing = new List<string>();
+
+        Type? patchesType = host.GetType(SerializationPatchesTypeName, throwOnError: false, ignoreCase: false);
+        if (patchesType == null)
+        {
+            missing.Add("type " + SerializationPatchesTypeName);
+        }
+        else
+        {
+            MethodInfo? body = patchesType
+                .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(method =>
+                    string.Equals(method.Name, BodyMethodName, StringComparison.Ordinal)
+                    && method.GetParameters() is { Length: 3 } parameters
+                    && string.Equals(parameters[0].ParameterType.FullName, PacketWriterTypeName, StringComparison.Ordinal)
+                    && string.Equals(parameters[1].ParameterType.FullName, JoinResponseTypeName, StringComparison.Ordinal)
+                    && parameters[2].ParameterType == typeof(int));
+
+            if (body == null)
+            {
+                missing.Add($"{SerializationPatchesTypeName}.{BodyMethodName}({PacketWriterTypeName}, {JoinResponseTypeName}, int)");
+            }
+            else
+            {
+                shape.Body = body;
+            }
+        }
+
+        Assembly? game = ResolveGameAssembly();
+        if (game == null)
+        {
+            missing.Add("game assembly '" + GameAssemblyName + "'");
+        }
+        else
+        {
+            Type? response = game.GetType(JoinResponseTypeName, throwOnError: false, ignoreCase: false);
+            if (response == null)
+            {
+                missing.Add("type " + JoinResponseTypeName);
+            }
+            else
+            {
+                shape.PlayersInLobby = FieldOf(response, "playersInLobby", missing);
+                shape.DailyTime = FieldOf(response, "dailyTime", missing);
+                shape.Seed = FieldOf(response, "seed", missing);
+                shape.GameMode = FieldOf(response, "gameMode", missing);
+                shape.IsCustom = FieldOf(response, "isCustom", missing);
+                shape.Ascension = FieldOf(response, "ascension", missing);
+                shape.Modifiers = FieldOf(response, "modifiers", missing);
+
+                if (shape.GameMode != null
+                    && !string.Equals(shape.GameMode.FieldType.FullName, GameModeTypeName, StringComparison.Ordinal))
+                {
+                    missing.Add($"field gameMode is {shape.GameMode.FieldType.FullName}, expected {GameModeTypeName}");
+                }
+
+                if (shape.IsCustom != null && shape.IsCustom.FieldType != typeof(bool))
+                {
+                    missing.Add($"field isCustom is {shape.IsCustom.FieldType.Name}, expected Boolean");
+                }
+            }
+
+            Type? writer = game.GetType(PacketWriterTypeName, throwOnError: false, ignoreCase: false);
+            if (writer == null)
+            {
+                missing.Add("type " + PacketWriterTypeName);
+            }
+            else
+            {
+                foreach (string member in WriterMembers)
+                {
+                    if (writer
+                        .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                        .All(method => !string.Equals(method.Name, member, StringComparison.Ordinal)))
+                    {
+                        missing.Add($"{PacketWriterTypeName}.{member}");
+                    }
+                }
+
+                if (writer.GetProperty(
+                        "BitPosition",
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) == null)
+                {
+                    missing.Add($"{PacketWriterTypeName}.BitPosition");
+                }
+            }
+        }
+
+        reason = string.Join(", ", missing);
+        return missing.Count == 0;
+    }
+
+    private static Assembly? ResolveGameAssembly()
+    {
+        Assembly? direct = Reflect.FindAssembly(GameAssemblyName);
+        if (direct != null)
+        {
+            return direct;
+        }
+
+        // The simple name is stable but not contractual; fall back to whichever loaded assembly owns a core
+        // serialization type rather than assuming.
+        foreach (Assembly candidate in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try
+            {
+                if (candidate.GetType(GameAssemblyAnchorTypeName, throwOnError: false) != null)
+                {
+                    return candidate;
+                }
+            }
+            catch
+            {
+                // Some dynamic/reflection-only assemblies refuse lookups; keep scanning.
+            }
+        }
+
+        return null;
+    }
+
+    private static FieldInfo? FieldOf(Type type, string name, List<string> missing)
+    {
+        FieldInfo? field = type.GetField(
+            name,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (field == null)
+        {
+            missing.Add($"{type.FullName}.{name}");
+        }
+
+        return field;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-
-        Type patchesType = Reflect.RequireType(host, SerializationPatchesTypeName);
-        MethodInfo body = patchesType
-            .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-            .FirstOrDefault(method =>
-                string.Equals(method.Name, BodyMethodName, StringComparison.Ordinal)
-                && method.GetParameters() is { Length: 3 } parameters
-                && parameters[0].ParameterType == typeof(PacketWriter)
-                && parameters[1].ParameterType == typeof(ClientLobbyJoinResponseMessage)
-                && parameters[2].ParameterType == typeof(int))
-            ?? throw new MissingMethodException(
-                patchesType.FullName,
-                $"{BodyMethodName}({nameof(PacketWriter)}, {nameof(ClientLobbyJoinResponseMessage)}, int)");
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "host-wire: Apply ran without a captured shape; Applies must be consulted first.");
 
         harmony.Patch(
-            body,
+            shape.Body,
             prefix: new HarmonyMethod(typeof(HostWireFix), nameof(SerializeJoinResponseBodyPrefix))
             {
                 priority = Priority.First
@@ -86,8 +287,8 @@ internal sealed class HostWireFix : ICompatFix
         // tail_v1 therefore never calls it — and in tail_v1 the message is serialized by the game's own
         // ClientLobbyJoinResponseMessage.Serialize instead, which is already the correct 0.113 layout.
         Entry.Info(
-            "host-wire: patched " + patchesType.Name + "." + BodyMethodName +
-            " to emit the 0.113 field layout (gameMode, isCustom).");
+            "host-wire: patched " + (shape.Body.DeclaringType?.Name ?? SerializationPatchesTypeName) +
+            "." + BodyMethodName + " to emit the 0.113 field layout (gameMode, isCustom).");
         Entry.Info(
             "host-wire: reachability — this repair only affects compat_4x5_v1 rooms. Its target method is " +
             "called from exactly one place, the message-bus boundary prefix, and only when " +

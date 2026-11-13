@@ -37,6 +37,9 @@ namespace Sts2LobbyEnhance;
 /// One diagnostic difference on top of that: when the save is simply gone (<c>no_multiplayer_run_save</c>, the state
 /// a successful abandon leaves behind) the refusal is still upstream's, but it is reported at <c>Warn</c> instead of
 /// <c>Error</c> — under this patch an <c>Error</c> claims the patch failed, which is not what happened.
+///
+/// Everything the flow touches is resolved up front by <see cref="Shape.TryCapture"/>; a missing anchor now means
+/// "this repair stays out and says why" instead of an exception that used to take every other repair with it.
 /// </summary>
 internal sealed class AbandonRunFix : ICompatFix
 {
@@ -49,6 +52,21 @@ internal sealed class AbandonRunFix : ICompatFix
     private const string StubMethodName = "AbandonCurrentRunAsync";
     private const string SaveFileName = "current_run_mp.save";
 
+    // ---------------------------------------------------------------- game-side type names (string only)
+    private const string GameAssemblyName = "sts2";
+    private const string SaveManagerTypeName = "MegaCrit.Sts2.Core.Saves.SaveManager";
+    private const string SubmenuTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMultiplayerSubmenu";
+    // MegaCrit.Sts2.Core.Saves, not .Runs: the type is declared at
+    // decompiled-v0.113.0/MegaCrit/sts2/Core/Saves/SerializableRun.cs:16. The old constant named a namespace
+    // that does not exist, so three anchors resolved to nothing and the whole repair was skipped.
+    private const string SerializableRunTypeName = "MegaCrit.Sts2.Core.Saves.SerializableRun";
+    private const string PostRunProgressUpdateResultTypeName =
+        "MegaCrit.Sts2.Core.Entities.Save.PostRunProgressUpdateResult";
+    private const string TaskTypeName = "System.Threading.Tasks.Task";
+    private const string StringTypeName = "System.String";
+    private const string IntTypeName = "System.Int32";
+    private const string DateTimeOffsetTypeName = "System.DateTimeOffset";
+
     /// <summary>
     /// <c>TryLoadSafeCurrentRun</c>'s reason for "there is no multiplayer save to load" — i.e.
     /// <c>ReadSaveStatus.FileNotFound</c>, which is the state a *successful* abandon leaves behind
@@ -56,65 +74,65 @@ internal sealed class AbandonRunFix : ICompatFix
     /// </summary>
     private const string NoMultiplayerSaveReason = "no_multiplayer_run_save";
 
-    private static HostApi? _api;
+    private static Shape? _shape;
 
     public string Id => "abandon-run";
 
-    public bool Applies(in CompatSnapshot snapshot) => snapshot.UpdateProgressGainedReturnValue;
+    public FixGroup Group => FixGroup.Gameplay;
+
+    /// <summary>
+    /// Applicable when the host mod is present and every anchor the flow needs resolves — including the
+    /// one that actually decides this repair: <c>SaveManager.UpdateProgressWithRunData</c> returning
+    /// <em>exactly</em> <c>PostRunProgressUpdateResult</c>.
+    ///
+    /// <see cref="CompatSnapshot.UpdateProgressGainedReturnValue"/> is deliberately not read here. It only
+    /// answers "returns something that is not void", which is also true for <c>ValueTask</c> or
+    /// <c>Task&lt;T&gt;</c>; patching on that answer installs a repair whose body then cannot assign the
+    /// result. The exact return type is the only correct prerequisite, and it is checked in
+    /// <see cref="Shape.TryCapture"/>.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod 'sts2_lan_connect' is not loaded";
+            return false;
+        }
+
+        Shape? shape = Shape.TryCapture(host, out reason);
+        if (shape == null)
+        {
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-
-        Type compatibility = Reflect.RequireType(host, SaveCompatibilityTypeName);
-        MethodInfo stub = FindStub(compatibility);
-
-        _api = HostApi.Capture(host, compatibility);
+        Shape shape = _shape ?? throw new InvalidOperationException(
+            "abandon-run: Applies() did not capture the host shape; refusing to patch blind.");
 
         harmony.Patch(
-            stub,
+            shape.Stub,
             prefix: new HarmonyMethod(typeof(AbandonRunFix), nameof(AbandonPrefix))
             {
                 priority = Priority.First
             });
 
         Entry.Info(
-            "abandon-run: patched " + compatibility.Name + "." + StubMethodName +
+            "abandon-run: patched " + SaveCompatibilityTypeName + "." + StubMethodName +
             " (state machine bypassed, 0.113 UpdateProgressWithRunData signature used).");
-    }
-
-    /// <summary>
-    /// The stub is the only <c>AbandonCurrentRunAsync</c> on the type; the shape is still asserted so a future
-    /// host mod that adds an overload cannot silently get the wrong one patched.
-    /// </summary>
-    private static MethodInfo FindStub(Type compatibility)
-    {
-        MethodInfo[] candidates = compatibility
-            .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-            .Where(method => string.Equals(method.Name, StubMethodName, StringComparison.Ordinal))
-            .ToArray();
-
-        MethodInfo? stub = candidates.FirstOrDefault(method =>
-        {
-            ParameterInfo[] parameters = method.GetParameters();
-            return parameters.Length == 1
-                   && parameters[0].ParameterType == typeof(NMultiplayerSubmenu)
-                   && method.ReturnType == typeof(Task);
-        });
-
-        return stub
-               ?? throw new MissingMethodException(
-                   compatibility.FullName,
-                   $"{StubMethodName}(NMultiplayerSubmenu) -> Task " +
-                   $"[found: {string.Join(" | ", candidates.Select(method => method.ToString()))}]");
     }
 
     // ReSharper disable once UnusedParameter.Local — names are Harmony's binding contract.
     private static bool AbandonPrefix(NMultiplayerSubmenu submenu, ref Task __result)
     {
-        HostApi api = _api ?? throw new InvalidOperationException("abandon-run: host API was not captured.");
-        __result = AbandonAsync(api, submenu);
+        Shape shape = _shape ?? throw new InvalidOperationException("abandon-run: shape was not captured.");
+        __result = AbandonAsync(shape, submenu);
         return false;
     }
 
@@ -122,17 +140,17 @@ internal sealed class AbandonRunFix : ICompatFix
     /// Transliteration of 0.6.3's <c>AbandonCurrentRunAsync</c> body. Comments mark the source line each block
     /// reproduces so a future reader can diff it against the upstream file without re-deriving the intent.
     /// </summary>
-    private static async Task AbandonAsync(HostApi api, NMultiplayerSubmenu submenu)
+    private static async Task AbandonAsync(Shape shape, NMultiplayerSubmenu submenu)
     {
         // 0.6.3 source 285-288.
-        if (!await api.ConfirmPermanentAbandonAsync(submenu))
+        if (!await shape.ConfirmPermanentAbandonAsync(submenu))
         {
             return;
         }
 
         // 0.6.3 source 290-296 (deployed binary: LanConnectMultiplayerSaveCompatibility.cs:243-249). The refusal
         // itself is upstream's and is kept verbatim: no save is deleted when the save cannot be read.
-        if (!api.TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason) || run == null)
+        if (!shape.TryLoadSafeCurrentRun(out SerializableRun? run, out string failureReason) || run == null)
         {
             if (string.Equals(failureReason, NoMultiplayerSaveReason, StringComparison.Ordinal))
             {
@@ -146,7 +164,7 @@ internal sealed class AbandonRunFix : ICompatFix
                     $"upstream's existing behaviour, not a failure. reason={failureReason}");
                 Entry.Info(
                     $"sts2_lan_connect save_compat: abandon blocked because save load failed reason={failureReason}");
-                api.ShowInfo(
+                shape.ShowInfo(
                     "没有可放弃的多人存档：存档已在本次会话更早的一次放弃里删除（或本来就不存在），" +
                     "因此没有执行删除。\n这是上游的既有行为，不是失败，无需处理。");
                 return;
@@ -155,17 +173,17 @@ internal sealed class AbandonRunFix : ICompatFix
             Entry.Error($"ERROR: Refusing to delete unreadable multiplayer save: {failureReason}");
             Entry.Info(
                 $"sts2_lan_connect save_compat: abandon blocked because save load failed reason={failureReason}");
-            api.ShowInfo("无法安全读取当前多人存档，因此没有执行删除。请先复制调试报告并联系开发者。");
+            shape.ShowInfo("无法安全读取当前多人存档，因此没有执行删除。请先复制调试报告并联系开发者。");
             return;
         }
 
         // 0.6.3 source 298-300.
         string sourceSavePath = ProjectSettings.GlobalizePath(
             SaveManager.Instance.GetProfileScopedPath(Path.Combine("saves", SaveFileName)));
-        string backupRoot = Path.Combine(api.ResolveWritableDataDirectory(), "save-backups");
+        string backupRoot = Path.Combine(shape.ResolveWritableDataDirectory(), "save-backups");
 
         // 0.6.3 source 301-313.
-        if (!api.TryCreateBackup(
+        if (!shape.TryCreateBackup(
                 sourceSavePath,
                 backupRoot,
                 SaveManager.Instance.CurrentProfileId,
@@ -177,7 +195,7 @@ internal sealed class AbandonRunFix : ICompatFix
             Entry.Info(
                 $"sts2_lan_connect save_compat: abandon blocked because backup failed source={sourceSavePath}, " +
                 $"reason={backupError}");
-            api.ShowInfo($"删除前备份失败，因此没有删除存档。\n原因：{backupError}");
+            shape.ShowInfo($"删除前备份失败，因此没有删除存档。\n原因：{backupError}");
             return;
         }
 
@@ -217,28 +235,33 @@ internal sealed class AbandonRunFix : ICompatFix
         catch (Exception exception)
         {
             Entry.Error($"ERROR: Failed to delete multiplayer save after backup: {exception}");
-            api.ShowInfo($"存档删除失败；备份仍保留在：\n{backupPath}");
+            shape.ShowInfo($"存档删除失败；备份仍保留在：\n{backupPath}");
             return;
         }
 
         // 0.6.3 source 342-347.
-        string saveKey = api.BuildSaveKey(run);
-        bool removedBinding = api.RemoveSaveRoomBinding(saveKey);
+        string saveKey = shape.BuildSaveKey(run);
+        bool removedBinding = shape.RemoveSaveRoomBinding(saveKey);
         Entry.Info(
             $"sts2_lan_connect save_compat: abandon completed removedBinding={removedBinding}, " +
             $"saveKey={saveKey}, backupPath={backupPath}");
 
-        api.RefreshButtons(submenu);
-        api.ShowInfo($"多人存档已放弃。删除前备份保存在：\n{backupPath}");
+        shape.RefreshButtons(submenu);
+        shape.ShowInfo($"多人存档已放弃。删除前备份保存在：\n{backupPath}");
     }
 
     /// <summary>
-    /// Every host-mod helper the abandon flow touches, resolved once during <see cref="Apply"/>. Anything missing
-    /// throws with the member name, which the host turns into "this repair failed" — the flow never runs half-wired.
+    /// Every host-mod helper and game-side member the abandon flow touches, resolved once during
+    /// <see cref="Apply"/> and never again.
+    ///
+    /// <see cref="TryCapture"/> collects *all* the missing anchors instead of throwing on the first one, so a
+    /// host or game update produces one actionable log line rather than a stack trace — and, because a throw
+    /// here used to roll back every other repair, a missing anchor no longer disables the mod.
     /// </summary>
-    private sealed class HostApi
+    private sealed class Shape
     {
-        private HostApi(
+        private Shape(
+            MethodInfo stub,
             MethodInfo confirmPermanentAbandon,
             MethodInfo tryLoadSafeCurrentRun,
             MethodInfo tryCreateBackup,
@@ -248,6 +271,7 @@ internal sealed class AbandonRunFix : ICompatFix
             MethodInfo showInfo,
             MethodInfo updateButtons)
         {
+            Stub = stub;
             ConfirmPermanentAbandon = confirmPermanentAbandon;
             TryLoadSafeCurrentRunMethod = tryLoadSafeCurrentRun;
             TryCreateBackupMethod = tryCreateBackup;
@@ -257,6 +281,8 @@ internal sealed class AbandonRunFix : ICompatFix
             ShowInfoMethod = showInfo;
             UpdateButtonsMethod = updateButtons;
         }
+
+        internal MethodInfo Stub { get; }
 
         private MethodInfo ConfirmPermanentAbandon { get; }
 
@@ -330,51 +356,200 @@ internal sealed class AbandonRunFix : ICompatFix
         internal void RefreshButtons(NMultiplayerSubmenu submenu) =>
             UpdateButtonsMethod.Invoke(submenu, null);
 
-        internal static HostApi Capture(Assembly host, Type compatibility)
+        internal static Shape? TryCapture(Assembly host, out string reason)
         {
-            MethodInfo confirm = Reflect.RequireStaticMethod(
-                compatibility, "ConfirmPermanentAbandonAsync", typeof(NMultiplayerSubmenu));
+            List<string> missing = new();
 
-            MethodInfo load = Reflect.RequireStaticMethod(
+            Type? compatibility = host.GetType(SaveCompatibilityTypeName, throwOnError: false, ignoreCase: false);
+            Type? backup = host.GetType(SaveBackupTypeName, throwOnError: false, ignoreCase: false);
+            Type? paths = host.GetType(PathsTypeName, throwOnError: false, ignoreCase: false);
+            Type? config = host.GetType(ConfigTypeName, throwOnError: false, ignoreCase: false);
+            Type? binding = host.GetType(SaveRoomBindingTypeName, throwOnError: false, ignoreCase: false);
+            Type? popup = host.GetType(PopupTypeName, throwOnError: false, ignoreCase: false);
+
+            if (compatibility == null) missing.Add(SaveCompatibilityTypeName);
+            if (backup == null) missing.Add(SaveBackupTypeName);
+            if (paths == null) missing.Add(PathsTypeName);
+            if (config == null) missing.Add(ConfigTypeName);
+            if (binding == null) missing.Add(SaveRoomBindingTypeName);
+            if (popup == null) missing.Add(PopupTypeName);
+
+            // Name first (no typeof), falling back to the assembly this file already uses at runtime through
+            // SaveManager: the fallback adds no coupling that the flow does not already have.
+            Assembly game = Reflect.FindAssembly(GameAssemblyName) ?? typeof(SaveManager).Assembly;
+            Type? saveManager = game.GetType(SaveManagerTypeName, throwOnError: false, ignoreCase: false);
+            Type? submenu = game.GetType(SubmenuTypeName, throwOnError: false, ignoreCase: false);
+
+            if (saveManager == null) missing.Add(SaveManagerTypeName);
+            if (submenu == null) missing.Add(SubmenuTypeName);
+
+            // The stub: static, one NMultiplayerSubmenu parameter, returns Task.
+            MethodInfo? stub = Exact(
+                compatibility,
+                StubMethodName,
+                requireStatic: true,
+                new[] { SubmenuTypeName },
+                TaskTypeName,
+                missing);
+
+            MethodInfo? confirm = Exact(
+                compatibility,
+                "ConfirmPermanentAbandonAsync",
+                requireStatic: true,
+                new[] { SubmenuTypeName },
+                null,
+                missing);
+
+            MethodInfo? load = Exact(
                 compatibility,
                 "TryLoadSafeCurrentRun",
-                typeof(SerializableRun).MakeByRefType(),
-                typeof(string).MakeByRefType());
+                requireStatic: true,
+                new[] { SerializableRunTypeName + "&", StringTypeName + "&" },
+                null,
+                missing);
 
-            Type backup = Reflect.RequireType(host, SaveBackupTypeName);
-            MethodInfo tryCreate = Reflect.RequireStaticMethod(
+            MethodInfo? tryCreate = Exact(
                 backup,
                 "TryCreate",
-                typeof(string),
-                typeof(string),
-                typeof(int),
-                typeof(DateTimeOffset),
-                typeof(string).MakeByRefType(),
-                typeof(string).MakeByRefType());
+                requireStatic: true,
+                new[]
+                {
+                    StringTypeName, StringTypeName, IntTypeName, DateTimeOffsetTypeName,
+                    StringTypeName + "&", StringTypeName + "&"
+                },
+                null,
+                missing);
 
-            Type paths = Reflect.RequireType(host, PathsTypeName);
-            MethodInfo resolveDataDirectory = Reflect.RequireStaticMethod(paths, "ResolveWritableDataDirectory");
+            MethodInfo? resolveDataDirectory = Exact(
+                paths,
+                "ResolveWritableDataDirectory",
+                requireStatic: true,
+                Array.Empty<string>(),
+                null,
+                missing);
 
-            Type binding = Reflect.RequireType(host, SaveRoomBindingTypeName);
-            MethodInfo buildSaveKey = Reflect.RequireStaticMethod(binding, "BuildSaveKey", typeof(SerializableRun));
+            MethodInfo? buildSaveKey = Exact(
+                binding,
+                "BuildSaveKey",
+                requireStatic: true,
+                new[] { SerializableRunTypeName },
+                null,
+                missing);
 
-            Type config = Reflect.RequireType(host, ConfigTypeName);
-            MethodInfo removeBinding = Reflect.RequireStaticMethod(config, "RemoveSaveRoomBinding", typeof(string));
+            MethodInfo? removeBinding = Exact(
+                config,
+                "RemoveSaveRoomBinding",
+                requireStatic: true,
+                new[] { StringTypeName },
+                null,
+                missing);
 
-            Type popup = Reflect.RequireType(host, PopupTypeName);
-            MethodInfo showInfo = Reflect.RequireStaticMethod(popup, "ShowInfo", typeof(string));
+            MethodInfo? showInfo = Exact(
+                popup,
+                "ShowInfo",
+                requireStatic: true,
+                new[] { StringTypeName },
+                null,
+                missing);
 
-            MethodInfo updateButtons = Reflect.RequireInstanceMethod(typeof(NMultiplayerSubmenu), "UpdateButtons");
+            MethodInfo? updateButtons = Exact(
+                submenu,
+                "UpdateButtons",
+                requireStatic: false,
+                Array.Empty<string>(),
+                null,
+                missing);
 
-            return new HostApi(
-                confirm,
-                load,
-                tryCreate,
-                resolveDataDirectory,
-                buildSaveKey,
-                removeBinding,
-                showInfo,
-                updateButtons);
+            // The game-side break itself: UpdateProgressWithRunData must return exactly PostRunProgressUpdateResult.
+            // "Returns something that is not void" is not enough — a ValueTask or Task<T> return would satisfy that
+            // check and then fail inside AbandonAsync, which assigns the result to PostRunProgressUpdateResult.
+            MethodInfo? updateProgress = Exact(
+                saveManager,
+                "UpdateProgressWithRunData",
+                requireStatic: false,
+                new[] { SerializableRunTypeName, "System.Boolean" },
+                PostRunProgressUpdateResultTypeName,
+                missing);
+
+            if (updateProgress == null)
+            {
+                // Exact() already recorded the mismatch; add the reason in the operator's language.
+                missing.Add(
+                    "SaveManager.UpdateProgressWithRunData must return " + PostRunProgressUpdateResultTypeName +
+                    " for this repair to be applicable");
+            }
+
+            if (missing.Count > 0)
+            {
+                reason = "missing: " + string.Join(", ", missing);
+                return null;
+            }
+
+            reason = string.Empty;
+            return new Shape(
+                stub!,
+                confirm!,
+                load!,
+                tryCreate!,
+                resolveDataDirectory!,
+                buildSaveKey!,
+                removeBinding!,
+                showInfo!,
+                updateButtons!);
+        }
+
+        /// <summary>
+        /// Finds one method by name, static-ness and exact parameter/return type names. Names are compared as
+        /// strings so the probe never has to <c>typeof</c> a type that a future build might have dropped.
+        /// </summary>
+        private static MethodInfo? Exact(
+            Type? type,
+            string name,
+            bool requireStatic,
+            string[] parameterTypeNames,
+            string? returnTypeName,
+            List<string> missing)
+        {
+            if (type == null)
+            {
+                return null;
+            }
+
+            MethodInfo[] matches = type
+                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+                .Where(method => method.IsStatic == requireStatic)
+                .Where(method => method.GetParameters().Length == parameterTypeNames.Length)
+                .Where(method => method.GetParameters()
+                    .Select(parameter => parameter.ParameterType.FullName)
+                    .SequenceEqual(parameterTypeNames))
+                .Where(method => returnTypeName == null || method.ReturnType.FullName == returnTypeName)
+                .ToArray();
+
+            if (matches.Length == 1)
+            {
+                return matches[0];
+            }
+
+            missing.Add(matches.Length == 0
+                ? type.Name + "." + name + "(" + string.Join(", ", parameterTypeNames.Select(Short)) + ")" +
+                  (returnTypeName == null ? string.Empty : " -> " + Short(returnTypeName))
+                : type.Name + "." + name + " (ambiguous: " + matches.Length + " overloads)");
+            return null;
+        }
+
+        /// <summary>
+        /// Last segment of a type name, keeping the by-ref marker. The reason line is read by a person
+        /// looking at a log, and <c>SerializableRun&amp;</c> says the same thing as
+        /// <c>MegaCrit.Sts2.Core.Runs.SerializableRun&amp;</c> in a tenth of the width.
+        /// </summary>
+        private static string Short(string typeName)
+        {
+            bool byRef = typeName.EndsWith("&", StringComparison.Ordinal);
+            string bare = byRef ? typeName[..^1] : typeName;
+            int dot = bare.LastIndexOf('.');
+            string shortName = dot >= 0 ? bare[(dot + 1)..] : bare;
+            return byRef ? shortName + "&" : shortName;
         }
     }
 }

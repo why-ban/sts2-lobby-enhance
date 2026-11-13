@@ -1,3 +1,4 @@
+using System.Reflection;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer;
@@ -67,6 +68,12 @@ internal sealed class JoinScreenDispatchFix : ICompatFix
     private const string JoinFlowTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyJoinFlow";
     private const string DispatchMethodName = "PushJoinedScreen";
 
+    // Probe targets. Strings, never typeof: a probe that mentions a renamed game type cannot be JITted, and
+    // surviving exactly that is the whole point of the probe (2026-11-14 gating audit).
+    private const string SubmenuStackTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenuStack";
+    private const string NetClientServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetClientGameService";
+    private const string JoinResultTypeName = "MegaCrit.Sts2.Core.Multiplayer.Game.JoinResult";
+
     public string Id => "join-screen-modes";
 
     /// <summary>
@@ -83,29 +90,98 @@ internal sealed class JoinScreenDispatchFix : ICompatFix
     /// only way to tell those apart would be to inspect the host mod's IL for the 0.111 <c>switch</c> shape,
     /// which is not something this patch should be doing on every start.
     /// </summary>
-    public bool Applies(in CompatSnapshot snapshot) => snapshot.InitialGameInfoLostGameMode;
+    public FixGroup Group => FixGroup.Join;
+
+    /// <summary>
+    /// Needed when this game build has the 0.113 <c>GameMode</c> renumbering, which is what makes the shipped
+    /// mod's <c>switch (gameMode - 1)</c> dispatch wrong. That flag is this repair's own precondition, not a
+    /// global "is this 0.113" gate — see the class comment for why the host side of the mismatch cannot be
+    /// detected here (it would need to read the host mod's IL).
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        if (!snapshot.InitialGameInfoLostGameMode)
+        {
+            reason = "this build does not show the 0.113 GameMode renumbering this dispatch repairs";
+            return false;
+        }
+
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod '" + Entry.HostModAssemblyName + "' is not loaded";
+            return false;
+        }
+
+        if (!TryCapture(host, out Shape shape, out string missing))
+        {
+            reason = "missing: " + missing;
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>The single anchor this repair patches, resolved before anything is installed.</summary>
+    internal sealed class Shape
+    {
+        internal MethodInfo Dispatch = null!;
+    }
+
+    internal static Shape? _shape;
+
+    /// <summary>
+    /// Resolves the host-mod seam. Never throws and never invokes anything; the game-side screen types this
+    /// dispatch touches are compile-time references and are deliberately *not* probed here — they are covered by
+    /// the runtime guard in <see cref="TryPushJoinedScreen"/> instead.
+    /// </summary>
+    private static bool TryCapture(Assembly host, out Shape shape, out string reason)
+    {
+        shape = new Shape();
+        var missing = new List<string>();
+
+        Type? joinFlow = host.GetType(JoinFlowTypeName, throwOnError: false, ignoreCase: false);
+        if (joinFlow == null)
+        {
+            missing.Add("type " + JoinFlowTypeName);
+        }
+        else
+        {
+            MethodInfo? dispatch = joinFlow
+                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(method =>
+                    string.Equals(method.Name, DispatchMethodName, StringComparison.Ordinal)
+                    && method.GetParameters() is { Length: 3 } parameters
+                    && string.Equals(parameters[0].ParameterType.FullName, SubmenuStackTypeName, StringComparison.Ordinal)
+                    && string.Equals(parameters[1].ParameterType.FullName, NetClientServiceTypeName, StringComparison.Ordinal)
+                    && string.Equals(parameters[2].ParameterType.FullName, JoinResultTypeName, StringComparison.Ordinal));
+
+            if (dispatch == null)
+            {
+                missing.Add(
+                    $"{JoinFlowTypeName}.{DispatchMethodName}({SubmenuStackTypeName}, {NetClientServiceTypeName}, " +
+                    $"{JoinResultTypeName})");
+            }
+            else
+            {
+                shape.Dispatch = dispatch;
+            }
+        }
+
+        reason = string.Join(", ", missing);
+        return missing.Count == 0;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        System.Reflection.Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-
-        Type joinFlow = Reflect.RequireType(host, JoinFlowTypeName);
-        System.Reflection.MethodInfo dispatch = Reflect.RequireMethodByName(joinFlow, DispatchMethodName, 3);
-
-        System.Reflection.ParameterInfo[] parameters = dispatch.GetParameters();
-        if (parameters[0].ParameterType != typeof(NSubmenuStack)
-            || parameters[1].ParameterType != typeof(NetClientGameService)
-            || parameters[2].ParameterType != typeof(JoinResult))
-        {
-            throw new MissingMethodException(
-                joinFlow.FullName,
-                $"{DispatchMethodName}(NSubmenuStack, NetClientGameService, JoinResult) — found " +
-                $"({parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name}, {parameters[2].ParameterType.Name})");
-        }
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "join-screen-modes: Apply ran without a captured shape; Applies must be consulted first.");
 
         harmony.Patch(
-            dispatch,
+            shape.Dispatch,
             prefix: new HarmonyMethod(typeof(JoinScreenDispatchFix), nameof(PushJoinedScreenPrefix))
             {
                 priority = Priority.First
@@ -131,51 +207,83 @@ internal sealed class JoinScreenDispatchFix : ICompatFix
         return !TryPushJoinedScreen(stack, netService, joinResult);
     }
 
-    /// <summary>Returns true when a screen was pushed.</summary>
+    /// <summary>
+    /// Returns true when a screen was pushed.
+    ///
+    /// Runtime guard (2026-11-14 gating audit, A3): the twelve game types this dispatch touches
+    /// (<c>NBlitzScreen</c>, <c>NDreadScreen</c>, <c>NErrorPopup</c>, …) are compile-time references, so a rename
+    /// can only surface as a JIT failure on the first join. Catching here turns that into "the host mod's own
+    /// dispatch runs" instead of losing the join, which is the one outcome a compatibility mod must not cause.
+    /// A throw after <c>stack.Push</c> would leave one screen pushed; every branch pushes last and logs after,
+    /// so the only reachable case is "nothing pushed yet".
+    /// </summary>
     private static bool TryPushJoinedScreen(
         NSubmenuStack stack,
         NetClientGameService netService,
         JoinResult joinResult)
     {
-        if (joinResult.sessionState == RunSessionState.InLobby)
+        try
         {
-            return TryPushLobbyScreen(stack, netService, joinResult);
-        }
-
-        if (joinResult.sessionState == RunSessionState.InLoadedLobby)
-        {
-            return TryPushLoadScreen(stack, netService, joinResult);
-        }
-
-        if (joinResult.sessionState == RunSessionState.Running)
-        {
-            // NJoinFriendScreen.cs:363-371, in the game's own order: build the RunInProgress popup, add it to
-            // the modal container, then disconnect. `NetError.RunInProgress` is 101 (NetError.cs:45).
-            //
-            // One deliberate difference: the game dereferences `NModalContainer.Instance` unconditionally,
-            // which would NRE if the container is not in the tree yet. We use `?.` so a missing container
-            // costs the popup instead of the whole join path; the disconnect below still happens either way.
-            NErrorPopup? popup = NErrorPopup.Create(new NetErrorInfo(NetError.RunInProgress, selfInitiated: false));
-            if (popup != null)
+            if (joinResult.sessionState == RunSessionState.InLobby)
             {
-                NModalContainer.Instance?.Add(popup);
+                return TryPushLobbyScreen(stack, netService, joinResult);
             }
 
-            netService.Disconnect(NetError.RunInProgress);
+            if (joinResult.sessionState == RunSessionState.InLoadedLobby)
+            {
+                return TryPushLoadScreen(stack, netService, joinResult);
+            }
 
-            // The caller (dec-official/LanConnectLobbyJoinFlow.cs:114-116) continues to mark the attempt as
-            // "Joined" once this method returns normally; that is the host mod's own control flow and is out
-            // of scope for a prefix on this seam. What matters here is that the player now sees the game's
-            // RunInProgress popup instead of "Unhandled multiplayer game mode."
-            Entry.Info(
-                $"join-screen-modes: the host's run is already in progress (mode={joinResult.gameMode}); " +
-                "showed the RunInProgress popup and disconnected, exactly like NJoinFriendScreen does.");
-            return true;
+            if (joinResult.sessionState == RunSessionState.Running)
+            {
+                // NJoinFriendScreen.cs:363-371, in the game's own order: build the RunInProgress popup, add it to
+                // the modal container, then disconnect. `NetError.RunInProgress` is 101 (NetError.cs:45).
+                //
+                // One deliberate difference: the game dereferences `NModalContainer.Instance` unconditionally,
+                // which would NRE if the container is not in the tree yet. We use `?.` so a missing container
+                // costs the popup instead of the whole join path; the disconnect below still happens either way.
+                NErrorPopup? popup = NErrorPopup.Create(new NetErrorInfo(NetError.RunInProgress, selfInitiated: false));
+                if (popup != null)
+                {
+                    NModalContainer.Instance?.Add(popup);
+                }
+
+                netService.Disconnect(NetError.RunInProgress);
+
+                // The caller (dec-official/LanConnectLobbyJoinFlow.cs:114-116) continues to mark the attempt as
+                // "Joined" once this method returns normally; that is the host mod's own control flow and is out
+                // of scope for a prefix on this seam. What matters here is that the player now sees the game's
+                // RunInProgress popup instead of "Unhandled multiplayer game mode."
+                Entry.Info(
+                    $"join-screen-modes: the host's run is already in progress (mode={joinResult.gameMode}); " +
+                    "showed the RunInProgress popup and disconnected, exactly like NJoinFriendScreen does.");
+                return true;
+            }
+
+            // RunSessionState.None: no game-side branch exists and JoinFlow.Begin cannot return it (JoinFlow.cs:132-135
+            // disconnects and throws on the default arm), so the host mod's own handling is left untouched.
+            return false;
+        }
+        catch (Exception exception)
+        {
+            WarnGuardTripped(exception);
+            return false;
+        }
+    }
+
+    private static int _guardTripped;
+
+    private static void WarnGuardTripped(Exception exception)
+    {
+        if (Interlocked.Exchange(ref _guardTripped, 1) != 0)
+        {
+            return;
         }
 
-        // RunSessionState.None: no game-side branch exists and JoinFlow.Begin cannot return it (JoinFlow.cs:132-135
-        // disconnects and throws on the default arm), so the host mod's own handling is left untouched.
-        return false;
+        Entry.Warn(
+            "join-screen-modes: the game's screen API no longer matches this repair " +
+            $"({exception.GetType().Name}: {exception.Message}). Falling back to the host mod's own dispatch for " +
+            "the rest of this session; Blitz/Dread/custom rooms may land on the wrong screen.");
     }
 
     /// <summary>Joining a room that has not started its run yet. Order copied from NJoinFriendScreen.</summary>

@@ -31,10 +31,68 @@ namespace Sts2LobbyEnhance;
 internal sealed class TailErrorPathFix : ICompatFix
 {
     private const string RuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectTailMessageRuntime";
+    private const string BindingTypeName = "Binding";
+    private const string ProtocolFailureTypeName = "Sts2LanConnect.Scripts.LanConnectProtocolFailure";
+    private const string KickPatchesTypeName = "Sts2LanConnect.Scripts.LanConnectRemoteLobbyPlayerPatches";
+    private const string LobbyRuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyRuntime";
+    private const string KickTargetTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyKickTarget";
 
     /// <summary>Same member filter as <see cref="Reflect"/> uses, for the reflective lookups below.</summary>
     private const BindingFlags AnyMember =
         BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+
+    /// <summary>
+    /// Every anchor this repair needs, resolved once in <see cref="Apply"/> before anything is patched.
+    ///
+    /// The two patched methods are matched by *parameter types*, not by arity: <see cref="Reflect"/>'s
+    /// <c>RequireMethodByName</c> only compares parameter counts (Core/Reflect.cs:60-76), and a same-arity rename
+    /// upstream would otherwise bind the redirect to the wrong method and silently rewrite its call sites.
+    ///
+    /// The kick anchors are optional: they repair a different upstream feature (the 1.5 s delayed disconnect on
+    /// kick), so losing them must not cost the tail error paths. Their absence is a note, not a skip.
+    /// </summary>
+    internal sealed class Shape
+    {
+        internal Type RuntimeType = null!;
+
+        internal Type BindingType = null!;
+
+        internal MethodInfo Abort = null!;
+
+        internal MethodInfo Reject = null!;
+
+        internal FieldInfo Sync = null!;
+
+        internal FieldInfo Bindings = null!;
+
+        internal FieldInfo WriterBindings = null!;
+
+        internal FieldInfo OutgoingRejections = null!;
+
+        internal MethodInfo ClearPendingOutgoing = null!;
+
+        internal MethodInfo TryMarkTerminated = null!;
+
+        internal MethodInfo ClearNative = null!;
+
+        internal PropertyInfo BindingService = null!;
+
+        internal PropertyInfo BindingWriter = null!;
+
+        internal PropertyInfo BindingMessageBus = null!;
+
+        internal PropertyInfo BindingBoundPeerIds = null!;
+
+        internal MethodInfo? ScheduleDelayedDisconnect;
+
+        internal MethodInfo? GetHostNetService;
+
+        internal MethodInfo? CreateKickDisconnectAction;
+
+        internal string? OptionalNote;
+    }
+
+    internal static Shape? _shape;
 
     /// <summary>
     /// The two host methods <see cref="RedirectTranspiler"/> rewrites calls to. Harmony binds a transpiler
@@ -72,33 +130,54 @@ internal sealed class TailErrorPathFix : ICompatFix
 
     public string Id => "tail-error-paths";
 
-    public bool Applies(in CompatSnapshot snapshot) =>
-        snapshot.DisconnectClientGainedParameter || snapshot.ConnectedPeersChangedType;
+    public FixGroup Group => FixGroup.Tail;
+
+    /// <summary>
+    /// Needed when the two members the redirected bodies use have changed: <c>DisconnectClient</c>'s fourth
+    /// parameter and <c>ConnectedPeers</c> no longer being a <c>List&lt;NetClientData&gt;</c>. Those two flags are
+    /// this repair's own precondition, not a global "is this 0.113" gate: if a future build restores either
+    /// signature, the host mod's own methods JIT again and the redirect becomes dead weight.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        if (!snapshot.DisconnectClientGainedParameter && !snapshot.ConnectedPeersChangedType)
+        {
+            reason = "NetHostGameService.DisconnectClient still takes three parameters and ConnectedPeers is " +
+                     "still a List<NetClientData>, so the tail runtime's own methods JIT without help";
+            return false;
+        }
+
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod '" + Entry.HostModAssemblyName + "' is not loaded";
+            return false;
+        }
+
+        if (!TryCapture(host, out Shape shape, out string missing))
+        {
+            reason = "missing: " + missing;
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "tail-error-paths: Apply ran without a captured shape; Applies must be consulted first.");
 
-        Type runtimeType = Reflect.RequireType(host, RuntimeTypeName);
-
-        MethodInfo abort = Reflect.RequireMethodByName(runtimeType, "AbortActiveBinding", 3);
-        MethodInfo reject = Reflect.RequireMethodByName(runtimeType, "RejectAndDisconnect", 3);
-
-        MethodInfo abortReplacement = typeof(TailErrorPathFix)
-            .GetMethod(nameof(AbortActiveBinding), BindingFlags.Public | BindingFlags.Static)!;
-        MethodInfo rejectReplacement = typeof(TailErrorPathFix)
-            .GetMethod(nameof(RejectAndDisconnect), BindingFlags.Public | BindingFlags.Static)!;
-
-        // Hand the two call targets to the transpiler. Both are compared by token+module there, exactly
-        // like References() above, so a same-named method on an unrelated type can never be rewritten.
-        _abortTarget = abort;
-        _rejectTarget = reject;
-
-        var patched = new List<string>();
+        // Plan every call-site rewrite before installing any of them (2026-11-14 gating audit, A2). The previous
+        // order patched while it walked, so a throw halfway through left the earlier callers patched and the
+        // later ones not — a state only the group-level UnpatchAll could clean up.
+        var plans = new List<(MethodBase Caller, int Rewrites)>();
         var unreadable = new List<string>();
 
-        foreach (MethodBase caller in EnumerateMethods(runtimeType))
+        foreach (MethodBase caller in EnumerateMethods(shape.RuntimeType))
         {
             List<CodeInstruction>? original;
             try
@@ -112,50 +191,284 @@ internal sealed class TailErrorPathFix : ICompatFix
                 continue;
             }
 
-            bool referencesAbort = References(original, abort);
-            bool referencesReject = References(original, reject);
-            if (!referencesAbort && !referencesReject)
+            int rewrites = CountRedirectable(original, shape.Abort, shape.Reject);
+            if (rewrites == 0)
             {
                 continue;
             }
 
-            int rewrittenBefore = _rewrittenCallInstructions;
+            plans.Add((caller, rewrites));
+        }
+
+        if (plans.Count == 0)
+        {
+            // Fail alone rather than install nothing: the interface contract prefers a repair that reports itself
+            // broken over one that silently does nothing while the log claims the feature is there.
+            throw new InvalidOperationException(
+                "tail-error-paths: no readable caller of AbortActiveBinding/RejectAndDisconnect still calls them " +
+                $"({unreadable.Count} unreadable/generic method(s)); the tail runtime no longer routes anything " +
+                "through the two methods this repair replaces.");
+        }
+
+        _abortTarget = shape.Abort;
+        _rejectTarget = shape.Reject;
+        _rewrittenCallInstructions = 0;
+
+        foreach (var plan in plans)
+        {
             harmony.Patch(
-                caller,
+                plan.Caller,
                 transpiler: new HarmonyMethod(typeof(TailErrorPathFix), nameof(RedirectTranspiler))
                 {
                     priority = Priority.First
                 });
+        }
 
-            // Harmony reports the patch as installed even when the transpiler matched nothing. Verify the
-            // rewrite actually happened instead of trusting the installation, so "applied" in the log can
-            // never mean "attached but still calling the broken original".
-            if (_rewrittenCallInstructions == rewrittenBefore)
-            {
-                throw new InvalidOperationException(
-                    $"{caller.DeclaringType?.Name}::{caller.Name} was patched, but the transpiler rewrote no " +
-                    "call instruction: the call target is no longer the AbortActiveBinding/RejectAndDisconnect " +
-                    "this patch replaces.");
-            }
+        int expectedRewrites = 0;
+        foreach (var plan in plans)
+        {
+            expectedRewrites += plan.Rewrites;
+        }
 
-            patched.Add(caller.DeclaringType?.Name + "::" + caller.Name);
+        // Harmony reports the patch as installed even when the transpiler matched nothing, so compare what the
+        // dry run predicted with what the real pass produced. A mismatch is reported, not thrown: the redirects
+        // are already installed and throwing here would recreate the partial state A2 removes.
+        if (_rewrittenCallInstructions != expectedRewrites)
+        {
+            Entry.Warn(
+                $"{Id}: the transpiler rewrote {_rewrittenCallInstructions} call instruction(s) but the dry run " +
+                $"predicted {expectedRewrites}. The redirects are installed; verify the call sites.");
         }
 
         Entry.Info(
-            $"tail-error-paths: redirected {patched.Count} call site method(s) " +
-            $"[{string.Join(", ", patched)}] (skipped {unreadable.Count} unreadable/generic, " +
-            $"rewrote {_rewrittenCallInstructions} call instruction(s)).");
+            $"tail-error-paths: redirected {plans.Count} call site method(s) " +
+            $"[{string.Join(", ", plans.Select(plan => plan.Caller.DeclaringType?.Name + "::" + plan.Caller.Name))}] " +
+            $"(skipped {unreadable.Count} unreadable/generic, rewrote {_rewrittenCallInstructions} call instruction(s)).");
 
-        InstallKickDisconnectRedirect(host, harmony);
+        InstallKickDisconnectRedirect(harmony, shape);
+    }
 
-        // Both originals must be reached through the redirects; if the scan found nothing the contract
-        // changed underneath us and the patch would silently do nothing.
-        if (patched.Count == 0)
+    /// <summary>
+    /// Resolves every anchor before anything is patched. Never throws, never invokes, never touches Godot: pure
+    /// metadata over the already-loaded host assembly. All misses are collected into one reason string.
+    ///
+    /// The two patched methods are matched by parameter type, not by arity: Core/Reflect.cs:60-76 only compares
+    /// parameter counts, and a same-arity rename upstream would otherwise bind the redirect to the wrong method.
+    /// </summary>
+    private static bool TryCapture(Assembly host, out Shape shape, out string reason)
+    {
+        shape = new Shape();
+        var missing = new List<string>();
+
+        Type? runtimeType = host.GetType(RuntimeTypeName, throwOnError: false, ignoreCase: false);
+        if (runtimeType == null)
         {
-            throw new InvalidOperationException(
-                "No readable caller of AbortActiveBinding/RejectAndDisconnect was found. " +
-                "The upstream tail runtime has changed shape; this repair cannot be applied safely.");
+            missing.Add("type " + RuntimeTypeName);
+            reason = string.Join("; ", missing);
+            return false;
         }
+
+        shape.RuntimeType = runtimeType;
+
+        Type? bindingType = runtimeType.GetNestedType(BindingTypeName, AnyMember);
+        if (bindingType == null)
+        {
+            missing.Add($"{RuntimeTypeName}.{BindingTypeName}");
+        }
+        else
+        {
+            shape.BindingType = bindingType;
+        }
+
+        CapturePatchedMethods(runtimeType, bindingType, shape, missing);
+        CaptureRuntimeState(runtimeType, bindingType, shape, missing);
+        CaptureOptionalKickAnchors(host, shape);
+
+        reason = string.Join(", ", missing);
+        return missing.Count == 0;
+    }
+
+    private static void CapturePatchedMethods(Type runtimeType, Type? bindingType, Shape shape, List<string> missing)
+    {
+        MethodInfo? abort = MethodOf(runtimeType, "AbortActiveBinding", 3, missing);
+        if (abort != null)
+        {
+            ParameterInfo[] parameters = abort.GetParameters();
+            if (bindingType == null
+                || parameters[0].ParameterType != bindingType
+                || parameters[1].ParameterType != typeof(string)
+                || parameters[2].ParameterType != typeof(Exception))
+            {
+                missing.Add(
+                    $"{RuntimeTypeName}.AbortActiveBinding({bindingType?.Name ?? "?"}, string, Exception) — found " +
+                    $"({Describe(parameters)})");
+            }
+            else
+            {
+                shape.Abort = abort;
+            }
+        }
+
+        MethodInfo? reject = MethodOf(runtimeType, "RejectAndDisconnect", 3, missing);
+        if (reject != null)
+        {
+            ParameterInfo[] parameters = reject.GetParameters();
+            if (bindingType == null
+                || parameters[0].ParameterType != bindingType
+                || parameters[1].ParameterType != typeof(ulong)
+                || !string.Equals(parameters[2].ParameterType.FullName, ProtocolFailureTypeName, StringComparison.Ordinal))
+            {
+                missing.Add(
+                    $"{RuntimeTypeName}.RejectAndDisconnect({bindingType?.Name ?? "?"}, ulong, " +
+                    $"{ProtocolFailureTypeName}) — found ({Describe(parameters)})");
+            }
+            else
+            {
+                shape.Reject = reject;
+            }
+        }
+    }
+
+    private static void CaptureRuntimeState(Type runtimeType, Type? bindingType, Shape shape, List<string> missing)
+    {
+        shape.Sync = FieldOf(runtimeType, "_sync", missing)!;
+        shape.Bindings = FieldOf(runtimeType, "_bindings", missing)!;
+        shape.WriterBindings = FieldOf(runtimeType, "_writerBindings", missing)!;
+        shape.OutgoingRejections = FieldOf(runtimeType, "_outgoingRejections", missing)!;
+        shape.ClearPendingOutgoing = MethodOf(runtimeType, "ClearPendingOutgoing", 1, missing)!;
+
+        if (shape.OutgoingRejections != null)
+        {
+            Type stackType = shape.OutgoingRejections.FieldType;
+            if (MethodOf(stackType, "Push", 1, new List<string>()) == null)
+            {
+                missing.Add($"{stackType.FullName}.Push/1");
+            }
+
+            if (MethodOf(stackType, "Pop", 0, new List<string>()) == null)
+            {
+                missing.Add($"{stackType.FullName}.Pop/0");
+            }
+        }
+
+        if (bindingType == null)
+        {
+            return;
+        }
+
+        shape.BindingService = PropertyOf(bindingType, "Service", missing)!;
+        shape.BindingWriter = PropertyOf(bindingType, "Writer", missing)!;
+        shape.BindingMessageBus = PropertyOf(bindingType, "MessageBus", missing)!;
+        shape.BindingBoundPeerIds = PropertyOf(bindingType, "BoundPeerIds", missing)!;
+        shape.TryMarkTerminated = MethodOf(bindingType, "TryMarkTerminated", 0, missing)!;
+        shape.ClearNative = MethodOf(bindingType, "ClearNative", 0, missing)!;
+    }
+
+    /// <summary>
+    /// The kick anchors repair a different upstream feature, so they are optional: losing them must not cost the
+    /// tail error paths. A miss is recorded on <see cref="Shape.OptionalNote"/> and logged by <see cref="Apply"/>.
+    /// </summary>
+    private static void CaptureOptionalKickAnchors(Assembly host, Shape shape)
+    {
+        try
+        {
+            Type? patchesType = host.GetType(KickPatchesTypeName, throwOnError: false, ignoreCase: false);
+            if (patchesType == null)
+            {
+                shape.OptionalNote = KickNote("type " + KickPatchesTypeName);
+                return;
+            }
+
+            MethodInfo? schedule = MethodOf(patchesType, "ScheduleDelayedDisconnect", 3, new List<string>());
+            if (schedule == null)
+            {
+                shape.OptionalNote = KickNote($"{KickPatchesTypeName}.ScheduleDelayedDisconnect/3");
+                return;
+            }
+
+            ParameterInfo[] parameters = schedule.GetParameters();
+            if (!string.Equals(parameters[0].ParameterType.FullName, LobbyRuntimeTypeName, StringComparison.Ordinal)
+                || parameters[1].ParameterType != typeof(ulong)
+                || !string.Equals(parameters[2].ParameterType.FullName, KickTargetTypeName, StringComparison.Ordinal))
+            {
+                shape.OptionalNote = KickNote(
+                    $"{KickPatchesTypeName}.ScheduleDelayedDisconnect({LobbyRuntimeTypeName}, ulong, " +
+                    $"{KickTargetTypeName}) — found ({Describe(parameters)})");
+                return;
+            }
+
+            Type? lobbyRuntime = host.GetType(LobbyRuntimeTypeName, throwOnError: false, ignoreCase: false);
+            MethodInfo? getHostService = lobbyRuntime == null
+                ? null
+                : MethodOf(lobbyRuntime, "GetHostNetService", 0, new List<string>());
+            MethodInfo? createAction = lobbyRuntime == null
+                ? null
+                : MethodOf(lobbyRuntime, "CreateKickDisconnectAction", 1, new List<string>());
+
+            if (getHostService == null || createAction == null)
+            {
+                shape.OptionalNote = KickNote(
+                    $"{LobbyRuntimeTypeName}.GetHostNetService/0 or CreateKickDisconnectAction/1");
+                return;
+            }
+
+            shape.ScheduleDelayedDisconnect = schedule;
+            shape.GetHostNetService = getHostService;
+            shape.CreateKickDisconnectAction = createAction;
+        }
+        catch (Exception exception)
+        {
+            shape.OptionalNote = KickNote($"{exception.GetType().Name}: {exception.Message}");
+        }
+    }
+
+    private static string KickNote(string detail) =>
+        "kick redirect not installed (" + detail + "). Kicking a player still runs the host mod's own path, which " +
+        "cannot be JITted against this game build and will throw instead of disconnecting; the tail error paths " +
+        "are unaffected.";
+
+    private static string Describe(ParameterInfo[] parameters) =>
+        string.Join(", ", parameters.Select(parameter => parameter.ParameterType.FullName ?? parameter.ParameterType.Name));
+
+    private static FieldInfo? FieldOf(Type type, string name, List<string> missing)
+    {
+        FieldInfo? field = type.GetField(name, AnyMember);
+        if (field == null)
+        {
+            missing.Add($"{type.FullName}.{name}");
+        }
+
+        return field;
+    }
+
+    private static PropertyInfo? PropertyOf(Type type, string name, List<string> missing)
+    {
+        PropertyInfo? property = type.GetProperty(name, AnyMember);
+        if (property == null)
+        {
+            missing.Add($"{type.FullName}.{name}");
+        }
+
+        return property;
+    }
+
+    private static MethodInfo? MethodOf(Type type, string name, int parameterCount, List<string> missing)
+    {
+        MethodInfo[] matches = type
+            .GetMethods(AnyMember)
+            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+            .Where(method => method.GetParameters().Length == parameterCount)
+            .ToArray();
+
+        if (matches.Length == 1)
+        {
+            return matches[0];
+        }
+
+        missing.Add(matches.Length == 0
+            ? $"{type.FullName}.{name} ({parameterCount} parameter(s))"
+            : $"{type.FullName}.{name} ({parameterCount} parameter(s)) is ambiguous: {matches.Length} overloads");
+        return null;
     }
 
     private static IEnumerable<MethodBase> EnumerateMethods(Type type)
@@ -191,17 +504,23 @@ internal sealed class TailErrorPathFix : ICompatFix
         }
     }
 
-    private static bool References(IEnumerable<CodeInstruction> instructions, MethodInfo target)
+    /// <summary>
+    /// Counts the call instructions <see cref="RedirectTranspiler"/> would rewrite. This is the dry run: it lets
+    /// <see cref="Apply"/> prove a caller is worth patching before any patch is installed (A2).
+    /// </summary>
+    private static int CountRedirectable(IEnumerable<CodeInstruction> instructions, MethodInfo abort, MethodInfo reject)
     {
+        int count = 0;
         foreach (CodeInstruction instruction in instructions)
         {
-            if (instruction.operand is MethodInfo called && SameMethod(called, target))
+            if (instruction.operand is MethodInfo called
+                && (SameMethod(called, abort) || SameMethod(called, reject)))
             {
-                return true;
+                count++;
             }
         }
 
-        return false;
+        return count;
     }
 
     private static bool SameMethod(MethodInfo left, MethodInfo right) =>
@@ -224,7 +543,7 @@ internal sealed class TailErrorPathFix : ICompatFix
         {
             if (instruction.operand is MethodInfo called)
             {
-                // Identity, not name: the same predicate References() used to decide this caller needs
+                // Identity, not name: the same predicate CountRedirectable() used to decide this caller needs
                 // the patch, so nothing but the two upstream methods is ever rewritten.
                 if (SameMethod(called, abort))
                 {
@@ -300,8 +619,11 @@ internal sealed class TailErrorPathFix : ICompatFix
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(failure);
 
-        Type runtimeType = runtime.GetType();
-        object? service = Reflect.GetPropertyValue(binding, "Service");
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "tail-error-paths: the shape was not captured, so the redirect cannot run.");
+
+        object? service = shape.BindingService.GetValue(binding);
 
         // Upstream's rejection is completely silent: it sends a rejection message and disconnects, and nothing in
         // the log says which validation refused the frame. That made a 2026-11-13 field report (client receives
@@ -359,18 +681,18 @@ internal sealed class TailErrorPathFix : ICompatFix
             ? new object?[] { NetError.ModMismatch, false }
             : new object?[] { NetError.ModMismatch };
         disconnect.Invoke(service, arguments);
-
-        _ = runtimeType;
     }
 
     private static object GetOrCreateRejectionStack(object runtime)
     {
-        FieldInfo field = Reflect.RequireField(runtime.GetType(), "_outgoingRejections");
+        Shape shape = _shape
+            ?? throw new InvalidOperationException("tail-error-paths: the shape was not captured.");
 
-        // Upstream declares it "[ThreadStatic] private static Stack<LanConnectProtocolFailure>?"
-        // (dec-official LanConnectTailMessageRuntime.cs:445-446). GetValue/SetValue ignore the instance
-        // argument for static fields, so pass null: an instance argument would suggest a per-binding
-        // field and hide that the stack is per-thread.
+        FieldInfo field = shape.OutgoingRejections;
+
+        // Upstream declares it "[ThreadStatic] private static Stack<LanConnectProtocolFailure>?" and the probe
+        // verified Push/Pop exist. GetValue/SetValue ignore the instance argument for static fields, so pass
+        // null: an instance argument would suggest a per-binding field and hide that the stack is per-thread.
         Debug.Assert(field.IsStatic);
         if (field.GetValue(null) is { } existing)
         {
@@ -394,30 +716,32 @@ internal sealed class TailErrorPathFix : ICompatFix
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(exception);
 
-        Type runtimeType = runtime.GetType();
-        object sync = Reflect.RequireField(runtimeType, "_sync").GetValue(runtime)
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "tail-error-paths: the shape was not captured, so the redirect cannot run.");
+
+        object sync = shape.Sync.GetValue(runtime)
             ?? throw new InvalidOperationException("Tail runtime _sync is null.");
 
         ulong[] peerIds;
 
         lock (sync)
         {
-            object? terminated = Reflect.RequireMethodByName(binding.GetType(), "TryMarkTerminated", 0)
-                .Invoke(binding, null);
+            object? terminated = shape.TryMarkTerminated.Invoke(binding, null);
             if (terminated is false)
             {
                 return;
             }
 
-            RemoveBindingIfCurrent(runtime, "_bindings", "MessageBus", binding);
-            RemoveBindingIfCurrent(runtime, "_writerBindings", "Writer", binding);
+            RemoveBindingIfCurrent(shape.Bindings, shape.BindingMessageBus, runtime, binding);
+            RemoveBindingIfCurrent(shape.WriterBindings, shape.BindingWriter, runtime, binding);
 
-            object writer = Reflect.GetPropertyValue(binding, "Writer")
+            object writer = shape.BindingWriter.GetValue(binding)
                 ?? throw new InvalidOperationException("Tail binding has no writer.");
-            Reflect.RequireMethodByName(runtimeType, "ClearPendingOutgoing", 1).Invoke(runtime, new[] { writer });
+            shape.ClearPendingOutgoing.Invoke(runtime, new[] { writer });
 
             var peers = new List<ulong>();
-            if (Reflect.GetPropertyValue(binding, "BoundPeerIds") is System.Collections.IEnumerable bound)
+            if (shape.BindingBoundPeerIds.GetValue(binding) is System.Collections.IEnumerable bound)
             {
                 foreach (object? peer in bound)
                 {
@@ -428,7 +752,7 @@ internal sealed class TailErrorPathFix : ICompatFix
                 }
             }
 
-            if (Reflect.GetPropertyValue(binding, "Service") is NetHostGameService host)
+            if (shape.BindingService.GetValue(binding) is NetHostGameService host)
             {
                 foreach (NetClientData peer in host.ConnectedPeers)
                 {
@@ -438,14 +762,14 @@ internal sealed class TailErrorPathFix : ICompatFix
 
             peerIds = peers.Distinct().ToArray();
 
-            Reflect.RequireMethodByName(binding.GetType(), "ClearNative", 0).Invoke(binding, null);
+            shape.ClearNative.Invoke(binding, null);
         }
 
         Entry.Error(
             $"sts2_lan_connect tail: terminating active Native Tail binding reason={reason} " +
             $"exception={exception.GetType().FullName} hresult={exception.HResult}.");
 
-        if (Reflect.GetPropertyValue(binding, "Service") is NetHostGameService netHost)
+        if (shape.BindingService.GetValue(binding) is NetHostGameService netHost)
         {
             foreach (ulong peerId in peerIds)
             {
@@ -468,7 +792,7 @@ internal sealed class TailErrorPathFix : ICompatFix
         // terminated while the connection stays up, and the client hangs on a dead session.
         try
         {
-            object service = Reflect.GetPropertyValue(binding, "Service")
+            object service = shape.BindingService.GetValue(binding)
                 ?? throw new InvalidOperationException("Tail binding has no service.");
             MethodInfo disconnect = service.GetType()
                 .GetMethod("Disconnect", new[] { typeof(NetError), typeof(bool) })
@@ -495,14 +819,20 @@ internal sealed class TailErrorPathFix : ICompatFix
     /// disconnecting them, and the ENet peer would stay connected. The scheduling method itself is
     /// readable, so we replace it with the same logic written against the 0.113 signature.
     /// </summary>
-    private static void InstallKickDisconnectRedirect(Assembly host, Harmony harmony)
+    private static void InstallKickDisconnectRedirect(Harmony harmony, Shape shape)
     {
-        Type patchesType = Reflect.RequireType(
-            host, "Sts2LanConnect.Scripts.LanConnectRemoteLobbyPlayerPatches");
-        MethodInfo schedule = Reflect.RequireMethodByName(patchesType, "ScheduleDelayedDisconnect", 3);
+        if (shape.ScheduleDelayedDisconnect == null)
+        {
+            if (shape.OptionalNote != null)
+            {
+                Entry.Warn("tail-error-paths: " + shape.OptionalNote);
+            }
+
+            return;
+        }
 
         harmony.Patch(
-            schedule,
+            shape.ScheduleDelayedDisconnect,
             prefix: new HarmonyMethod(typeof(TailErrorPathFix), nameof(ScheduleDelayedDisconnectPrefix))
             {
                 priority = Priority.First
@@ -517,8 +847,10 @@ internal sealed class TailErrorPathFix : ICompatFix
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(target);
 
-        object? service = Reflect.RequireMethodByName(runtime.GetType(), "GetHostNetService", 0)
-            .Invoke(runtime, null);
+        Shape shape = _shape
+            ?? throw new InvalidOperationException("tail-error-paths: the shape was not captured.");
+
+        object? service = shape.GetHostNetService!.Invoke(runtime, null);
         if (service is not NetHostGameService hostService)
         {
             return false;
@@ -529,8 +861,7 @@ internal sealed class TailErrorPathFix : ICompatFix
             return false;
         }
 
-        object? action = Reflect.RequireMethodByName(runtime.GetType(), "CreateKickDisconnectAction", 1)
-            .Invoke(runtime, new[] { target });
+        object? action = shape.CreateKickDisconnectAction!.Invoke(runtime, new[] { target });
         if (action is not Func<Action, bool> disconnectIfCurrent)
         {
             throw new InvalidOperationException(
@@ -577,14 +908,19 @@ internal sealed class TailErrorPathFix : ICompatFix
     private static string DescribeKickBindingId(object target) =>
         target.GetType().GetProperty("BindingId", AnyMember)?.GetValue(target) as string ?? "<legacy>";
 
-    private static void RemoveBindingIfCurrent(object runtime, string dictionaryField, string keyProperty, object binding)    {
-        if (Reflect.RequireField(runtime.GetType(), dictionaryField).GetValue(runtime) is not System.Collections.IDictionary map)
+    private static void RemoveBindingIfCurrent(
+        FieldInfo mapField,
+        PropertyInfo keyProperty,
+        object runtime,
+        object binding)
+    {
+        if (mapField.GetValue(runtime) is not System.Collections.IDictionary map)
         {
             return;
         }
 
-        object key = Reflect.GetPropertyValue(binding, keyProperty)
-            ?? throw new InvalidOperationException($"Tail binding has no {keyProperty}.");
+        object key = keyProperty.GetValue(binding)
+            ?? throw new InvalidOperationException($"Tail binding has no {keyProperty.Name}.");
 
         if (map.Contains(key) && ReferenceEquals(map[key], binding))
         {

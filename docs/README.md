@@ -21,7 +21,7 @@
 | 兼容修复 · 0.113 新模式 | **1 项** | 客户端加入极速 / 恐惧房间时，官方模组的推屏逻辑认不出新模式 |
 | 便利功能 | **4 项** | 局终新开一局、局中重开本层、极速 / 恐惧建房、解锁这两个模式 |
 
-合计 **9 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
+合计 **10 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
 
 ### 兼容修复：6 个元数据断点
 
@@ -48,7 +48,7 @@
 上表不是抄来的结论：`tests/` 里的 `BreakpointRegressionTests` 扫描官方 DLL 的 22,774 个元数据候选，
 断言"恰好这 6 个无法解析"；`GameApiShapeTests` 则直接读 `sts2.dll` 的元数据，断言每个断点的新旧形态。
 
-### 九项修复清单
+### 十项修复清单
 
 | # | id | 类别 | 解决什么 | 用户看到什么 |
 |---|----|------|----------|--------------|
@@ -162,17 +162,21 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 [lobby-enhance] applied: new-run-button
 [lobby-enhance] applied: mid-run-restart
 [lobby-enhance] applied: extra-game-modes
+[lobby-enhance] applied: room-card-pill
 [lobby-enhance] applied: unlock-extra-modes
-[lobby-enhance] summary: applied=9[join-flow,join-screen-modes,host-wire,tail-error-paths,
-          abandon-run,new-run-button,mid-run-restart,extra-game-modes,unlock-extra-modes] skipped=0[] failed=0
+[lobby-enhance] summary: applied=10[join-flow,join-screen-modes,host-wire,tail-error-paths,
+          abandon-run,new-run-button,mid-run-restart,extra-game-modes,room-card-pill,
+          unlock-extra-modes] skipped=0[] failed=0
 ```
 
 判定标准：
 
-- `applied=9 ... failed=0` → 9 项修复全部装上。
-- 出现 `Staying inert` → 游戏不是 0.113，本补丁不需要，也没有生效（这是正常状态）。
+- `applied=10 ... failed=0` → 10 项修复全部装上。
+- `skipped=<n>` → 有 n 项判断为「这个构建不需要」，每一项都会单独打印原因
+  （形如 `skipped: <id>: missing: <具体锚点>`）。
+- 出现 `no repair reported itself as needed` → 这个构建不需要任何修复，什么都没装（正常状态）。
 - 出现 `host mod 'sts2_lan_connect' is not loaded` → 官方模组没装或没被加载。
-- 出现 `FAILED:` → 某项修复没装上；此时多人功能**没有**完全兼容，请把日志发给作者。
+- 出现 `FAILED:` → 某项修复没装上；**只撤销它所在的那一组**，其它组照常生效。请把日志发给作者。
 
 ### 不启动游戏的验证
 
@@ -182,7 +186,7 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 # 1) 只校验 6 个元数据断点的判定结果（不安装任何补丁）
 dotnet run --project tools/probe-check -c Release
 
-# 2) 跑 Entry.RunSilently()，确认 9 项修复真的挂上了
+# 2) 跑 Entry.RunSilently()，确认 10 项修复真的挂上了
 dotnet run --project tools/smoke-test -c Release
 
 # 3) 补丁依赖的每一个上游反射成员（30 条契约）
@@ -217,7 +221,7 @@ dotnet test tests
 5. **发布工作区**：`packaging/` 结构符合官方上传器要求，`image.png` 是 <1 MiB 的正方形 PNG，
    `content/` 只有 4 个文件、绝不含官方模组的任何文件，且其中的 DLL 与当前构建逐字节一致。
 6. **修复清单**：`FixRegistryTests`（4 个用例）断言 `Entry.cs` 里 `CompatFixes.Build()` 产出的 id
-   **集合与顺序**就是那 9 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
+   **集合与顺序**就是那 10 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
    `join-screen-modes` 的分派、`unlock-extra-modes` 的两个 epoch 与「不写盘」、`mid-run-restart` 的反射锚点。
 7. **反假绿闸门**：`GameDependentCoverageTests`（1 个用例）检查「依赖游戏 DLL 的那些用例真的跑过了」——
    22 个用例在缺输入时会静默跳过，这条断言让「全绿但其实没跑」变成红色（可用
@@ -231,13 +235,13 @@ dotnet test tests
 
 - **只针对 0.113.0 验证。** 开发与验证基于 0.113.0（`release_info.json` 中 commit `16ac0fe3`，
   2026-11-12）。其它版本没有验证过。
-- **探测只认这 6 个元数据断点。** 启动探测是"这 6 个签名变化是否都在"，不是"游戏版本号是多少"。
-  将来版本若又改签名，本补丁不会自动适配，日志仍会显示 `applied=9`。
-  各修复的 `Applies` 门槛**并不相同**：`join-screen-modes`、`host-wire` 挂在断点 #1 上
-  （`JoinScreenDispatchFix.cs:86`、`HostWireFix.cs:53`），`mid-run-restart`、`new-run-button` 挂在
-  「6 项全中」（`snapshot.RequiresPatch`，`Core/CompatContract.cs:26-32`），只有 `extra-game-modes`、
-  `unlock-extra-modes` 恒为真（`ExtraGameModesFix.cs:53`、`UnlockExtraModesFix.cs:46`）。所以
-  「行为缺口不参与版本探测」只对最后两项成立。
+- **没有「总开关」，每项自己判断。** v1.8.0 起不再有「6 个断点全中才生效」的全局门槛：每项修复在
+  `Applies(in CompatSnapshot, out string reason)` 里自己解析锚点（类型 / 方法 / 参数类型逐个比对），
+  缺一个只跳过它自己，并在日志里打印 `skipped: <id>: missing: <具体锚点>`。
+  所以将来游戏改了某个签名，**受影响的那几项会明确跳过，其余照常工作**：不会整模组失活，也不会出现
+  「日志说 applied、功能其实没有」。
+- **每项失败只回滚自己那一组。** 九个 Harmony id（`sts2_lobby_enhance.<组名>`）互相独立，
+  `UnpatchAll` 只作用于出问题的那一组。
 - **依赖官方模组 ≥ 0.6.3。** 未安装时补丁静默不生效（只留一条警告日志）。
 - **联机双方都要安装本补丁。** 房主校验加入方上报的解锁状态；只装一边会在加入或新开一局时失败。
 - **局终「新开一局」要求至少一名已连接队友装了补丁**，否则不显示按钮；未安装者会留在结算页。
@@ -270,7 +274,7 @@ dotnet test tests
 6. 局中重开：打到第二层中途 → 房主点「重开一局」→ 全房回到本层开头，无需逐人确认。
 7. 局终新开一局：打完一局 → 结算页点「新开一局」→ 全房回到对应模式的准备页；
    同时确认客户端结算页显示了提示文案。
-8. 双方日志都没有 `FAILED:`，且都有 `applied=9`。
+8. 双方日志都没有 `FAILED:`，且都有 `applied=10`。
 
 ### 构建与发布
 
@@ -285,7 +289,7 @@ pwsh -File packaging/build-content.ps1
 python packaging/make-image.py
 ```
 
-发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（9 项 applied）+
+发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（10 项 applied）+
 `tools/contract-check`（30 条契约）。
 
 > **官方模组升级后必须重跑 `tools/wire-verify`。** `host-wire` 用 `Priority.First` 覆盖宿主自己的
@@ -335,7 +339,7 @@ packaging you must compare the DLL inside it against `packaging/content/` by sha
 | Compatibility · new game modes | **1 fix** | the official mod's post-join screen dispatch cannot handle Blitz / Dread |
 | Convenience features | **4 fixes** | new run from game over, mid-run restart, hosting Blitz / Dread, unlocking those modes |
 
-Nine fixes in total, each one visible in the startup log (see "Checking that it works").
+Ten fixes in total, each one visible in the startup log (see "Checking that it works").
 
 ### The six metadata breaks
 
@@ -366,7 +370,7 @@ to take over a *readable* caller or an async stub.
 exactly these six fail to resolve; `GameApiShapeTests` reads the game's metadata directly and asserts
 each old/new shape.
 
-### The nine fixes
+### The ten fixes
 
 | # | id | Kind | What it solves | What the player sees |
 |---|----|------|----------------|----------------------|
@@ -468,14 +472,18 @@ be installed (workshop, or `<game>\mods\sts2_lan_connect\`).
 Search the game log for `[lobby-enhance]`. On 0.113 the expected summary line is:
 
 ```
-[lobby-enhance] summary: applied=9[join-flow,join-screen-modes,host-wire,tail-error-paths,
-          abandon-run,new-run-button,mid-run-restart,extra-game-modes,unlock-extra-modes] skipped=0[] failed=0
+[lobby-enhance] summary: applied=10[join-flow,join-screen-modes,host-wire,tail-error-paths,
+          abandon-run,new-run-button,mid-run-restart,extra-game-modes,room-card-pill,
+          unlock-extra-modes] skipped=0[] failed=0
 ```
 
-- `applied=9 ... failed=0` — all nine fixes installed.
-- `Staying inert` — the game is not 0.113; the patch is not needed and did nothing (normal).
+- `applied=10 ... failed=0` — all ten fixes installed.
+- `skipped=<n>` — n repairs decided this build does not need them; each prints its own reason
+  (`skipped: <id>: missing: <anchor>`).
+- `no repair reported itself as needed` — this build needs no repair at all; nothing was installed (normal).
 - `host mod 'sts2_lan_connect' is not loaded` — the official mod is missing.
-- `FAILED:` — a repair could not be installed; multiplayer is **not** fully compatible. Send the log.
+- `FAILED:` — a repair could not be installed; **only its own group** is unpatched, the others stay live.
+  Send the log.
 
 ### Verifying without launching the game
 
@@ -523,7 +531,7 @@ covering seven kinds of fact:
    PNG under 1 MiB, `content/` holds only this project's four files, and its DLL is byte-identical to
    the current build.
 6. **The repair inventory** — `FixRegistryTests` (4 cases) pins the id **set and order** produced by
-   `CompatFixes.Build()` in `Entry.cs` to those nine, so a repair cannot be added, removed, renamed or
+   `CompatFixes.Build()` in `Entry.cs` to those ten, so a repair cannot be added, removed, renamed or
    reordered without editing an expectation; it also covers `join-screen-modes` dispatch, the two
    `unlock-extra-modes` epochs and its "never writes to disk", and the `mid-run-restart` anchors.
 7. **The anti-false-green gate** — `GameDependentCoverageTests` (1 case) checks that the game-dependent
@@ -538,14 +546,13 @@ but `GameDependentCoverageTests` then fails on purpose: "green" must not mean "n
 ### Known limitations
 
 - **Verified on 0.113.0 only** (commit `16ac0fe3`, 2026-11-12). Other builds are untested.
-- **The probe only recognises the six metadata breaks.** It asks "are these six signature changes
-  present", not "which game version is this". A future build with new signature changes will not be
-  adapted automatically, even though the log will still say `applied=9`. The `Applies` gates are **not**
-  uniform: `join-screen-modes` and `host-wire` hang off break #1 (`JoinScreenDispatchFix.cs:86`,
-  `HostWireFix.cs:53`), `mid-run-restart` and `new-run-button` off "all six present"
-  (`snapshot.RequiresPatch`, `Core/CompatContract.cs:26-32`), and only `extra-game-modes` and
-  `unlock-extra-modes` always apply (`ExtraGameModesFix.cs:53`, `UnlockExtraModesFix.cs:46`). So
-  "behavioural gaps do not take part in version detection" holds for the last two only.
+- **There is no global switch; every repair decides for itself.** Since v1.8.0 the "all six breaks
+  present" gate is gone: each repair resolves its own anchors (types, methods, and exact parameter types)
+  inside `Applies(in CompatSnapshot, out string reason)`. A missing anchor skips only that repair and logs
+  `skipped: <id>: missing: <anchor>`, so a future build that changes one signature costs only the repairs
+  touching it — not the whole mod, and never a log line that claims `applied` for a feature that is absent.
+- **A failure rolls back only its own group.** The nine Harmony ids (`sts2_lobby_enhance.<group>`) are
+  independent; `UnpatchAll` touches the failing group only.
 - **Requires the official mod 0.6.3 or newer.** Without it the patch stays inert (one warning).
 - **Both sides need the patch**; installing it on one side only fails at join time or at the new-run
   button.
@@ -585,7 +592,7 @@ but `GameDependentCoverageTests` then fails on purpose: "green" must not mean "n
    that floor with no per-player confirmation.
 7. New run: finish a run, press "new run" on the game-over screen — the room returns to the lobby for
    the same mode, and the client-side hint is visible.
-8. Neither log contains `FAILED:`, and both contain `applied=9`.
+8. Neither log contains `FAILED:`, and both contain `applied=10`.
 
 ### Build and test
 

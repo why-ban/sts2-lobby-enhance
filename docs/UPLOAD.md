@@ -279,7 +279,7 @@ workspace. If it is also not present, a new item is created.
    - "必需物品"里能看到 `sts2_lan_connect`（3749766330）；
    - 可见性是 **Public** —— `packaging/workshop.json` 写的就是 `public`，**一次上传即公开**，
      没有"先私有看一眼再公开"这一步（作者 2026-11-14 明确要求直接公开）。
-2. 用另一个账号或本机订阅一次，验证能正常下载并加载（日志出现 `[lobby-enhance] ... applied=9 ... failed=0`）。
+2. 用另一个账号或本机订阅一次，验证能正常下载并加载（日志出现 `[lobby-enhance] ... applied=10 ... failed=0`）。
 3. 如果 Steam 提示需要先接受工坊法律协议，请在浏览器里接受后重新上传：
    `https://steamcommunity.com/sharedfiles/workshoplegalagreement`
 5. **上传账号必须拥有本游戏。** 2026-11-14 实测：在没有 AppID 2868840 许可的账号上，

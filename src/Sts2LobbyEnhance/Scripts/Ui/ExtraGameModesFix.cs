@@ -34,13 +34,51 @@ namespace Sts2LobbyEnhance;
 ///
 /// Every seam returns or accepts <c>GameMode</c>, a value type that cannot be bound through an
 /// <c>object</c> Harmony argument, which is why the mapping seams are IL level rather than prefixes.
+///
+/// The room-card pill used to live here and no longer does (<see cref="RoomCardPillFix"/>): a cosmetic
+/// colour property must not be able to fail the repair that makes the modes hostable at all.
+///
+/// Every seam is resolved by <see cref="Shape.TryCapture"/> before anything is patched, and a missing
+/// functional anchor makes this fix report why it stayed out instead of throwing — a throw here is
+/// what used to take the whole mod down. Game-side types are looked up by name, never with
+/// <c>typeof</c>, because a probe that names <c>NBlitzScreen</c> would itself fail to JIT on a build
+/// that dropped it.
 /// </summary>
 internal sealed class ExtraGameModesFix : ICompatFix
 {
+    // ---------------------------------------------------------------- host mod type names
     private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyOverlay";
     private const string HostFlowTypeName = "Sts2LanConnect.Scripts.LanConnectHostFlow";
     private const string BindingTypeName = "Sts2LanConnect.Scripts.LanConnectMultiplayerSaveRoomBinding";
     private const string InviteButtonPatchTypeName = "Sts2LanConnect.Scripts.LanConnectInviteButtonPatch";
+    private const string AvailabilityTypeName = "Sts2LanConnect.Scripts.LanConnectLanHostModeAvailability";
+
+    // Short names, used only in the "missing:" reason line so it stays readable in a log.
+    private const string OverlayShort = "LanConnectLobbyOverlay";
+    private const string HostFlowShort = "LanConnectHostFlow";
+    private const string BindingShort = "LanConnectMultiplayerSaveRoomBinding";
+    private const string AvailabilityShort = "LanConnectLanHostModeAvailability";
+    private const string InviteShort = "LanConnectInviteButtonPatch";
+
+    // ---------------------------------------------------------------- game type names (string only)
+    private const string GameModeTypeName = "MegaCrit.Sts2.Core.Runs.GameMode";
+    private const string CharacterSelectTypeName =
+        "MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectScreen";
+    private const string DailyRunScreenTypeName =
+        "MegaCrit.Sts2.Core.Nodes.Screens.DailyRun.NDailyRunScreen";
+    private const string CustomRunScreenTypeName =
+        "MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen";
+    private const string BlitzScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Blitz.NBlitzScreen";
+    private const string DreadScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Dread.NDreadScreen";
+
+    // Full names of the two middle parameters of PushHostScreen. Compared as strings so the probe never
+    // has to name the types itself.
+    private const string SubmenuStackTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenuStack";
+    private const string HostGameServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetHostGameService";
+    private const string IntTypeName = "System.Int32";
+
+    /// <summary>The game assembly, looked up by name so no probe needs a <c>typeof</c>.</summary>
+    private const string GameAssemblyName = "sts2";
 
     /// <summary>Dropdown id and mode value for Blitz; matches the game's own <c>GameMode.Blitz</c>.</summary>
     private const int BlitzValue = 4;
@@ -48,135 +86,238 @@ internal sealed class ExtraGameModesFix : ICompatFix
     /// <summary>Sentinel mode value for Dread, chosen because the host mod already spends 3 on Custom.</summary>
     private const int DreadSentinel = 5;
 
+    private static MethodInfo? _isExtraMode;
+    private static Shape? _shape;
+
     public string Id => "extra-game-modes";
 
-    public bool Applies(in CompatSnapshot snapshot) => true;
+    public FixGroup Group => FixGroup.Modes;
+
+    /// <summary>
+    /// Applicable when the host mod is present and every functional anchor resolves — the dropdown, the
+    /// two <c>GameMode</c>-shaped mapping seams, the availability seam, the host-screen dispatch, the
+    /// invite-button hook, and the five game screens the dispatch pushes.
+    ///
+    /// <see cref="CompatSnapshot"/> is not read: none of its six observations is a prerequisite for adding
+    /// a mode, and the two that look related (<c>InitialGameInfoLostGameMode</c>) describe the wire, which
+    /// this repair does not touch. The shape checks in <see cref="Shape.TryCapture"/> are the real gate.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod 'sts2_lan_connect' is not loaded";
+            return false;
+        }
+
+        Shape? shape = Shape.TryCapture(host, out reason);
+        if (shape == null)
+        {
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
+        Shape shape = _shape ?? throw new InvalidOperationException(
+            "extra-game-modes: Applies() did not capture the host shape; refusing to patch blind.");
 
-        Type overlay = Reflect.RequireType(host, OverlayTypeName);
-        Type hostFlow = Reflect.RequireType(host, HostFlowTypeName);
-        Type binding = Reflect.RequireType(host, BindingTypeName);
+        // Resolve our own IL helpers before the first patch: a null here is a coding error, and finding it
+        // after three seams are already installed would leave the repair half-built.
+        _isExtraMode = OwnMethod(nameof(IsExtraMode));
+        MethodInfo mapCreateId = OwnMethod(nameof(MapCreateId));
+        MethodInfo mapGameModeString = OwnMethod(nameof(MapGameModeString));
+        MethodInfo pushHostScreen = OwnMethod(nameof(PushHostScreenReplacement));
+        MethodInfo availabilityFallback = OwnMethod(nameof(IsCreateGameModeAvailableReplacement));
 
         // 1) Append the two entries to the create dialog's room-type dropdown.
-        MethodInfo buildDialog = Reflect.RequireMethodByName(overlay, "BuildCreateDialog", 0);
         harmony.Patch(
-            buildDialog,
+            shape.BuildCreateDialog,
             postfix: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(BuildCreateDialogPostfix))
             {
                 priority = Priority.Last
             });
 
         // 2) dropdown id -> mode value, and the currently selected mode.
-        MethodInfo modeFromId = Reflect.RequireMethodByName(overlay, "GameModeFromCreateId", 1);
-        ReplacementPlans[modeFromId] = typeof(ExtraGameModesFix).GetMethod(
-            nameof(MapCreateId), BindingFlags.Public | BindingFlags.Static)!;
+        ReplacementPlans[shape.GameModeFromCreateId] = mapCreateId;
         harmony.Patch(
-            modeFromId,
+            shape.GameModeFromCreateId,
             transpiler: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(ConstantResultTranspiler))
             {
                 priority = Priority.First
             });
 
-        MethodInfo getSelected = Reflect.RequireMethodByName(overlay, "GetSelectedCreateGameMode", 0);
-        FieldInfo selectedIdField = Reflect.RequireField(overlay, "_selectedCreateGameModeId");
-        SelectedModePlan = (selectedIdField, typeof(ExtraGameModesFix).GetMethod(
-            nameof(MapCreateId), BindingFlags.Public | BindingFlags.Static)!);
+        SelectedModePlan = (shape.SelectedCreateGameModeId, mapCreateId);
         harmony.Patch(
-            getSelected,
+            shape.GetSelectedCreateGameMode,
             transpiler: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(SelectedModeTranspiler))
             {
                 priority = Priority.First
             });
 
-        // 3) availability gate: the two new modes are never locked.
-        MethodInfo isAvailable = Reflect.RequireMethodByName(overlay, "IsCreateGameModeAvailable", 2);
-        Type availabilityType = Reflect.RequireType(host, "Sts2LanConnect.Scripts.LanConnectLanHostModeAvailability");
-        PatchWholeBodyWithCall(harmony, isAvailable, nameof(IsCreateGameModeAvailableReplacement), null, availabilityType);
+        // 3) availability gate: the two new modes are never locked, and upstream's own answer for
+        //    standard/daily/custom is preserved by falling through to its body instead of re-deriving it.
+        InstallAvailability(harmony, shape, availabilityFallback);
 
         // 4) push the matching 0.113 screen when hosting, then re-create the invite button like upstream does.
-        MethodInfo pushHostScreen = Reflect.RequireMethodByName(hostFlow, "PushHostScreen", 4);
-        _scheduleEnsureInviteButton = Reflect.RequireStaticMethod(
-            Reflect.RequireType(host, InviteButtonPatchTypeName),
-            "ScheduleEnsureInviteButton",
-            typeof(MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectScreen),
-            typeof(string));
-        PatchWholeBodyWithCall(harmony, pushHostScreen, nameof(PushHostScreenReplacement), null, null, null, null);
+        PatchWholeBodyWithCall(harmony, shape.PushHostScreen, pushHostScreen, null, null, null, null);
 
-        // 5) the lobby-facing mode string.
-        MethodInfo getLobbyGameMode = Reflect.RequireStaticMethod(binding, "GetLobbyGameMode", typeof(GameMode));
-        ReplacementPlans[getLobbyGameMode] = typeof(ExtraGameModesFix).GetMethod(
-            nameof(MapGameModeString), BindingFlags.Public | BindingFlags.Static)!;
-        harmony.Patch(
-            getLobbyGameMode,
-            transpiler: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(ConstantResultTranspiler))
-            {
-                priority = Priority.First
-            });
+        // 5) the lobby-facing mode string, only onto a GetLobbyGameMode that takes GameMode.
+        InstallLobbyGameMode(harmony, shape, mapGameModeString);
 
-        // 6) friendly Chinese labels in the room list.
-        MethodInfo getLabel = Reflect.RequireStaticMethod(binding, "GetLobbyGameModeLabel", typeof(string));
-        harmony.Patch(
-            getLabel,
-            prefix: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(GetLobbyGameModeLabelPrefix))
-            {
-                priority = Priority.First
-            });
-
-        // 7) the mode pill on each room card and in the selected-room summary. 0.6.3's
-        //    GetRoomGameModePill only knows "daily", "custom" and a catch-all "STD"
-        //    (LanConnectLobbyOverlay.cs:7943-7950), so the "blitz"/"dread" strings this fix feeds into
-        //    GameMode were labelled STD. The colour properties are private *properties*, not fields, whose
-        //    getters are one-line reads of LobbyTheme.Palette (:3492 Success, :3501 Danger, :3438
-        //    SurfaceMuted); they are resolved here so a host build that drops one fails Apply instead of
-        //    silently mislabelling rooms.
-        MethodInfo getRoomGameModePill = Reflect.RequireMethodByName(overlay, "GetRoomGameModePill", 1);
-        PillColors = (
-            Reflect.RequireProperty(overlay, "SuccessColor"),
-            Reflect.RequireProperty(overlay, "DangerColor"),
-            Reflect.RequireProperty(overlay, "SurfaceMutedColor"));
-        harmony.Patch(
-            getRoomGameModePill,
-            postfix: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(GetRoomGameModePillPostfix))
-            {
-                priority = Priority.Last
-            });
+        // 6) friendly Chinese labels in the room list (decorative: absence only costs the label).
+        MethodInfo? lobbyLabel = shape.GetLobbyGameModeLabel;
+        if (lobbyLabel != null)
+        {
+            harmony.Patch(
+                lobbyLabel,
+                prefix: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(GetLobbyGameModeLabelPrefix))
+                {
+                    priority = Priority.First
+                });
+        }
+        else
+        {
+            Entry.Warn(
+                "extra-game-modes: " + BindingTypeName + ".GetLobbyGameModeLabel(string) not found; " +
+                "room rows will show the raw gameMode string for 极速/恐惧 rooms.");
+        }
 
         Entry.Info(
             "extra-game-modes: added 极速模式 (Blitz) and 恐惧模式 (Dread) to the create-room picker " +
             $"(dropdown ids 3/4, mode values {BlitzValue}/{DreadSentinel}, availability, host screen + " +
-            "invite button, lobby gameMode string, label, room-card mode pill).");
+            "invite button, lobby gameMode string, label).");
     }
+
+    // ------------------------------------------------------------------ seam 3: availability
+
+    /// <summary>
+    /// Keeps upstream's <c>IsCreateGameModeAvailable</c> body and puts a five-instruction gate in front
+    /// of it: modes 4/5 answer <c>true</c>, everything else branches into the original instructions.
+    ///
+    /// This replaces the previous whole-body rewrite, which re-derived upstream's switch by reflecting on
+    /// the availability record's <c>Standard</c>/<c>Daily</c>/<c>Custom</c> properties. When one of those
+    /// was renamed the reflection read returned nothing and every real mode silently became "locked",
+    /// leaving only 极速/恐惧 selectable — a far worse failure than the feature being absent. Branching
+    /// into the original body means we never have to know that record's shape at all.
+    /// </summary>
+    private static IEnumerable<CodeInstruction> AvailabilityTranspiler(IEnumerable<CodeInstruction> instructions)
+    {
+        List<CodeInstruction> original = instructions.ToList();
+        if (original.Count == 0 || _isExtraMode == null)
+        {
+            foreach (CodeInstruction instruction in original)
+            {
+                yield return instruction;
+            }
+
+            yield break;
+        }
+
+        // Fully qualified: "using Godot" also brings a Godot.Label into scope.
+        System.Reflection.Emit.Label runOriginal = new System.Reflection.Emit.Label();
+
+        yield return new CodeInstruction(OpCodes.Ldarg_0);
+        yield return new CodeInstruction(OpCodes.Call, _isExtraMode);
+        yield return new CodeInstruction(OpCodes.Brfalse, runOriginal);
+        yield return new CodeInstruction(OpCodes.Ldc_I4_1);
+        yield return new CodeInstruction(OpCodes.Ret);
+
+        original[0].labels.Add(runOriginal);
+        foreach (CodeInstruction instruction in original)
+        {
+            yield return instruction;
+        }
+    }
+
+    private static void InstallAvailability(Harmony harmony, Shape shape, MethodInfo fallback)
+    {
+        try
+        {
+            harmony.Patch(
+                shape.IsCreateGameModeAvailable,
+                transpiler: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(AvailabilityTranspiler))
+                {
+                    priority = Priority.First
+                });
+
+            Entry.Info(
+                "extra-game-modes: availability check short-circuits modes 4/5 and runs upstream's own " +
+                "body for standard/daily/custom.");
+            return;
+        }
+        catch (Exception exception)
+        {
+            Entry.Warn(
+                "extra-game-modes: the branch transpiler was rejected (" + exception.GetType().Name + ": " +
+                exception.Message + "); falling back to the reflective replacement for the availability check.");
+        }
+
+        PatchWholeBodyWithCall(
+            harmony,
+            shape.IsCreateGameModeAvailable,
+            fallback,
+            null,
+            shape.Availability);
+    }
+
+    // ------------------------------------------------------------------ seam 5: lobby gameMode string
+
+    /// <summary>
+    /// Installs the <c>GetLobbyGameMode</c> mapping, but only onto a method whose first parameter is exactly
+    /// <c>GameMode</c>.
+    ///
+    /// The replacement is written in <c>GameMode</c> terms — <c>Standard = 1</c>, <c>Daily = 2</c>,
+    /// <c>Custom = 3</c> — and those numbers are the whole contract. If the first parameter is any other type
+    /// (a different enum, an <c>int</c>, a new mode struct), the numbers mean nothing and installing the
+    /// replacement would silently relabel every room. So the shape is asserted at bind time and the seam is
+    /// skipped, with both the expected and the actual type name in the log.
+    ///
+    /// This is the same guard every other seam in this file has; it is not about any particular upstream
+    /// release. <c>Reflect.RequireMethodByName</c> matches on arity only (<c>Reflect.cs:60-76</c>), so an
+    /// arity-only bind can never be trusted on its own.
+    /// </summary>
+    private static void InstallLobbyGameMode(Harmony harmony, Shape shape, MethodInfo mapGameModeString)
+    {
+        string parameterType = shape.GetLobbyGameModeFirstParameterType;
+
+        if (!string.Equals(parameterType, GameModeTypeName, StringComparison.Ordinal))
+        {
+            Entry.Warn(
+                "extra-game-modes: " + BindingTypeName + ".GetLobbyGameMode takes " + parameterType +
+                " as its first parameter but this replacement is written for " + GameModeTypeName +
+                " (Standard=1/Daily=2/Custom=3); not installing the lobby gameMode mapping, so the room " +
+                "list will show the raw string for 极速/恐惧 rooms.");
+            return;
+        }
+
+        ReplacementPlans[shape.GetLobbyGameMode] = mapGameModeString;
+        harmony.Patch(
+            shape.GetLobbyGameMode,
+            transpiler: new HarmonyMethod(typeof(ExtraGameModesFix), nameof(ConstantResultTranspiler))
+            {
+                priority = Priority.First
+            });
+    }
+
+    /// <summary>
+    /// One of this class's own IL-callable helpers. Resolved before the first patch so a typo cannot leave
+    /// a half-installed repair behind; a null here is a build error, not a compatibility issue.
+    /// </summary>
+    private static MethodInfo OwnMethod(string name) =>
+        typeof(ExtraGameModesFix).GetMethod(name, BindingFlags.Public | BindingFlags.Static)
+        ?? throw new MissingMethodException(typeof(ExtraGameModesFix).FullName, name);
 
     // ------------------------------------------------------------------ IL plans
 
     private static readonly Dictionary<MethodBase, MethodInfo> ReplacementPlans = new();
 
     private static (FieldInfo IdField, MethodInfo Helper) SelectedModePlan;
-
-    /// <summary>
-    /// <c>LanConnectInviteButtonPatch.ScheduleEnsureInviteButton(NCharacterSelectScreen, string)</c>, captured during
-    /// <see cref="Apply"/>. Upstream calls it as the last statement of the Standard branch of <c>PushHostScreen</c>
-    /// (<c>dec-official/LanConnectHostFlow.cs:545</c>); without that call a Standard host never gets an invite button
-    /// for the room it just created. Captured eagerly so a host mod that stops exposing it fails this fix loudly
-    /// instead of silently losing the button.
-    /// </summary>
-    private static MethodInfo? _scheduleEnsureInviteButton;
-
-    /// <summary>
-    /// <c>LanConnectLobbyOverlay</c>'s private static <c>Color</c> properties read by
-    /// <see cref="GetRoomGameModePillPostfix"/>, captured during <see cref="Apply"/>.
-    ///
-    /// They are properties, not fields (<c>LanConnectLobbyOverlay.cs:3492</c> Success,
-    /// <c>:3501</c> Danger, <c>:3438</c> SurfaceMuted), and each getter is a single read of
-    /// <c>LobbyTheme.Palette</c>. The values are therefore re-read on every pill instead of being
-    /// cached here: the theme can change while the lobby is open (<c>LanConnectLobbyThemes.Changed</c>,
-    /// <c>LanConnectLobbyThemes.cs:197</c>), and a cached <c>Color</c> would keep the old palette.
-    /// </summary>
-    private static (PropertyInfo Success, PropertyInfo Danger, PropertyInfo SurfaceMuted) PillColors;
 
     /// <summary>Replaces a body with <c>call helper(arg0); ret</c> — valid for pure mapping methods.</summary>
     private static IEnumerable<CodeInstruction> ConstantResultTranspiler(
@@ -217,12 +358,9 @@ internal sealed class ExtraGameModesFix : ICompatFix
     private static void PatchWholeBodyWithCall(
         Harmony harmony,
         MethodInfo target,
-        string helperName,
+        MethodInfo helper,
         params Type?[] boxTypes)
     {
-        MethodInfo helper = typeof(ExtraGameModesFix).GetMethod(helperName, BindingFlags.Public | BindingFlags.Static)
-            ?? throw new MissingMethodException(typeof(ExtraGameModesFix).FullName, helperName);
-
         CallPlans[target] = (helper, boxTypes);
         harmony.Patch(
             target,
@@ -264,22 +402,38 @@ internal sealed class ExtraGameModesFix : ICompatFix
     // ReSharper disable once UnusedParameter.Local — Harmony binds by position.
     private static void BuildCreateDialogPostfix(object __instance)
     {
-        if (Reflect.GetField(__instance, "_roomTypeOption") is not OptionButton option)
+        // The field was resolved and asserted by Shape.TryCapture; this is a read, not a lookup, so a
+        // host-mod rename cannot throw inside the host's own dialog builder.
+        if (_shape is not { } shape || shape.RoomTypeOption.GetValue(__instance) is not OptionButton option)
         {
             return;
         }
 
-        AppendModeOption(option, 3, "极速模式");
-        AppendModeOption(option, 4, "恐惧模式");
+        AppendModeOption(option, 3, "极速模式", "极速", "Blitz");
+        AppendModeOption(option, 4, "恐惧模式", "恐惧", "Dread");
     }
 
-    private static void AppendModeOption(OptionButton option, int id, string label)
+    /// <summary>
+    /// Adds one dropdown entry unless the dropdown already offers that mode — by id (our own re-entry) or
+    /// by text (a newer upstream that adds the same mode under a different id). Without the text check a
+    /// host build that ships its own 极速 entry would end up with two of them.
+    /// </summary>
+    private static void AppendModeOption(OptionButton option, int id, string label, params string[] markers)
     {
         for (int index = 0; index < option.ItemCount; index++)
         {
             if (option.GetItemId(index) == id)
             {
                 return;
+            }
+
+            string text = option.GetItemText(index);
+            foreach (string marker in markers)
+            {
+                if (text.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
             }
         }
 
@@ -300,53 +454,6 @@ internal sealed class ExtraGameModesFix : ICompatFix
             default:
                 return true;
         }
-    }
-
-    /// <summary>
-    /// Postfix on <c>LanConnectLobbyOverlay.GetRoomGameModePill(string?)</c> — the pill drawn on every
-    /// room card (<c>LanConnectLobbyOverlay.cs:8357</c>), in the selected-room summary (<c>:5971</c>) and
-    /// in the accessibility announcement (<c>:8317</c>).
-    ///
-    /// 0.6.3 maps the mode string to exactly three labels: "daily" → 挑战, "custom" → 自定义, and
-    /// anything else → "STD" (<c>:7943-7950</c>). The two strings this fix produces for the extra modes
-    /// (<see cref="MapGameModeString"/>: <c>blitz</c>/<c>dread</c>) are "anything else", which is why the
-    /// user saw STD on those rooms. Only those two inputs are rewritten; daily, custom, standard and null
-    /// keep whatever the original returned.
-    /// </summary>
-    private static void GetRoomGameModePillPostfix(
-        string? gameMode,
-        ref (string Text, Color Border, Color Background) __result)
-    {
-        switch (gameMode?.Trim().ToLowerInvariant())
-        {
-            case "blitz":
-                __result = (
-                    "极速",
-                    PillColor(PillColors.Success, "SuccessColor"),
-                    PillColor(PillColors.SurfaceMuted, "SurfaceMutedColor"));
-                break;
-            case "dread":
-                __result = (
-                    "恐惧",
-                    PillColor(PillColors.Danger, "DangerColor"),
-                    PillColor(PillColors.SurfaceMuted, "SurfaceMutedColor"));
-                break;
-        }
-    }
-
-    /// <summary>Reads one of the captured static <c>Color</c> properties, failing loudly if it is gone.</summary>
-    private static Color PillColor(PropertyInfo? property, string name)
-    {
-        if (property is null)
-        {
-            throw new InvalidOperationException(
-                $"extra-game-modes: {OverlayTypeName}.{name} was not captured by Apply().");
-        }
-
-        return property.GetValue(null) is Color color
-            ? color
-            : throw new InvalidOperationException(
-                $"extra-game-modes: {OverlayTypeName}.{name} did not return a Color.");
     }
 
     // ------------------------------------------------------------------ pure helpers used from IL
@@ -375,9 +482,10 @@ internal sealed class ExtraGameModesFix : ICompatFix
     };
 
     /// <summary>
-    /// Full replacement for the host mod's availability check. Reimplemented rather than wrapped because
-    /// the original takes a value type we cannot pass through Harmony, and its logic is a plain switch on
-    /// the mode value.
+    /// Fallback for <see cref="IsCreateGameModeAvailable"/> used only when the branch transpiler cannot be
+    /// installed. Kept because the branch is the preferred shape, not because this one is safe: it
+    /// re-derives upstream's switch by reflecting on the availability record, and returns
+    /// <c>false</c> for every real mode when those properties cannot be read.
     /// </summary>
     public static bool IsCreateGameModeAvailableReplacement(int mode, object availability)
     {
@@ -407,14 +515,11 @@ internal sealed class ExtraGameModesFix : ICompatFix
     /// (<c>dec-official/LanConnectHostFlow.cs:545</c>), run right after the screen is pushed. Daily and Custom never
     /// had it (<c>:527-538</c>), and Blitz/Dread have no upstream counterpart at all, so only Standard is wired.
     /// </summary>
-    private static void ScheduleInviteButton(MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectScreen screen)
+    private static void ScheduleInviteButton(
+        MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectScreen screen,
+        Shape shape)
     {
-        MethodInfo scheduler = _scheduleEnsureInviteButton
-            ?? throw new InvalidOperationException(
-                "extra-game-modes: " + InviteButtonPatchTypeName + ".ScheduleEnsureInviteButton was not captured; " +
-                "the Standard host screen would be pushed without an invite button.");
-
-        scheduler.Invoke(null, new object?[] { screen, "push_host_screen" });
+        shape.ScheduleEnsureInviteButton.Invoke(null, new object?[] { screen, "push_host_screen" });
     }
 
     /// <summary>
@@ -433,7 +538,9 @@ internal sealed class ExtraGameModesFix : ICompatFix
                 var screen = stack.GetSubmenuType<MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NCharacterSelectScreen>();
                 screen.InitializeMultiplayerAsHost(netService, maxPlayers);
                 stack.Push(screen);
-                ScheduleInviteButton(screen);
+                ScheduleInviteButton(
+                    screen,
+                    _shape ?? throw new InvalidOperationException("extra-game-modes: shape was not captured."));
                 return;
             }
 
@@ -472,5 +579,337 @@ internal sealed class ExtraGameModesFix : ICompatFix
             }
         }
     }
-}
 
+    // ------------------------------------------------------------------ installability probe
+
+    /// <summary>
+    /// Everything this fix needs, resolved once before any patch is installed.
+    ///
+    /// Two tiers, because they fail very differently:
+    /// <list type="bullet">
+    /// <item><b>Functional</b> — the dropdown, the id mapping, the availability gate, the host screen and
+    /// its five screen types. Missing any of them means the feature cannot work, so the fix stays out and
+    /// says why.</item>
+    /// <item><b>Decorative</b> — <c>GetLobbyGameModeLabel(string)</c>. Missing it only costs a label, so it
+    /// is recorded as a warning and the rest still installs.</item>
+    /// </list>
+    ///
+    /// No <c>typeof</c> on any version-specific type, no <c>Invoke</c>, no <c>Activator</c>, no Godot
+    /// node, no file access: this runs during mod initialisation and must not be able to throw.
+    /// </summary>
+    private sealed class Shape
+    {
+        private Shape(
+            MethodInfo buildCreateDialog,
+            FieldInfo roomTypeOption,
+            MethodInfo gameModeFromCreateId,
+            MethodInfo getSelectedCreateGameMode,
+            FieldInfo selectedCreateGameModeId,
+            MethodInfo isCreateGameModeAvailable,
+            Type availability,
+            MethodInfo pushHostScreen,
+            MethodInfo getLobbyGameMode,
+            string getLobbyGameModeFirstParameterType,
+            MethodInfo? getLobbyGameModeLabel,
+            MethodInfo scheduleEnsureInviteButton)
+        {
+            BuildCreateDialog = buildCreateDialog;
+            RoomTypeOption = roomTypeOption;
+            GameModeFromCreateId = gameModeFromCreateId;
+            GetSelectedCreateGameMode = getSelectedCreateGameMode;
+            SelectedCreateGameModeId = selectedCreateGameModeId;
+            IsCreateGameModeAvailable = isCreateGameModeAvailable;
+            Availability = availability;
+            PushHostScreen = pushHostScreen;
+            GetLobbyGameMode = getLobbyGameMode;
+            GetLobbyGameModeFirstParameterType = getLobbyGameModeFirstParameterType;
+            GetLobbyGameModeLabel = getLobbyGameModeLabel;
+            ScheduleEnsureInviteButton = scheduleEnsureInviteButton;
+        }
+
+        internal MethodInfo BuildCreateDialog { get; }
+
+        /// <summary>The dropdown the postfix appends to (<c>OptionButton _roomTypeOption</c>).</summary>
+        internal FieldInfo RoomTypeOption { get; }
+
+        internal MethodInfo GameModeFromCreateId { get; }
+
+        internal MethodInfo GetSelectedCreateGameMode { get; }
+
+        internal FieldInfo SelectedCreateGameModeId { get; }
+
+        internal MethodInfo IsCreateGameModeAvailable { get; }
+
+        internal Type Availability { get; }
+
+        internal MethodInfo PushHostScreen { get; }
+
+        internal MethodInfo GetLobbyGameMode { get; }
+
+        /// <summary>
+        /// Full name of <c>GetLobbyGameMode</c>'s first parameter. The replacement is written for
+        /// <c>GameMode</c>; anything else is reported and the seam is skipped.
+        /// </summary>
+        internal string GetLobbyGameModeFirstParameterType { get; }
+
+        /// <summary>Decorative: may be null.</summary>
+        internal MethodInfo? GetLobbyGameModeLabel { get; }
+
+        internal MethodInfo ScheduleEnsureInviteButton { get; }
+
+        internal static Shape? TryCapture(Assembly host, out string reason)
+        {
+            List<string> missing = new();
+
+            Type? overlay = host.GetType(OverlayTypeName, throwOnError: false, ignoreCase: false);
+            Type? hostFlow = host.GetType(HostFlowTypeName, throwOnError: false, ignoreCase: false);
+            Type? binding = host.GetType(BindingTypeName, throwOnError: false, ignoreCase: false);
+            Type? invite = host.GetType(InviteButtonPatchTypeName, throwOnError: false, ignoreCase: false);
+            Type? availability = host.GetType(AvailabilityTypeName, throwOnError: false, ignoreCase: false);
+
+            if (overlay == null) missing.Add(OverlayTypeName);
+            if (hostFlow == null) missing.Add(HostFlowTypeName);
+            if (binding == null) missing.Add(BindingTypeName);
+            if (invite == null) missing.Add(InviteButtonPatchTypeName);
+            if (availability == null) missing.Add(AvailabilityTypeName);
+
+            // Name first (no typeof), falling back to the assembly this file already references through
+            // GameMode: the fallback adds no coupling that MapCreateId does not already have, and it removes
+            // a single point of failure if the game assembly is ever loaded under another simple name.
+            Assembly game = Reflect.FindAssembly(GameAssemblyName) ?? typeof(GameMode).Assembly;
+            foreach (string screenType in new[]
+                     {
+                         CharacterSelectTypeName, DailyRunScreenTypeName, CustomRunScreenTypeName,
+                         BlitzScreenTypeName, DreadScreenTypeName
+                     })
+            {
+                if (game.GetType(screenType, throwOnError: false, ignoreCase: false) == null)
+                {
+                    missing.Add(screenType);
+                }
+            }
+
+            // Instance, not static: the real seam is "private Control BuildCreateDialog()" on the overlay
+            // (dec-official LanConnectLobbyOverlay.cs:6314) and the postfix takes __instance. Demanding static
+            // here disabled this whole repair on the shipped 0.6.3 build — the probe was wrong, not the host.
+            MethodInfo? buildCreateDialog = Unique(overlay, "BuildCreateDialog", 0, missing);
+
+            FieldInfo? roomTypeOption = overlay?.GetField(
+                "_roomTypeOption",
+                BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            if (roomTypeOption == null)
+            {
+                missing.Add(OverlayShort + "._roomTypeOption (OptionButton)");
+            }
+
+            MethodInfo? modeFromId = Unique(overlay, "GameModeFromCreateId", 1, missing);
+            if (modeFromId != null)
+            {
+                if (!modeFromId.IsStatic)
+                {
+                    missing.Add(OverlayShort + ".GameModeFromCreateId (instance, expected static)");
+                    modeFromId = null;
+                }
+                else if (!ParametersMatch(modeFromId, IntTypeName))
+                {
+                    missing.Add(OverlayShort + ".GameModeFromCreateId(int) -> GameMode (found: " +
+                                Describe(modeFromId) + ")");
+                    modeFromId = null;
+                }
+                else if (modeFromId.ReturnType.FullName != GameModeTypeName)
+                {
+                    missing.Add(OverlayShort + ".GameModeFromCreateId -> GameMode (found: " +
+                                Short(modeFromId.ReturnType.FullName) + ")");
+                    modeFromId = null;
+                }
+            }
+
+            MethodInfo? selected = Unique(overlay, "GetSelectedCreateGameMode", 0, missing);
+            if (selected != null)
+            {
+                if (selected.IsStatic)
+                {
+                    missing.Add(OverlayShort + ".GetSelectedCreateGameMode (static, expected an instance method)");
+                    selected = null;
+                }
+                else if (selected.ReturnType.FullName != GameModeTypeName)
+                {
+                    missing.Add(OverlayShort + ".GetSelectedCreateGameMode -> GameMode (found: " +
+                                Short(selected.ReturnType.FullName) + ")");
+                    selected = null;
+                }
+            }
+
+            FieldInfo? selectedId = overlay?.GetField(
+                "_selectedCreateGameModeId",
+                BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            if (selectedId == null)
+            {
+                missing.Add(OverlayShort + "._selectedCreateGameModeId");
+            }
+            else if (selectedId.FieldType != typeof(int))
+            {
+                missing.Add(OverlayShort + "._selectedCreateGameModeId (int) (found: " +
+                            selectedId.FieldType.Name + ")");
+                selectedId = null;
+            }
+
+            MethodInfo? isAvailable = Unique(overlay, "IsCreateGameModeAvailable", 2, missing);
+            if (isAvailable != null)
+            {
+                if (!isAvailable.IsStatic)
+                {
+                    missing.Add(OverlayShort + ".IsCreateGameModeAvailable (instance, expected static)");
+                    isAvailable = null;
+                }
+                else if (!ParametersMatch(isAvailable, GameModeTypeName, availability?.FullName ?? AvailabilityTypeName))
+                {
+                    missing.Add(OverlayShort + ".IsCreateGameModeAvailable(GameMode, " + AvailabilityShort +
+                                ") -> bool (found: " + Describe(isAvailable) + ")");
+                    isAvailable = null;
+                }
+            }
+
+            MethodInfo? pushHostScreen = Unique(hostFlow, "PushHostScreen", 4, missing);
+            if (pushHostScreen != null)
+            {
+                if (!pushHostScreen.IsStatic)
+                {
+                    missing.Add(HostFlowShort + ".PushHostScreen (instance, expected static)");
+                    pushHostScreen = null;
+                }
+                else if (!ParametersMatch(
+                             pushHostScreen, GameModeTypeName, SubmenuStackTypeName, HostGameServiceTypeName, IntTypeName))
+                {
+                    // The replacement switches on GameMode numbers (Standard=1/Daily=2/Custom=3) and pushes
+                    // a screen per case. Binding it to any other first parameter would silently push the
+                    // wrong screen for every mode instead of failing, so the shape is asserted here.
+                    missing.Add(HostFlowShort + ".PushHostScreen(GameMode, NSubmenuStack, NetHostGameService, int) " +
+                                "(found: " + Describe(pushHostScreen) + ")");
+                    pushHostScreen = null;
+                }
+            }
+
+            // Two overloads take exactly one parameter — GetLobbyGameMode(GameMode) and
+            // GetLobbyGameMode(SerializableRun) (dec-official LanConnectMultiplayerSaveRoomBinding.cs:374/:401).
+            // Only the GameMode one is this repair's seam, so pick by parameter type, not by arity: arity alone
+            // is ambiguous and the probe used to give up, disabling the repair on the shipped build.
+            MethodInfo? lobbyGameMode = binding == null
+                ? null
+                : binding
+                    .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(method => string.Equals(method.Name, "GetLobbyGameMode", StringComparison.Ordinal)
+                                              && method.GetParameters() is { Length: 1 } parameters
+                                              && string.Equals(parameters[0].ParameterType.FullName, GameModeTypeName, StringComparison.Ordinal));
+            if (lobbyGameMode == null)
+            {
+                missing.Add(BindingShort + ".GetLobbyGameMode(" + GameModeTypeName + ")");
+            }
+
+            string lobbyGameModeParameter = lobbyGameMode?.GetParameters()[0].ParameterType.FullName ?? string.Empty;
+
+            MethodInfo? lobbyLabel = binding == null
+                ? null
+                : binding
+                    .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                    .FirstOrDefault(method => string.Equals(method.Name, "GetLobbyGameModeLabel", StringComparison.Ordinal)
+                                              && method.GetParameters().Length == 1
+                                              && method.GetParameters()[0].ParameterType == typeof(string));
+
+            MethodInfo? inviteScheduler = invite?
+                .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(method => string.Equals(method.Name, "ScheduleEnsureInviteButton", StringComparison.Ordinal)
+                                          && method.GetParameters().Length == 2
+                                          && method.GetParameters()[0].ParameterType.FullName == CharacterSelectTypeName
+                                          && method.GetParameters()[1].ParameterType == typeof(string));
+            if (inviteScheduler == null)
+            {
+                missing.Add(InviteShort + ".ScheduleEnsureInviteButton(NCharacterSelectScreen, string)");
+            }
+
+            if (missing.Count > 0 || roomTypeOption == null)
+            {
+                reason = "missing: " + string.Join(", ", missing);
+                return null;
+            }
+
+            reason = string.Empty;
+            Shape shape = new(
+                buildCreateDialog!,
+                roomTypeOption!,
+                modeFromId!,
+                selected!,
+                selectedId!,
+                isAvailable!,
+                availability!,
+                pushHostScreen!,
+                lobbyGameMode!,
+                lobbyGameModeParameter,
+                lobbyLabel,
+                inviteScheduler!);
+
+            return shape;
+        }
+
+        /// <summary>Exact parameter-type match, by full name, so no <c>typeof</c> is needed.</summary>
+        private static bool ParametersMatch(MethodInfo method, params string[] expectedTypeNames)
+        {
+            ParameterInfo[] parameters = method.GetParameters();
+            if (parameters.Length != expectedTypeNames.Length)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < expectedTypeNames.Length; index++)
+            {
+                if (parameters[index].ParameterType.FullName != expectedTypeNames[index])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>Compact signature, for the "we did not bind" reason line.</summary>
+        private static string Describe(MethodInfo method) =>
+            "(" + string.Join(", ", method.GetParameters().Select(parameter => Short(parameter.ParameterType.FullName))) +
+            ") -> " + Short(method.ReturnType.FullName);
+
+        /// <summary>Last segment of a type name. The reason line is read by a person, not by a parser.</summary>
+        private static string Short(string? fullName)
+        {
+            if (string.IsNullOrEmpty(fullName))
+            {
+                return "<unknown>";
+            }
+
+            int dot = fullName.LastIndexOf('.');
+            return dot >= 0 ? fullName[(dot + 1)..] : fullName;
+        }
+
+        private static MethodInfo? Unique(Type? type, string name, int parameterCount, List<string> missing)
+        {
+            if (type == null)
+            {
+                return null;
+            }
+
+            MethodInfo[] matches = type
+                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+                .Where(method => method.GetParameters().Length == parameterCount)
+                .ToArray();
+
+            if (matches.Length == 1)
+            {
+                return matches[0];
+            }
+
+            missing.Add(matches.Length == 0
+                ? type.Name + "." + name + "/" + parameterCount + " param(s)"
+                : type.Name + "." + name + "/" + parameterCount + " param(s) (ambiguous: " + matches.Length + " overloads)");
+            return null;
+        }
+    }
+}

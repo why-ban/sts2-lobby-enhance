@@ -41,6 +41,7 @@ public sealed class FixRegistryTests
         "new-run-button",
         "mid-run-restart",
         "extra-game-modes",
+        "room-card-pill",
         "unlock-extra-modes"
     ];
 
@@ -84,19 +85,24 @@ public sealed class FixRegistryTests
         Assert.Equal("join-screen-modes", ExtractFixId(source));
 
         // 0.113 gate: this repair must follow the game-side flag, not apply unconditionally. docs/README.md
-        // claimed the opposite for a while; the code is the authority.
+        // claimed the opposite for a while; the code is the authority. Since v1.8.0 the gate is an early
+        // return inside Applies(in, out reason) — the reason string is what the log prints when it skips.
         Assert.Contains(
-            "public bool Applies(in CompatSnapshot snapshot) => snapshot.InitialGameInfoLostGameMode;",
+            "public bool Applies(in CompatSnapshot snapshot, out string reason)",
             source,
             StringComparison.Ordinal);
+        Assert.Contains("if (!snapshot.InitialGameInfoLostGameMode)", source, StringComparison.Ordinal);
 
         // The host mod's own dispatch is replaced by a prefix on PushJoinedScreen(NSubmenuStack,
-        // NetClientGameService, JoinResult). The 3-parameter shape is asserted in Apply().
+        // NetClientGameService, JoinResult). Since v1.8.0 that 3-parameter shape is verified in
+        // Shape.TryCapture before anything is patched, by comparing parameter type *names* — naming a
+        // version-dependent game type with typeof would make the probe itself fail to JIT — and a mismatch is
+        // reported as a missing anchor instead of throwing.
         Assert.Contains("private const string DispatchMethodName = \"PushJoinedScreen\";", source, StringComparison.Ordinal);
-        Assert.Contains("Reflect.RequireMethodByName(joinFlow, DispatchMethodName, 3)", source, StringComparison.Ordinal);
-        Assert.Contains("parameters[0].ParameterType != typeof(NSubmenuStack)", source, StringComparison.Ordinal);
-        Assert.Contains("parameters[1].ParameterType != typeof(NetClientGameService)", source, StringComparison.Ordinal);
-        Assert.Contains("parameters[2].ParameterType != typeof(JoinResult)", source, StringComparison.Ordinal);
+        Assert.Contains("method.GetParameters() is { Length: 3 } parameters", source, StringComparison.Ordinal);
+        Assert.Contains("string.Equals(parameters[0].ParameterType.FullName, SubmenuStackTypeName", source, StringComparison.Ordinal);
+        Assert.Contains("string.Equals(parameters[1].ParameterType.FullName, NetClientServiceTypeName", source, StringComparison.Ordinal);
+        Assert.Contains("string.Equals(parameters[2].ParameterType.FullName, JoinResultTypeName", source, StringComparison.Ordinal);
 
         // The prefix must only skip the original when it handled the state, and must return true
         // (run the original) otherwise: "the fix never invents behaviour for states it does not model".
@@ -185,9 +191,13 @@ public sealed class FixRegistryTests
         Assert.Contains("__result = new UnlockState(", code, StringComparison.Ordinal);
         Assert.Contains("serializable.UnlockedEpochs.Add(id)", code, StringComparison.Ordinal);
 
-        // The two seams themselves.
-        Assert.Contains("Reflect.RequireInstanceMethod(typeof(SaveManager), \"GenerateUnlockStateFromProgress\")", code, StringComparison.Ordinal);
-        Assert.Contains("Reflect.RequireInstanceMethod(typeof(ProgressState), \"IsEpochRevealed\", typeof(string))", code, StringComparison.Ordinal);
+        // The two seams themselves. Since v1.8.0 they are resolved by name inside Shape.TryCapture, which is
+        // metadata-only and never names a version-dependent game type with typeof, so the assertion pins the
+        // name literals plus the required parameter/return shapes instead of a RequireInstanceMethod call.
+        Assert.Contains("\"GenerateUnlockStateFromProgress\"", code, StringComparison.Ordinal);
+        Assert.Contains("\"IsEpochRevealed\"", code, StringComparison.Ordinal);
+        Assert.Contains("UnlockStateTypeName", code, StringComparison.Ordinal);
+        Assert.Contains("BooleanTypeName", code, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -200,15 +210,18 @@ public sealed class FixRegistryTests
         // 这些锚点只证明「要接管的方法名与签名还在源码里」。它们**不能**证明运行时行为：
         // 「重开真的回到本层起点」「存档与房间绑定真的没被动」只有真机验证能证明，本仓库没有自动化。
         // 运行期「这些接缝真的被打上补丁」由 tools/smoke-test 的 one-real-seam-per-fix 断言覆盖。
-        Assert.Contains("Reflect.RequireInstanceMethod(runtimeType, \"StartHostedRunRestartAsync\")", source, StringComparison.Ordinal);
+        // Since v1.8.0 every anchor is resolved by Shape.TryCapture (metadata only, name + exact parameter
+        // types), so the assertion pins the names and the two Disconnect prefixes rather than the old
+        // Reflect.RequireInstanceMethod call shapes.
+        Assert.Contains("\"StartHostedRunRestartAsync\"", source, StringComparison.Ordinal);
         Assert.Contains("\"StartRestartFlowAsync\"", source, StringComparison.Ordinal);
-        Assert.Contains("typeof(NetHostGameService), \"Disconnect\", typeof(NetError), typeof(bool)", source, StringComparison.Ordinal);
-        Assert.Contains("typeof(NetClientGameService), \"Disconnect\", typeof(NetError), typeof(bool)", source, StringComparison.Ordinal);
         Assert.Contains("\"HandshakeSucceeded\"", source, StringComparison.Ordinal);
+        Assert.Contains("private static bool HostDisconnectPrefix", source, StringComparison.Ordinal);
+        Assert.Contains("private static bool ClientDisconnectPrefix", source, StringComparison.Ordinal);
 
         // The panel takeover is deliberately optional (it is the only patch that touches a UI type); if it
         // is ever made mandatory, this comment and the try/catch have to change together.
-        Assert.Contains("InstallPanelRestartFlowPatch(harmony, host, startHostedRestart);", source, StringComparison.Ordinal);
+        Assert.Contains("InstallPanelRestartFlowPatch(harmony, host, targets.StartHostedRestart);", source, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------- helpers

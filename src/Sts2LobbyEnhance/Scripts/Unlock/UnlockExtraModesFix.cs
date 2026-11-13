@@ -31,38 +31,85 @@ namespace Sts2LobbyEnhance;
 /// <c>ProgressState.Epochs</c>, we only change what a read returns and what we report over the wire.
 /// The timeline still shows the two epochs as not obtained, and <c>ProgressState.TotalUnlocks</c> is
 /// unaffected because it counts <c>IsEpochObtained</c>, which we do not patch.
+///
+/// Both seams are resolved up front by <see cref="Shape.TryCapture"/>; a missing anchor means this feature
+/// stays out and says why, instead of an exception that used to disable every other repair. The two epoch
+/// *types* are looked up by name (never <c>typeof</c>) so that a build which drops Blitz or Dread is
+/// reported in the startup log instead of failing at the first menu refresh — and the runtime path already
+/// degrades to "that mode stays locked" on its own (<see cref="ExtraModes"/>).
 /// </summary>
 internal sealed class UnlockExtraModesFix : ICompatFix
 {
+    private const string GameAssemblyName = "sts2";
+    private const string SaveManagerTypeName = "MegaCrit.Sts2.Core.Saves.SaveManager";
+    private const string ProgressStateTypeName = "MegaCrit.Sts2.Core.Saves.ProgressState";
+    private const string UnlockStateTypeName = "MegaCrit.Sts2.Core.Unlocks.UnlockState";
+    private const string BlitzEpochTypeName = "MegaCrit.Sts2.Core.Timeline.Epochs.BlitzEpoch";
+    private const string DreadEpochTypeName = "MegaCrit.Sts2.Core.Timeline.Epochs.DreadEpoch";
+    private const string BooleanTypeName = "System.Boolean";
+    private const string StringTypeName = "System.String";
+
     private static int _reported;
     private static int _warned;
+    private static Shape? _shape;
 
     public string Id => "unlock-extra-modes";
 
+    public FixGroup Group => FixGroup.Unlock;
+
     /// <summary>
-    /// Not tied to any single 0.113 break: this is a feature the user asked for, and
-    /// <see cref="Entry"/> already refuses to run anything at all when the game build needs no patch.
+    /// Applicable when the two game seams resolve and at least one of the two epochs exists. Both epoch
+    /// types missing means the repair would install and then do nothing, which is exactly the "log says
+    /// applied, feature is not there" outcome this redesign removes — so that case answers <c>false</c>.
+    ///
+    /// <see cref="CompatSnapshot"/> is not read: no wire or signature breakpoint decides whether the local
+    /// client may report an epoch as unlocked. The anchors are the whole question.
+    ///
+    /// The host mod is deliberately NOT checked: this repair only touches game APIs, so claiming a dependency
+    /// on LAN Connect would be a fake one. Entry already refuses to install anything when the host is absent
+    /// (Entry.cs, the single remaining whole-mod gate), so nothing is lost by keeping this honest.
     /// </summary>
-    public bool Applies(in CompatSnapshot snapshot) => true;
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        Shape? shape = Shape.TryCapture(out reason);
+        if (shape == null)
+        {
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        MethodInfo generate = Reflect.RequireInstanceMethod(typeof(SaveManager), "GenerateUnlockStateFromProgress");
-        MethodInfo isRevealed = Reflect.RequireInstanceMethod(typeof(ProgressState), "IsEpochRevealed", typeof(string));
+        Shape shape = _shape ?? throw new InvalidOperationException(
+            "unlock-extra-modes: Applies() did not capture the seam shape; refusing to patch blind.");
 
         harmony.Patch(
-            generate,
+            shape.Generate,
             postfix: new HarmonyMethod(typeof(UnlockExtraModesFix), nameof(GenerateUnlockStatePostfix))
             {
                 priority = Priority.Low
             });
 
         harmony.Patch(
-            isRevealed,
+            shape.IsEpochRevealed,
             postfix: new HarmonyMethod(typeof(UnlockExtraModesFix), nameof(IsEpochRevealedPostfix))
             {
                 priority = Priority.Low
             });
+
+        if (shape.MissingEpochTypes.Count > 0)
+        {
+            // Not a failure: the runtime path already leaves an unresolvable epoch locked. Say it here so the
+            // startup log explains why one of the two modes will not appear, instead of leaving the user to
+            // guess after they open the menu.
+            Entry.Warn(
+                "unlock-extra-modes: this build has no " + string.Join(", ", shape.MissingEpochTypes) +
+                " type; that mode stays locked (the other seam still runs).");
+        }
 
         Entry.Info(
             "unlock-extra-modes: patched SaveManager.GenerateUnlockStateFromProgress (reported unlock state) " +
@@ -223,6 +270,132 @@ internal sealed class UnlockExtraModesFix : ICompatFix
             {
                 ids.Add(id);
             }
+        }
+    }
+
+    /// <summary>
+    /// The two seams, resolved before anything is patched. Everything here is metadata only: no
+    /// <c>typeof</c> on a version-specific type, no <c>Invoke</c>, no Godot, no file access.
+    /// </summary>
+    private sealed class Shape
+    {
+        private Shape(MethodInfo generate, MethodInfo isEpochRevealed, IReadOnlyList<string> missingEpochTypes)
+        {
+            Generate = generate;
+            IsEpochRevealed = isEpochRevealed;
+            MissingEpochTypes = missingEpochTypes;
+        }
+
+        internal MethodInfo Generate { get; }
+
+        internal MethodInfo IsEpochRevealed { get; }
+
+        /// <summary>Epoch types this build does not have. Informational: the runtime path already degrades.</summary>
+        internal IReadOnlyList<string> MissingEpochTypes { get; }
+
+        internal static Shape? TryCapture(out string reason)
+        {
+            List<string> missing = new();
+
+            // Name first (no typeof), falling back to the assembly this file already references through
+            // SaveManager/ProgressState: the fallback adds no coupling the seams do not already have.
+            Assembly game = Reflect.FindAssembly(GameAssemblyName) ?? typeof(SaveManager).Assembly;
+
+            Type? saveManager = game.GetType(SaveManagerTypeName, throwOnError: false, ignoreCase: false);
+            Type? progress = game.GetType(ProgressStateTypeName, throwOnError: false, ignoreCase: false);
+
+            if (saveManager == null) missing.Add(SaveManagerTypeName);
+            if (progress == null) missing.Add(ProgressStateTypeName);
+
+            MethodInfo? generate = Exact(
+                saveManager,
+                "GenerateUnlockStateFromProgress",
+                requireStatic: false,
+                Array.Empty<string>(),
+                UnlockStateTypeName,
+                missing);
+
+            MethodInfo? isEpochRevealed = Exact(
+                progress,
+                "IsEpochRevealed",
+                requireStatic: false,
+                new[] { StringTypeName },
+                BooleanTypeName,
+                missing);
+
+            if (missing.Count > 0)
+            {
+                reason = "missing: " + string.Join(", ", missing);
+                return null;
+            }
+
+            string[] epochTypeNames = { BlitzEpochTypeName, DreadEpochTypeName };
+            List<string> missingEpochs = new();
+            foreach (string epochTypeName in epochTypeNames)
+            {
+                if (game.GetType(epochTypeName, throwOnError: false, ignoreCase: false) == null)
+                {
+                    missingEpochs.Add(epochTypeName);
+                }
+            }
+
+            if (missingEpochs.Count == epochTypeNames.Length)
+            {
+                // Both gone: the seams would install and then inject nothing, which is the "applied but
+                // does nothing" shape this redesign exists to prevent.
+                reason = "missing: " + string.Join(", ", missingEpochs) + " (nothing to report as unlocked)";
+                return null;
+            }
+
+            reason = string.Empty;
+            return new Shape(generate!, isEpochRevealed!, missingEpochs);
+        }
+
+        /// <summary>
+        /// Finds one method by name, static-ness and exact parameter/return type names — string comparisons
+        /// only, so the probe cannot fail to JIT on a build that dropped a type.
+        /// </summary>
+        private static MethodInfo? Exact(
+            Type? type,
+            string name,
+            bool requireStatic,
+            string[] parameterTypeNames,
+            string? returnTypeName,
+            List<string> missing)
+        {
+            if (type == null)
+            {
+                return null;
+            }
+
+            MethodInfo[] matches = type
+                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+                .Where(method => method.IsStatic == requireStatic)
+                .Where(method => method.GetParameters().Length == parameterTypeNames.Length)
+                .Where(method => method.GetParameters()
+                    .Select(parameter => parameter.ParameterType.FullName)
+                    .SequenceEqual(parameterTypeNames))
+                .Where(method => returnTypeName == null || method.ReturnType.FullName == returnTypeName)
+                .ToArray();
+
+            if (matches.Length == 1)
+            {
+                return matches[0];
+            }
+
+            missing.Add(matches.Length == 0
+                ? type.Name + "." + name + "(" + string.Join(", ", parameterTypeNames.Select(Short)) + ")" +
+                  (returnTypeName == null ? string.Empty : " -> " + Short(returnTypeName))
+                : type.Name + "." + name + " (ambiguous: " + matches.Length + " overloads)");
+            return null;
+        }
+
+        /// <summary>Last segment of a type name, for a reason line a person reads.</summary>
+        private static string Short(string typeName)
+        {
+            int dot = typeName.LastIndexOf('.');
+            return dot >= 0 ? typeName[(dot + 1)..] : typeName;
         }
     }
 }

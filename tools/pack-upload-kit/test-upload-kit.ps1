@@ -209,7 +209,11 @@ try {
         Assert-Contains '结果文件判定为失败' $res '结果        : 失败'
         Assert-Contains '失败原因翻译成「换账号」' $res '没有《杀戮尖塔 2》'
         Assert-Contains '结果文件带上了标题' $res '游戏大厅增强 / Game Lobby Enhance'
-        Assert-Contains '结果文件带上了版本' $res '模组版本    : 1.7.0'
+        # 版本号从包内清单读，不写死：写死的话每次发版都要改这一行，漏改就是假红。
+        $manifestVersion = ([System.IO.File]::ReadAllText(
+            (Join-Path $k 'workspace\content\sts2_lobby_enhance.json'),
+            [System.Text.Encoding]::UTF8) | ConvertFrom-Json).version
+        Assert-Contains '结果文件带上了版本' $res ('模组版本    : ' + $manifestVersion)
         Assert-Contains '结果文件带上了上传器日志' $res 'k_EResultAccessDenied'
         Assert-Contains '窗口里也打印了原因' $run.Text '这个 Steam 账号没有《杀戮尖塔 2》'
         Assert-Contains '窗口里指明了要发回哪个文件' $run.Text '请把这个文件发回给作者'

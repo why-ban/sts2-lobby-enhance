@@ -39,6 +39,7 @@ string[] expectedFixIds =
     "new-run-button",
     "mid-run-restart",
     "extra-game-modes",
+    "room-card-pill",
     "unlock-extra-modes"
 ];
 
@@ -60,7 +61,7 @@ string[] expectedFixIds =
     ("extra-game-modes",   "LanConnectLobbyOverlay",           "GameModeFromCreateId"),
     // The room-card mode pill is a separate Harmony postfix on a private static method of the same
     // type; without this row, deleting that patch would leave the fix "applied" with no proof.
-    ("extra-game-modes",   "LanConnectLobbyOverlay",           "GetRoomGameModePill"),
+    ("room-card-pill",     "LanConnectLobbyOverlay",           "GetRoomGameModePill"),
     ("unlock-extra-modes", "SaveManager",                      "GenerateUnlockStateFromProgress")
 ];
 
@@ -152,7 +153,21 @@ if (report is null)
 }
 
 object? snapshot = GetProperty(report, "Snapshot");
-bool requiresPatch = (bool)(GetProperty(snapshot, "RequiresPatch") ?? false);
+
+// There is no global "requires patch" switch any more: every repair answers for itself through
+// ICompatFix.Applies, and the host-missing case is the only whole-mod gate left. What is still worth
+// printing is how many of the six 0.113 signature changes this build shows, because that is the input
+// every probe sees.
+string[] breakFlags =
+[
+    "InitialGameInfoLostGameMode",
+    "JoinRequestLostMaxAscensionUnlocked",
+    "DisconnectClientGainedParameter",
+    "ConnectedPeersChangedType",
+    "GenerateRelicFightGainedParameter",
+    "UpdateProgressGainedReturnValue"
+];
+int breakCount = breakFlags.Count(name => GetProperty(snapshot, name) is true);
 string describe = (string)(snapshot?.GetType().GetMethod("Describe", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
     ?.Invoke(snapshot, null) ?? "(no Describe)");
 
@@ -161,7 +176,7 @@ List<string> skipped = GetStringList(report, "Skipped");
 List<string> failed = GetStringList(report, "Failed");
 
 Console.WriteLine("probe       : " + describe);
-Console.WriteLine("requires    : " + requiresPatch);
+Console.WriteLine("breaks      : " + breakCount + "/6");
 Console.WriteLine("inert       : " + GetProperty(report, "Inert"));
 Console.WriteLine("hostMissing : " + GetProperty(report, "HostMissing"));
 Console.WriteLine("applied     : " + string.Join(", ", applied));
@@ -171,10 +186,44 @@ foreach (string failure in failed)
     Console.WriteLine("FAILED      : " + failure);
 }
 
+// Per-group detail. GroupReport.Skipped entries are "id: reason" — that reason is the whole point of the
+// per-repair gating, so the harness has to show it instead of just printing a bare id.
+object? groups = GetProperty(report, "Groups");
+if (groups is System.Collections.IEnumerable groupList)
+{
+    foreach (object? group in groupList)
+    {
+        if (group is null)
+        {
+            continue;
+        }
+
+        Console.WriteLine(
+            "group       : " + GetProperty(group, "Group") + " [" + GetProperty(group, "HarmonyId") + "] " +
+            "rolledBack=" + GetProperty(group, "RolledBack"));
+
+        foreach (string reason in GetStringList(group, "Skipped"))
+        {
+            Console.WriteLine("   skipped  : " + reason);
+        }
+
+        foreach (string reason in GetStringList(group, "Failed"))
+        {
+            Console.WriteLine("   failed   : " + reason);
+        }
+    }
+}
+
 Console.WriteLine();
 Console.WriteLine("---- installed Harmony patches ----");
-var harmony = new Harmony(harmonyId);
-List<MethodBase> patched = harmony.GetPatchedMethods().ToList();
+// Patches are installed under one Harmony id per FixGroup, and GetPatchedMethods() only reports the
+// instance it is called on, so every id has to be asked. Entry.AllHarmonyIds() is the single source.
+MethodInfo? allIdsMethod = entry.GetMethod("AllHarmonyIds", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+IEnumerable<string> harmonyIds = allIdsMethod?.Invoke(null, null) as IEnumerable<string> ?? new[] { harmonyId };
+List<MethodBase> patched = harmonyIds
+    .SelectMany(id => new Harmony(id).GetPatchedMethods())
+    .Distinct()
+    .ToList();
 foreach (MethodBase method in patched)
 {
     Console.WriteLine($"  {method.DeclaringType?.Name}::{method.Name}");

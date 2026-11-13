@@ -2,6 +2,53 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循语义化版本。
 
+## [1.8.0] - 2026-11-14
+
+目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项 **10**（新增 `room-card-pill`）。
+
+### 修复（可靠性重构）
+
+- **删掉全局「6 个断点全中才生效」的总开关。** 以前任意一个签名 flag 翻转，整个模组会静默不生效；
+  现在每项修复在 `Applies(in CompatSnapshot, out string reason)` 里自己解析锚点（类型、方法、
+  参数类型逐个比对），缺一个只跳过它自己，并在日志里打印 `skipped: <id>: missing: <具体锚点>`。
+- **启动探测不再抛异常。** `CompatProbe.Capture()` 里 6 个探测各自 try/catch，游戏类型一律用字符串
+  `Assembly.GetType` 查；以前它用 `typeof()`，类型一改名探测自己就抛，导致**一个修复项都装不上**。
+- **失败只回滚自己那一组。** 九个 Harmony id（`sts2_lobby_enhance.<组名>`）互相独立，
+  `UnpatchAll` 只作用于出问题的那一组；以前任一项失败会把全部 9 项一起拆掉。
+- **`Applies()` 移进 try/catch**，探测抛异常不再留下「无回滚、无记录、已装补丁还活着」的状态。
+- **房间卡片模式标注拆成独立项 `room-card-pill`**（纯装饰）。以前一个颜色属性改名就能带走全部修复项。
+
+### 修复（真实缺陷）
+
+- **结算页「新开一局」拆局时会吞掉 tail 的 `ModMismatch` 断连。** `Disconnect` 前缀没有原因过滤，
+  与局中重开已经修过的同一问题对齐：现在只抑制 `NetError.Quit`，其余放行并打印原因。
+- **该功能的会话从静态槽读取**，重连后可能在新会话上发加入请求。改为注册时把会话捕获进闭包。
+- **局中「重开」在「回退不可用且 run 已拆」分支只弹窗不关会话**，协议租约继续 Frozen，
+  下次官方安全读档会撞 `Protocol selection is already owned`。现在这条分支也会关会话。
+- **房间管理面板接管失败不再静默**：日志以 `DEGRADED — the room management panel was NOT taken over` 开头。
+- **`GetEffectiveMaxPlayers` 的反射调用移进 try**，取不到就用 4，不再把可降级项升级成整次重开失败。
+
+### 修复（探测本身的三处假阴性）
+
+探测过严会把**能用的功能判成不可用**，和原来的问题一样糟。smoke-test 现在会打印每项的跳过原因，
+以下三处就是它抓出来的：
+
+- `LanConnectLobbyOverlay.BuildCreateDialog` 是**实例**方法，探测却要求 static → 整个 `extra-game-modes` 被跳过。
+- `GetLobbyGameMode` 有两个单参重载（`GameMode` 与 `SerializableRun`），按参数个数找会歧义 → 改为按参数类型选。
+- `SerializableRun` 的命名空间是 `MegaCrit.Sts2.Core.Saves`，探测常量写成了 `.Runs` → `abandon-run` 三项锚点全空。
+
+### 其它
+
+- `ExtraGameModesFix` 的 availability 判断改为在替换后的方法体开头分支跳进上游原始指令
+  （整段替换后再反射调原方法会无限递归）；下拉项按 id **和** 文本双重去重。
+- `UnlockExtraModesFix` 去掉对宿主模组的假依赖（它只碰游戏 API）。
+- `tools/smoke-test`、`tools/wire-verify` 改为遍历 `Entry.AllHarmonyIds()` 枚举补丁（分组后单 id 枚举必然为空）。
+
+### 已知限制
+
+- 仍**只针对 0.113.0 验证**。上游 `sts2_lan_connect` 的形态变化只在「参数类型 / 方法名对不上时跳过并说明」
+  这一层做了防御；无法预知未来版本会怎么改。
+
 ## [1.7.0] - 2026-11-14
 
 目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项仍为 **9**。

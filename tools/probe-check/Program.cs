@@ -5,7 +5,6 @@ using Sts2LobbyEnhance;
 
 CompatSnapshot snapshot = CompatProbe.Capture();
 Console.WriteLine("snapshot : " + snapshot.Describe());
-Console.WriteLine("requires : " + snapshot.RequiresPatch);
 Console.WriteLine();
 
 (int Index, string Name, bool Value)[] rows =
@@ -25,5 +24,7 @@ foreach ((int index, string name, bool value) in rows)
 
 int trueCount = rows.Count(row => row.Value);
 Console.WriteLine();
-Console.WriteLine($"结论: {trueCount}/6 命中 -> {(snapshot.RequiresPatch ? "应启用补丁" : "不应启用补丁")}");
-return snapshot.RequiresPatch && trueCount == 6 ? 0 : 2;
+// 没有「总开关」这个概念了：每个修复项用 ICompatFix.Applies 自己判断。这里只回答
+// 「这个构建露出几处 0.113 签名变化」，6/6 表示整套兼容修复的前提都在。
+Console.WriteLine($"结论: {trueCount}/6 命中 -> {(trueCount == 6 ? "六处断点全在，兼容修复的前提成立" : "有断点不成立，相关修复项会各自跳过")}");
+return trueCount == 6 ? 0 : 2;

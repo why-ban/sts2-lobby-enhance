@@ -8,22 +8,37 @@ namespace Sts2LobbyEnhance;
 /// <summary>
 /// Mod entry point.
 ///
-/// Startup contract:
-///   1. Probe the game build. If none of the 0.113 signature changes are present, do nothing at all.
-///   2. Locate the host mod (sts2_lan_connect). If it is absent, log and stay inert.
-///   3. Apply every repair that reports itself as needed, each isolated, then summarise.
+/// Startup contract (per-group isolation; the old "all or nothing" rollback is gone):
+///   1. Probe the game build (<see cref="CompatProbe.Capture"/>). Probing never throws: each of the six
+///      observations degrades to <c>false</c> on its own and says so once in the log. There is no
+///      "all six at once" gate any more, so a game hotfix that reshapes one member costs the repairs that
+///      read that flag, not the whole mod.
+///   2. Locate the host mod (sts2_lan_connect). If it is absent there is nothing to patch: log, set
+///      <see cref="StartupReport.HostMissing"/> and stop. This is the only condition that disables
+///      everything, and it is not a compatibility judgement — the assembly is simply not loaded.
+///   3. Ask every repair whether it applies. A repair whose <c>Applies</c> throws is a failed repair, not
+///      a failed startup.
+///   4. Install each repair into the Harmony instance of its own <see cref="FixGroup"/>
+///      (<c>"sts2_lobby_enhance." + group name</c>, see <see cref="HarmonyIdFor"/>). If a repair fails,
+///      only that group is unpatched — <see cref="Harmony.UnpatchAll(string)"/> takes an id, so the other
+///      groups keep their patches. A host-mod update or a game patch therefore costs the affected feature
+///      instead of the mod.
+///   5. Report per group, then one summary line in the format the release tooling parses.
 ///
-/// A partial application is treated as a startup failure: a half-patched networking stack is worse
-/// than an unpatched one, because it makes the failure look like a game bug. Concretely, if any repair
-/// throws, every patch this mod installed during this start is removed again
-/// (<see cref="Harmony.UnpatchAll(string)"/>, 0Harmony's only overload) and the log says so. Removing the
-/// patches is not the same as undoing them — see the wording in <see cref="Announce"/> — but it does stop
-/// a half-installed set from running.
+/// Removing a group's patches is not the same as undoing them: Harmony hooks disappear, but state a
+/// repair already wrote into this process survives until restart. See <see cref="Announce"/>.
 /// </summary>
 [ModInitializer(nameof(Init))]
 public static class Entry
 {
     internal const string HostModAssemblyName = "sts2_lan_connect";
+
+    /// <summary>
+    /// Prefix of every Harmony id this mod uses. The ids actually installed are one per
+    /// <see cref="FixGroup"/>: <c>"sts2_lobby_enhance." + group name, lower case</c> — for example
+    /// <c>sts2_lobby_enhance.join</c>. Per-group ids are what make a rollback scoped, because
+    /// <c>UnpatchAll</c> takes an id rather than a patch set.
+    /// </summary>
     internal const string HarmonyId = "sts2_lobby_enhance";
 
     private static readonly object Gate = new();
@@ -37,6 +52,18 @@ public static class Entry
     /// (0xC0000005), so it cannot be caught — the only safe option is to never touch the logger at all.
     /// </summary>
     private static bool _suppressLogging;
+
+    /// <summary>Harmony id for one group, e.g. <c>sts2_lobby_enhance.join</c>.</summary>
+    internal static string HarmonyIdFor(FixGroup group) =>
+        HarmonyId + "." + group.ToString().ToLowerInvariant();
+
+    /// <summary>
+    /// Every Harmony id this mod can install patches under. Harnesses that enumerate installed patches
+    /// need all of them: <c>Harmony.GetPatchedMethods()</c> only reports the id of the instance it is
+    /// called on.
+    /// </summary>
+    internal static IEnumerable<string> AllHarmonyIds() =>
+        Enum.GetValues<FixGroup>().Select(HarmonyIdFor);
 
     public static void Init()
     {
@@ -72,14 +99,11 @@ public static class Entry
         _suppressLogging = silent;
         try
         {
+            // Give the probes a way to say "I could not answer this" without Core depending on Entry.
+            CompatProbe.Logger ??= Info;
+
             CompatSnapshot snapshot = CompatProbe.Capture();
             var report = new StartupReport(snapshot);
-
-            if (!snapshot.RequiresPatch)
-            {
-                report.Inert = true;
-                return report;
-            }
 
             Assembly? host = Reflect.FindAssembly(HostModAssemblyName);
             if (host == null)
@@ -88,31 +112,14 @@ public static class Entry
                 return report;
             }
 
-            var harmony = new Harmony(HarmonyId);
             foreach (ICompatFix fix in CompatFixes.Build())
             {
-                if (!fix.Applies(snapshot))
-                {
-                    report.Skipped.Add(fix.Id);
-                    continue;
-                }
-
-                try
-                {
-                    fix.Apply(harmony, snapshot);
-                    report.Applied.Add(fix.Id);
-                }
-                catch (Exception exception)
-                {
-                    report.Failed.Add($"{fix.Id}: {exception.GetType().Name}: {exception.Message}");
-                }
+                Install(fix, snapshot, report);
             }
 
-            if (report.Failed.Count > 0)
-            {
-                RollBack(harmony, report);
-            }
-
+            // "Inert" now only describes the run: nothing was installed because nothing was needed.
+            // It gates nothing — there is no build-wide "needs patch" decision any more.
+            report.Inert = report.Applied.Count == 0 && report.Failed.Count == 0;
             return report;
         }
         finally
@@ -122,25 +129,96 @@ public static class Entry
     }
 
     /// <summary>
-    /// Removes every patch this mod installed in this start.
-    ///
-    /// 0Harmony 2.4.2 exposes exactly one unpatch-everything entry point —
-    /// <c>void HarmonyLib.Harmony.UnpatchAll(string harmonyID)</c> (instance method; there is no
-    /// parameterless overload in that assembly) — and passing our id scopes the removal to our own
-    /// patches instead of wiping another mod's.
+    /// Runs one repair: ask, then patch, then record. Never lets an exception escape, because one repair
+    /// is not allowed to decide whether the other repairs run.
     /// </summary>
-    private static void RollBack(Harmony harmony, StartupReport report)
+    private static void Install(ICompatFix fix, CompatSnapshot snapshot, StartupReport report)
+    {
+        GroupReport group = report.GroupFor(fix.Group);
+
+        string reason;
+        bool applies;
+        try
+        {
+            applies = fix.Applies(snapshot, out reason);
+        }
+        catch (Exception exception)
+        {
+            Fail(fix, group, report, $"Applies() threw {DescribeException(exception)}");
+            RollBackGroup(group, report);
+            return;
+        }
+
+        if (!applies)
+        {
+            string why = string.IsNullOrWhiteSpace(reason) ? "not applicable to this build" : reason.Trim();
+            group.Skipped.Add($"{fix.Id}: {why}");
+            report.Skipped.Add(fix.Id);
+            return;
+        }
+
+        try
+        {
+            fix.Apply(group.Harmony, snapshot);
+            group.Applied.Add(fix.Id);
+            report.Applied.Add(fix.Id);
+        }
+        catch (Exception exception)
+        {
+            Fail(fix, group, report, DescribeException(exception));
+            RollBackGroup(group, report);
+        }
+    }
+
+    private static void Fail(ICompatFix fix, GroupReport group, StartupReport report, string detail)
+    {
+        group.Failed.Add($"{fix.Id}: {detail}");
+        report.Failed.Add($"{fix.Id}: {detail}");
+    }
+
+    private static string DescribeException(Exception exception) =>
+        $"{exception.GetType().Name}: {exception.Message}";
+
+    /// <summary>
+    /// Removes this group's patches — and only this group's.
+    ///
+    /// 0Harmony 2.4.2 exposes exactly one unpatch-everything entry point,
+    /// <c>void HarmonyLib.Harmony.UnpatchAll(string harmonyID)</c> (instance method; there is no
+    /// parameterless overload in that assembly), and the id argument is what scopes the removal. Because
+    /// every group patches under its own id, this cannot touch another group's patches, let alone another
+    /// mod's.
+    ///
+    /// If the removal itself fails the group's patches are still live, so its ids stay in
+    /// <see cref="StartupReport.Applied"/> — the report must describe what is running, not what was
+    /// attempted.
+    /// </summary>
+    private static void RollBackGroup(GroupReport group, StartupReport report)
     {
         try
         {
-            harmony.UnpatchAll(HarmonyId);
+            group.Harmony.UnpatchAll(group.HarmonyId);
+            group.RolledBack = true;
             report.RolledBack = true;
         }
         catch (Exception exception)
         {
-            report.RollbackFailure = $"{exception.GetType().Name}: {exception.Message}";
+            group.RollbackFailure = DescribeException(exception);
+            report.RollbackFailure = report.RollbackFailure == null
+                ? $"{GroupName(group.Group)}: {group.RollbackFailure}"
+                : $"{report.RollbackFailure}; {GroupName(group.Group)}: {group.RollbackFailure}";
+            return;
+        }
+
+        foreach (string id in group.Applied.ToArray())
+        {
+            report.Applied.Remove(id);
+            report.Failed.Add(
+                $"{id}: installed, then removed with its group '{GroupName(group.Group)}' because another " +
+                "repair in the same group failed");
         }
     }
+
+    private static string GroupName(FixGroup group) => group.ToString().ToLowerInvariant();
 
     private static void Announce(StartupReport report)
     {
@@ -154,16 +232,27 @@ public static class Entry
             return;
         }
 
-        if (report.Inert)
-        {
-            Info(
-                "this game build does not show the 0.113 signature changes; LAN Connect needs no " +
-                "compatibility patch here. Staying inert.");
-            return;
-        }
-
         Assembly? host = Reflect.FindAssembly(HostModAssemblyName);
         Info($"host mod: {host?.GetName().Name} {host?.GetName().Version} @ {host?.Location}");
+
+        foreach (GroupReport group in report.Groups)
+        {
+            Info(
+                $"group {GroupName(group.Group)} [{group.HarmonyId}]: " +
+                $"applied={group.Applied.Count}[{string.Join(",", group.Applied)}] " +
+                $"skipped={group.Skipped.Count} failed={group.Failed.Count}" +
+                (group.RolledBack ? " rolledBack=true" : string.Empty));
+
+            foreach (string skip in group.Skipped)
+            {
+                Info($"  skip {skip}");
+            }
+
+            foreach (string failure in group.Failed)
+            {
+                Error($"  FAILED {failure}");
+            }
+        }
 
         foreach (string applied in report.Applied)
         {
@@ -180,39 +269,46 @@ public static class Entry
             Error($"FAILED: {failure}");
         }
 
-        if (report.RolledBack)
+        if (report.Inert)
         {
-            // Never run in a half-patched state: say exactly what was done about it, and say what was not.
-            Error(
-                $"one or more repairs could not be installed, so every patch this mod installed this start " +
-                $"was removed again (UnpatchAll(\"{HarmonyId}\") over applied=[{string.Join(",", report.Applied)}]). " +
-                "No compatibility patch is active now: multiplayer behaves exactly as an unpatched LAN Connect " +
-                "does, so a bug report should point at the failing repair above, not at the host mod.");
-            Error(
-                "removing the patches is NOT the same as undoing them. Harmony hooks are gone, but state a " +
-                "repair had already written into this process stays until the process restarts — for example " +
-                "ExtraGameModesFix's transpiler plan tables (Scripts/Ui/ExtraGameModesFix.cs:74,85,131,164,180), " +
-                "TailErrorPathFix's LastRejection (Scripts/Tail/TailErrorPathFix.cs:40) and the Blitz/Dread " +
-                "epoch ids UnlockExtraModesFix has already resolved and cached " +
-                "(Scripts/Unlock/UnlockExtraModesFix.cs:183-187); the epoch ids it *injects* into the reported " +
-                "unlock state (Scripts/Unlock/UnlockExtraModesFix.cs:78-114) run through the patched seam, so " +
-                "those injections stop happening, but the cache does not. Restart the game for a clean state.");
+            Info(
+                "no repair reported itself as needed for this build, so nothing was installed. That is a " +
+                "normal outcome after a host-mod or game update, not an error.");
         }
-        else if (report.RollbackFailure != null)
+
+        foreach (GroupReport group in report.Groups)
+        {
+            AnnounceRollback(group, report);
+        }
+    }
+
+    private static void AnnounceRollback(GroupReport group, StartupReport report)
+    {
+        if (group.RollbackFailure != null)
         {
             Error(
-                "one or more repairs could not be installed AND removing the installed ones failed " +
-                $"({report.RollbackFailure}). This process may be running a half-patched networking stack; " +
-                "restart the game and report this log to the patch author.");
+                $"group '{GroupName(group.Group)}': a repair failed AND removing that group's patches failed " +
+                $"({group.RollbackFailure}). Other groups are unaffected, but this group may still be partly " +
+                "patched. Restart the game and report this log to the patch author.");
+            return;
         }
-        else if (report.Failed.Count > 0)
+
+        if (!group.RolledBack)
         {
-            // Unreachable while Execute keeps rolling back, but the message must not silently disappear if
-            // that ever changes: never let a half-patched state look like a working installation.
-            Error(
-                "one or more repairs could not be installed. Multiplayer is NOT fully compatible; " +
-                "please report this log to the patch author.");
+            return;
         }
+
+        Error(
+            $"group '{GroupName(group.Group)}': a repair could not be installed, so every patch of this group " +
+            $"was removed again (UnpatchAll(\"{group.HarmonyId}\")). The other groups keep their patches " +
+            $"(still applied: [{string.Join(",", report.Applied)}]). The feature this group provides is " +
+            "inactive; the rest of the mod is not.");
+        Error(
+            "removing a group's patches is NOT the same as undoing them. Harmony hooks are gone, but state a " +
+            "repair had already written into this process stays until the process restarts — cached " +
+            "reflection handles and transpiler plan tables (ExtraGameModesFix), the last tail rejection " +
+            "(TailErrorPathFix) and resolved epoch ids (UnlockExtraModesFix) are the known cases. Restart the " +
+            "game for a clean state.");
     }
 
     internal static void Info(string message)
@@ -240,8 +336,17 @@ public static class Entry
     }
 }
 
+/// <summary>
+/// Outcome of one startup.
+///
+/// The first five properties are read by out-of-process harnesses — <c>tools/smoke-test</c> reflects over
+/// them by name and <c>tools/wire-verify</c> compiles against them — so their names and types are part of
+/// the contract. <see cref="Groups"/> is the per-group detail the log is built from.
+/// </summary>
 internal sealed class StartupReport
 {
+    private readonly List<GroupReport> _groups = new();
+
     internal StartupReport(CompatSnapshot snapshot)
     {
         Snapshot = snapshot;
@@ -249,20 +354,87 @@ internal sealed class StartupReport
 
     internal CompatSnapshot Snapshot { get; }
 
+    /// <summary>
+    /// True when this startup installed nothing and nothing failed, i.e. no repair reported itself as
+    /// needed. It describes the run; it gates nothing.
+    /// </summary>
     internal bool Inert { get; set; }
 
     internal bool HostMissing { get; set; }
 
+    /// <summary>Repair ids whose patches are live when <see cref="Entry.Execute"/> returns.</summary>
     internal List<string> Applied { get; } = new();
 
+    /// <summary>Repair ids that reported themselves as not needed for this build.</summary>
     internal List<string> Skipped { get; } = new();
 
+    /// <summary>
+    /// Repairs that failed to install, plus repairs that were removed by their group's rollback. A group
+    /// whose removal failed keeps its ids in <see cref="Applied"/>, because they are still patched.
+    /// </summary>
     internal List<string> Failed { get; } = new();
 
-    /// <summary>True when <c>Entry.RollBack</c> removed the patches after a failure.</summary>
+    /// <summary>Per-group detail, in the order the groups were first reached.</summary>
+    internal IReadOnlyList<GroupReport> Groups => _groups;
+
+    /// <summary>True when at least one group was unpatched after a failure. Aggregate of the groups.</summary>
     internal bool RolledBack { get; set; }
 
-    /// <summary>Why the rollback itself failed, or <c>null</c> when it succeeded or was not needed.</summary>
+    /// <summary>Why a group rollback failed, or <c>null</c>. Aggregate of the groups.</summary>
+    internal string? RollbackFailure { get; set; }
+
+    internal GroupReport GroupFor(FixGroup group)
+    {
+        foreach (GroupReport existing in _groups)
+        {
+            if (existing.Group == group)
+            {
+                return existing;
+            }
+        }
+
+        var created = new GroupReport(group);
+        _groups.Add(created);
+        return created;
+    }
+}
+
+/// <summary>
+/// One <see cref="FixGroup"/>: its own Harmony instance, its own patch set, its own rollback.
+/// </summary>
+internal sealed class GroupReport
+{
+    internal GroupReport(FixGroup group)
+    {
+        Group = group;
+        HarmonyId = Entry.HarmonyIdFor(group);
+        Harmony = new Harmony(HarmonyId);
+    }
+
+    internal FixGroup Group { get; }
+
+    /// <summary>The Harmony id every patch of this group is installed under.</summary>
+    internal string HarmonyId { get; }
+
+    /// <summary>
+    /// Shared by every repair in the group, so one <c>UnpatchAll(HarmonyId)</c> covers all of them and
+    /// nothing outside the group.
+    /// </summary>
+    internal Harmony Harmony { get; }
+
+    /// <summary>Repairs of this group that installed their patches. History: kept after a rollback.</summary>
+    internal List<string> Applied { get; } = new();
+
+    /// <summary>Repairs of this group that answered "not needed", each with its reason.</summary>
+    internal List<string> Skipped { get; } = new();
+
+    /// <summary>Repairs of this group that failed, each with the exception.</summary>
+    internal List<string> Failed { get; } = new();
+
+    /// <summary>True when this group's patches were removed after a failure.</summary>
+    internal bool RolledBack { get; set; }
+
+    /// <summary>Why <c>UnpatchAll</c> failed, or <c>null</c> when it succeeded or was not needed.</summary>
     internal string? RollbackFailure { get; set; }
 }
 
@@ -278,7 +450,7 @@ internal static class CompatFixes
         yield return new NewRunFromGameOverFix();
         yield return new MidRunRestartFix();
         yield return new ExtraGameModesFix();
+        yield return new RoomCardPillFix();
         yield return new UnlockExtraModesFix();
     }
 }
-

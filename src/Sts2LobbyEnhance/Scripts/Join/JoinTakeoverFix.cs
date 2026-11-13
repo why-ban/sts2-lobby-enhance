@@ -67,110 +67,418 @@ internal sealed class JoinTakeoverFix : ICompatFix
     private const string ProfileTypeName = "Sts2LanConnect.Scripts.LanConnectProtocolProfile";
     private const string ProtocolExceptionTypeName = "Sts2LanConnect.Scripts.LanConnectProtocolException";
     private const string TakeRejectionMethodName = "TryTakeValidatedRejection";
+    private const string FactoryTypeName = "Sts2LanConnect.Scripts.LanConnectNetGameServiceFactory";
+    private const string CodecTypeName = "Sts2LanConnect.Scripts.LanConnectSidecarFrameCodec";
+
+    // Game-side names compared as strings, never typeof(): a probe that mentions them with typeof() cannot be
+    // JITted once they are renamed, which is exactly what the probe has to survive.
+    private const string SceneTreeTypeName = "Godot.SceneTree";
+    private const string CancelTokenTypeName = "System.Threading.CancellationTokenSource";
+    private const string NetClientServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetClientGameService";
+
+    /// <summary>Same member filter the rest of the file uses for reflective lookups.</summary>
+    private const BindingFlags AnyMember =
+        BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
     /// <summary>
-    /// Reflection anchors for the tail-rejection read, resolved once in <see cref="Apply"/>.
+    /// Every anchor this repair needs, resolved once in <see cref="Apply"/> before anything is patched.
     ///
-    /// They are deliberately *optional*: <see cref="TryTakeValidatedRejection"/> is a best-effort improvement
-    /// over the previous behaviour (a generic "Unexpectedly disconnected ... ModMismatch" for every tail
-    /// failure), so a missing anchor is a warning and a fallback, not a startup failure. That is the opposite
-    /// of <see cref="BindTailIfRequired"/>, where a missing anchor really does break the handshake.
+    /// The first version of this fix resolved fifteen of these lazily *inside* the join, so a renamed member
+    /// surfaced as an exception in the middle of a join while the log already said "applied: join-flow". Nothing
+    /// in here is resolved after <see cref="Apply"/> returns (2026-11-14 gating audit, A1/A2).
+    ///
+    /// <see cref="TakeValidatedRejection"/> and <see cref="ProtocolExceptionCtor"/> stay optional on purpose: they
+    /// only make a tail_v1 disconnect report its real rejection code instead of a generic ModMismatch, so their
+    /// absence is a warning, not a reason to skip. Everything else is required — without it the handshake breaks.
     /// </summary>
-    private static MethodInfo? _takeValidatedRejection;
-    private static ConstructorInfo? _protocolExceptionCtor;
-    private static Type? _tailRuntimeType;
+    internal sealed class Shape
+    {
+        internal MethodInfo BeginAsync = null!;
+
+        internal MethodInfo CreateClient = null!;
+
+        internal PropertyInfo NetService = null!;
+
+        internal PropertyInfo CancelToken = null!;
+
+        internal FieldInfo ProtocolSelection = null!;
+
+        internal FieldInfo ProtocolOffer = null!;
+
+        internal FieldInfo ProtocolFlowNonce = null!;
+
+        internal FieldInfo PeerNativeBusTypeId = null!;
+
+        internal PropertyInfo SelectionProfile = null!;
+
+        internal int TailProfileValue;
+
+        internal int FlowNonceBytes;
+
+        internal Type TailRuntimeType = null!;
+
+        internal PropertyInfo Shared = null!;
+
+        internal MethodInfo GetMessageBus = null!;
+
+        internal MethodInfo Bind = null!;
+
+        internal MethodInfo Unbind = null!;
+
+        internal MethodInfo? TakeValidatedRejection;
+
+        internal ConstructorInfo? ProtocolExceptionCtor;
+
+        /// <summary>Set when only the optional tail-rejection anchors are missing; logged by <see cref="Apply"/>.</summary>
+        internal string? OptionalNote;
+    }
+
+    internal static Shape? _shape;
 
     public string Id => "join-flow";
 
-    public bool Applies(in CompatSnapshot snapshot) =>
-        snapshot.InitialGameInfoLostGameMode || snapshot.JoinRequestLostMaxAscensionUnlocked;
+    public FixGroup Group => FixGroup.Join;
+
+    /// <summary>
+    /// Needed only when this game build no longer has the two members the shipped
+    /// <c>LanConnectLobbyManagedJoinFlow.BeginAsync</c> was compiled against. That pair is this repair's own
+    /// precondition, not a global "is this 0.113" gate: if a future build restores either member, the host mod's
+    /// own flow JITs again and taking it over would only drop its validation.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        if (!snapshot.InitialGameInfoLostGameMode && !snapshot.JoinRequestLostMaxAscensionUnlocked)
+        {
+            reason = "this build still has InitialGameInfoMessage.gameMode and " +
+                     "ClientLobbyJoinRequestMessage.maxAscensionUnlocked, so the host mod's own join flow runs";
+            return false;
+        }
+
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod '" + Entry.HostModAssemblyName + "' is not loaded";
+            return false;
+        }
+
+        if (!TryCapture(host, out Shape shape, out string missing))
+        {
+            reason = "missing: " + missing;
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-
-        Type flowType = Reflect.RequireType(host, FlowTypeName);
-        MethodInfo beginAsync = Reflect.RequireMethodByName(flowType, "BeginAsync", 2);
-
-        // Guard against silently patching something that is not the method we audited.
-        ParameterInfo[] parameters = beginAsync.GetParameters();
-        if (parameters[0].ParameterType != typeof(object) || parameters[1].ParameterType != typeof(SceneTree))
-        {
-            throw new MissingMethodException(
-                flowType.FullName,
-                $"BeginAsync(object, SceneTree) — found ({parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name})");
-        }
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "join-flow: Apply ran without a captured shape; Applies must be consulted first.");
 
         harmony.Patch(
-            beginAsync,
+            shape.BeginAsync,
             prefix: new HarmonyMethod(typeof(JoinTakeoverFix), nameof(BeginAsyncPrefix))
             {
                 priority = Priority.First
             });
 
-        ResolveTailRejectionAnchors(host);
+        if (shape.OptionalNote != null)
+        {
+            Entry.Warn("join-flow: " + shape.OptionalNote);
+        }
+        else
+        {
+            Entry.Info(
+                "join-flow: tail rejections will be reported with their own code — " +
+                $"{shape.TailRuntimeType.Name}.{TakeRejectionMethodName} and the " +
+                "LanConnectProtocolException(LanConnectProtocolFailure) constructor resolved.");
+        }
 
         Entry.Info("join-flow: patched LanConnectLobbyManagedJoinFlow.BeginAsync to run the vanilla JoinFlow.");
     }
 
     /// <summary>
-    /// Resolves <c>LanConnectTailMessageRuntime.TryTakeValidatedRejection(INetGameService, ulong, out failure)</c>
-    /// and the <c>LanConnectProtocolException(LanConnectProtocolFailure)</c> constructor. Shipped DLL:
-    /// <c>dec-official/LanConnectTailMessageRuntime.cs:770</c> and
-    /// <c>dec-official/LanConnectProtocolException.cs:9</c>. Any miss is logged once and leaves the anchors
-    /// null, which makes the runtime path fall back to exactly the behaviour we had before.
+    /// Resolves every anchor before a single patch is installed. Never throws, never invokes anything, never
+    /// touches Godot: pure metadata over the already-loaded host assembly. All misses are collected, so one log
+    /// line lists everything that has to be fixed instead of the first thing that blew up.
+    ///
+    /// The game-side types (<c>Godot.SceneTree</c>, <c>CancellationTokenSource</c>, <c>NetClientGameService</c>)
+    /// are compared by name on purpose: a probe that names them with typeof() cannot be JITted once they are
+    /// renamed, which is the exact scenario this probe exists to survive (2026-11-14 gating audit, A1).
     /// </summary>
-    private static void ResolveTailRejectionAnchors(Assembly host)
+    private static bool TryCapture(Assembly host, out Shape shape, out string reason)
     {
-        try
-        {
-            Type runtimeType = Reflect.RequireType(host, TailRuntimeTypeName);
-            MethodInfo take = Reflect.RequireMethodByName(runtimeType, TakeRejectionMethodName, 3);
+        shape = new Shape();
+        var missing = new List<string>();
 
-            ParameterInfo[] parameters = take.GetParameters();
-            if (!parameters[0].ParameterType.IsAssignableFrom(typeof(NetClientGameService))
-                || parameters[1].ParameterType != typeof(ulong)
-                || !parameters[2].ParameterType.IsByRef)
+        Type? flowType = TypeOf(host, FlowTypeName, missing);
+        if (flowType != null)
+        {
+            MethodInfo? beginAsync = MethodOf(flowType, "BeginAsync", 2, missing);
+            if (beginAsync != null)
             {
-                throw new MissingMethodException(
-                    runtimeType.FullName,
-                    $"{TakeRejectionMethodName}({parameters[0].ParameterType.Name}, {parameters[1].ParameterType.Name}, out ...) " +
-                    "— expected (INetGameService, ulong, out LanConnectProtocolFailure?)");
+                ParameterInfo[] parameters = beginAsync.GetParameters();
+                if (parameters[0].ParameterType != typeof(object)
+                    || !string.Equals(parameters[1].ParameterType.FullName, SceneTreeTypeName, StringComparison.Ordinal))
+                {
+                    missing.Add($"{FlowTypeName}.BeginAsync(object, {SceneTreeTypeName})");
+                }
+                else
+                {
+                    shape.BeginAsync = beginAsync;
+                }
             }
 
-            Type failureType = parameters[2].ParameterType.GetElementType()
-                ?? throw new MissingMethodException(runtimeType.FullName, $"{TakeRejectionMethodName} out parameter type");
+            shape.NetService = PropertyOf(flowType, "NetService", missing)!;
+            shape.CancelToken = PropertyOf(flowType, "CancelToken", missing)!;
+            shape.ProtocolSelection = FieldOf(flowType, "_protocolSelection", missing)!;
+            shape.ProtocolOffer = FieldOf(flowType, "_protocolOffer", missing)!;
+            shape.ProtocolFlowNonce = FieldOf(flowType, "_protocolFlowNonce", missing)!;
+            shape.PeerNativeBusTypeId = FieldOf(flowType, "_peerNativeBusTypeId", missing)!;
 
-            Type exceptionType = Reflect.RequireType(host, ProtocolExceptionTypeName);
-            ConstructorInfo exceptionCtor = exceptionType
-                .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            if (shape.NetService != null && shape.NetService.GetSetMethod(nonPublic: true) == null)
+            {
+                missing.Add($"{FlowTypeName}.NetService setter");
+            }
+
+            if (shape.CancelToken != null
+                && !string.Equals(shape.CancelToken.PropertyType.FullName, CancelTokenTypeName, StringComparison.Ordinal))
+            {
+                missing.Add(
+                    $"{FlowTypeName}.CancelToken is {shape.CancelToken.PropertyType.FullName}, " +
+                    $"expected {CancelTokenTypeName}");
+            }
+
+            if (shape.ProtocolFlowNonce != null && shape.ProtocolFlowNonce.FieldType != typeof(byte[]))
+            {
+                missing.Add(
+                    $"{FlowTypeName}._protocolFlowNonce is {shape.ProtocolFlowNonce.FieldType.Name}, " +
+                    "expected Byte[]");
+            }
+        }
+
+        // ---- the frozen selection's profile: the enum member TailV1 and the Profile property on the selection
+        Type? profileType = TypeOf(host, ProfileTypeName, missing);
+        if (profileType != null)
+        {
+            if (!profileType.IsEnum)
+            {
+                missing.Add($"{ProfileTypeName} is not an enum");
+            }
+            else
+            {
+                FieldInfo? tailField = profileType.GetField(TailProfileName, AnyMember);
+                if (tailField?.GetRawConstantValue() is int tailValue)
+                {
+                    shape.TailProfileValue = tailValue;
+                }
+                else
+                {
+                    missing.Add($"{ProfileTypeName}.{TailProfileName} (literal const)");
+                }
+            }
+
+            if (shape.ProtocolSelection != null)
+            {
+                Type selectionType = shape.ProtocolSelection.FieldType;
+                PropertyInfo? profile = PropertyOf(selectionType, "Profile", missing);
+                if (profile != null)
+                {
+                    if (profile.PropertyType != profileType)
+                    {
+                        missing.Add(
+                            $"{selectionType.FullName}.Profile is {profile.PropertyType.FullName}, " +
+                            $"expected {ProfileTypeName}");
+                    }
+                    else
+                    {
+                        shape.SelectionProfile = profile;
+                    }
+                }
+            }
+        }
+
+        // ---- net client factory: shape only, never called from here
+        Type? factory = TypeOf(host, FactoryTypeName, missing);
+        if (factory != null)
+        {
+            MethodInfo? createClient = factory
+                .GetMethods(AnyMember)
+                .FirstOrDefault(method =>
+                    method.IsStatic
+                    && method.GetParameters().Length == 0
+                    && string.Equals(method.Name, "CreateClient", StringComparison.Ordinal));
+
+            if (createClient == null)
+            {
+                missing.Add($"{FactoryTypeName}.CreateClient()");
+            }
+            else if (!string.Equals(createClient.ReturnType.FullName, NetClientServiceTypeName, StringComparison.Ordinal))
+            {
+                missing.Add(
+                    $"{FactoryTypeName}.CreateClient() returns {createClient.ReturnType.FullName}, " +
+                    $"expected {NetClientServiceTypeName}");
+            }
+            else
+            {
+                shape.CreateClient = createClient;
+            }
+        }
+
+        // ---- nonce length constant
+        Type? codec = TypeOf(host, CodecTypeName, missing);
+        if (codec != null)
+        {
+            FieldInfo? nonceField = codec.GetField("FlowNonceBytes", AnyMember);
+            if (nonceField?.GetRawConstantValue() is int nonceBytes)
+            {
+                shape.FlowNonceBytes = nonceBytes;
+            }
+            else
+            {
+                missing.Add($"{CodecTypeName}.FlowNonceBytes (literal const)");
+            }
+        }
+
+        // ---- tail runtime
+        Type? runtimeType = TypeOf(host, TailRuntimeTypeName, missing);
+        if (runtimeType != null)
+        {
+            shape.TailRuntimeType = runtimeType;
+            shape.Shared = PropertyOf(runtimeType, "Shared", missing)!;
+            shape.GetMessageBus = MethodOf(runtimeType, "GetMessageBus", 1, missing)!;
+            shape.Bind = MethodOf(runtimeType, "Bind", 7, missing)!;
+            shape.Unbind = MethodOf(runtimeType, "Unbind", 1, missing)!;
+
+            if (shape.Shared != null && shape.Shared.GetGetMethod(nonPublic: true) is not { IsStatic: true })
+            {
+                missing.Add($"{TailRuntimeTypeName}.Shared is not a static property");
+            }
+        }
+
+        CaptureOptionalTailRejectionAnchors(host, runtimeType, shape);
+
+        reason = string.Join(", ", missing);
+        return missing.Count == 0;
+    }
+
+    /// <summary>
+    /// The two anchors that only improve the disconnect message. A miss is recorded on
+    /// <see cref="Shape.OptionalNote"/> and logged by <see cref="Apply"/>; it never makes the repair skip.
+    /// </summary>
+    private static void CaptureOptionalTailRejectionAnchors(Assembly host, Type? runtimeType, Shape shape)
+    {
+        if (runtimeType == null)
+        {
+            return;
+        }
+
+        try
+        {
+            MethodInfo? take = runtimeType
+                .GetMethods(AnyMember)
+                .FirstOrDefault(method =>
+                    string.Equals(method.Name, TakeRejectionMethodName, StringComparison.Ordinal)
+                    && method.GetParameters() is { Length: 3 } parameters
+                    && !parameters[0].ParameterType.IsValueType
+                    && !parameters[0].ParameterType.IsByRef
+                    && parameters[1].ParameterType == typeof(ulong)
+                    && parameters[2].ParameterType.IsByRef);
+
+            if (take == null)
+            {
+                shape.OptionalNote = OptionalNote("no matching " + TakeRejectionMethodName + " overload");
+                return;
+            }
+
+            Type? failureType = take.GetParameters()[2].ParameterType.GetElementType();
+            if (failureType == null)
+            {
+                shape.OptionalNote = OptionalNote(TakeRejectionMethodName + " out parameter type is unresolved");
+                return;
+            }
+
+            Type? exceptionType = host.GetType(ProtocolExceptionTypeName, throwOnError: false, ignoreCase: false);
+            ConstructorInfo? exceptionCtor = exceptionType?
+                .GetConstructors(AnyMember)
                 .FirstOrDefault(ctor =>
                     ctor.GetParameters() is { Length: 1 } ctorParameters
-                    && ctorParameters[0].ParameterType == failureType)
-                ?? throw new MissingMethodException(
-                    exceptionType.FullName,
-                    $"{exceptionType.Name}({failureType.Name})");
+                    && ctorParameters[0].ParameterType == failureType);
 
-            _tailRuntimeType = runtimeType;
-            _takeValidatedRejection = take;
-            _protocolExceptionCtor = exceptionCtor;
+            if (exceptionCtor == null)
+            {
+                shape.OptionalNote = OptionalNote(
+                    $"no {ProtocolExceptionTypeName}({failureType.Name}) constructor");
+                return;
+            }
 
-            Entry.Info(
-                "join-flow: tail rejections will be reported with their own code — " +
-                $"{runtimeType.Name}.{TakeRejectionMethodName} and {exceptionType.Name}({failureType.Name}) resolved.");
+            shape.TakeValidatedRejection = take;
+            shape.ProtocolExceptionCtor = exceptionCtor;
         }
         catch (Exception exception)
         {
-            _tailRuntimeType = null;
-            _takeValidatedRejection = null;
-            _protocolExceptionCtor = null;
-            Entry.Warn(
-                "join-flow: could not resolve the tail-rejection anchors " +
-                $"({exception.GetType().Name}: {exception.Message}). A tail_v1 disconnect will keep surfacing " +
-                "as the generic 'Unexpectedly disconnected from host while joining. Reason: ...' instead of " +
-                "its real rejection code; every other part of the join is unaffected.");
+            shape.OptionalNote = OptionalNote($"{exception.GetType().Name}: {exception.Message}");
         }
+    }
+
+    private static string OptionalNote(string detail) =>
+        "could not resolve the tail-rejection anchors (" + detail + "). A tail_v1 disconnect will keep " +
+        "surfacing as the generic 'Unexpectedly disconnected from host while joining. Reason: ...' instead of " +
+        "its real rejection code; every other part of the join is unaffected.";
+
+    private static Type? TypeOf(Assembly host, string fullName, List<string> missing)
+    {
+        Type? type = host.GetType(fullName, throwOnError: false, ignoreCase: false);
+        if (type == null)
+        {
+            missing.Add("type " + fullName);
+        }
+
+        return type;
+    }
+
+    private static FieldInfo? FieldOf(Type type, string name, List<string> missing)
+    {
+        FieldInfo? field = type.GetField(name, AnyMember);
+        if (field == null)
+        {
+            missing.Add($"{type.FullName}.{name}");
+        }
+
+        return field;
+    }
+
+    private static PropertyInfo? PropertyOf(Type type, string name, List<string> missing)
+    {
+        PropertyInfo? property = type.GetProperty(name, AnyMember);
+        if (property == null)
+        {
+            missing.Add($"{type.FullName}.{name}");
+        }
+
+        return property;
+    }
+
+    private static MethodInfo? MethodOf(Type type, string name, int parameterCount, List<string> missing)
+    {
+        MethodInfo[] matches = type
+            .GetMethods(AnyMember)
+            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+            .Where(method => method.GetParameters().Length == parameterCount)
+            .ToArray();
+
+        if (matches.Length == 1)
+        {
+            return matches[0];
+        }
+
+        missing.Add(matches.Length == 0
+            ? $"{type.FullName}.{name} ({parameterCount} parameter(s))"
+            : $"{type.FullName}.{name} ({parameterCount} parameter(s)) is ambiguous: {matches.Length} overloads");
+        return null;
     }
 
     // ReSharper disable once UnusedParameter.Local — Harmony binds by position.
@@ -206,14 +514,66 @@ internal sealed class JoinTakeoverFix : ICompatFix
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.Actions] = LogLevel.VeryDebug;
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.GameSync] = LogLevel.VeryDebug;
 
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "join-flow: the shape was not captured, so the BeginAsync prefix cannot run.");
+
+        NetClientGameService? netService = null;
+        bool tailBound = false;
+        bool released = false;
+
+        // Idempotent release (2026-11-14 gating audit, A3). Two paths reach it: a throw between
+        // CreateClientService and the await (BindTailIfRequired, LinkCancellation) and a throw out of the await.
+        // Before this existed, the first path leaked a fully constructed NetClientGameService that was already
+        // published on the host mod's flow as NetService.
+        void Release()
+        {
+            if (released || netService == null)
+            {
+                return;
+            }
+
+            released = true;
+
+            try
+            {
+                if (netService.IsConnected)
+                {
+                    netService.Disconnect(ModDisconnectReason(flow));
+                }
+            }
+            catch (Exception exception)
+            {
+                Entry.Warn(
+                    "join-flow: could not disconnect the failed join's net service " +
+                    $"({exception.GetType().Name}: {exception.Message}); still releasing the tail binding.");
+            }
+
+            try
+            {
+                // Only a failed join releases the binding (this is the upstream behaviour).
+                if (tailBound)
+                {
+                    UnbindTail(netService);
+                }
+            }
+            catch (Exception exception)
+            {
+                Entry.Warn(
+                    "join-flow: could not release the tail binding of the failed join " +
+                    $"({exception.GetType().Name}: {exception.Message}).");
+            }
+        }
+
         try
         {
-            NetClientGameService netService = CreateClientService();
-            Reflect.SetPropertyValue(flow, "NetService", netService);
-            Entry.Info($"join-flow: net service created ({netService.GetType().Name}).");
+            NetClientGameService service = CreateClientService();
+            netService = service;
+            shape.NetService.SetValue(flow, service);
+            Entry.Info($"join-flow: net service created ({service.GetType().Name}).");
 
-            bool tailBound = BindTailIfRequired(flow, netService);
-            JoinFlow joinFlow = new(netService, initializer);
+            tailBound = BindTailIfRequired(flow, service);
+            JoinFlow joinFlow = new(service, initializer);
             LinkCancellation(flow, joinFlow);
 
             // tail_v1 only: a rejection code travels on the disconnect event, not on the message stream
@@ -224,11 +584,11 @@ internal sealed class JoinTakeoverFix : ICompatFix
             // this project deliberately does not reference (see Core/Reflect.cs). The runtime type is what the
             // caller's `catch (LanConnectProtocolException)` branch matches, and `throw` preserves it.
             Exception? rejection = null;
-            void OnDisconnected(NetErrorInfo info) => rejection ??= TryTakeTailRejection(netService, tailBound, info);
+            void OnDisconnected(NetErrorInfo info) => rejection ??= TryTakeTailRejection(service, tailBound, info);
 
             if (tailBound)
             {
-                netService.Disconnected += OnDisconnected;
+                service.Disconnected += OnDisconnected;
             }
 
             try
@@ -237,16 +597,7 @@ internal sealed class JoinTakeoverFix : ICompatFix
             }
             catch (Exception exception)
             {
-                if (netService.IsConnected)
-                {
-                    netService.Disconnect(ModDisconnectReason(flow));
-                }
-
-                // Only a failed join releases the binding (this is the upstream behaviour).
-                if (tailBound)
-                {
-                    UnbindTail(netService);
-                }
+                Release();
 
                 if (rejection != null && exception is not OperationCanceledException)
                 {
@@ -262,9 +613,15 @@ internal sealed class JoinTakeoverFix : ICompatFix
             {
                 if (tailBound)
                 {
-                    netService.Disconnected -= OnDisconnected;
+                    service.Disconnected -= OnDisconnected;
                 }
             }
+        }
+        catch (Exception) when (netService != null)
+        {
+            // Only reachable for a throw *before* the await; Release() is a no-op if the inner catch ran.
+            Release();
+            throw;
         }
         finally
         {
@@ -299,16 +656,14 @@ internal sealed class JoinTakeoverFix : ICompatFix
     /// <summary>Uses the host mod's own factory so the same constructor strategy is kept.</summary>
     private static NetClientGameService CreateClientService()
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
+        Shape shape = _shape
+            ?? throw new InvalidOperationException("join-flow: the shape was not captured.");
 
-        Type factory = Reflect.RequireType(host, "Sts2LanConnect.Scripts.LanConnectNetGameServiceFactory");
-        object? created = Reflect.InvokeStatic(factory, "CreateClient");
-
+        object? created = shape.CreateClient.Invoke(null, null);
         return created as NetClientGameService
                ?? throw new InvalidOperationException(
-                   $"{factory.FullName}.CreateClient() returned {created?.GetType().Name ?? "<null>"}, " +
-                   "expected NetClientGameService.");
+                   $"{shape.CreateClient.DeclaringType?.FullName}.CreateClient() returned " +
+                   $"{created?.GetType().Name ?? "<null>"}, expected NetClientGameService.");
     }
 
     /// <summary>
@@ -319,63 +674,57 @@ internal sealed class JoinTakeoverFix : ICompatFix
     /// </summary>
     private static bool BindTailIfRequired(object flow, NetClientGameService netService)
     {
-        object? selection = Reflect.GetField(flow, "_protocolSelection");
+        Shape shape = _shape
+            ?? throw new InvalidOperationException("join-flow: the shape was not captured.");
+
+        object? selection = shape.ProtocolSelection.GetValue(flow);
         if (selection == null)
         {
             // The simple constructor path leaves the selection unset; nothing to bind.
             return false;
         }
 
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-
-        object? profile = selection.GetType()
-            .GetProperty("Profile", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            ?.GetValue(selection)
+        object? profile = shape.SelectionProfile.GetValue(selection)
             ?? throw new InvalidOperationException(
-                $"{selection.GetType().FullName}.Profile returned null; cannot tell whether this join is tail_v1.");
+                $"{shape.SelectionProfile.DeclaringType?.FullName}.Profile returned null; " +
+                "cannot tell whether this join is tail_v1.");
 
-        // Upstream compares the enum directly: `_protocolSelection?.Profile == LanConnectProtocolProfile.TailV1`
-        // (source LanConnectLobbyManagedJoinFlow.cs:78, shipped DLL dec-official:84). We cannot name the type,
-        // so we resolve the enum member's own constant and compare the underlying integers. Comparing
-        // `ToString()` instead — what this used to do — silently returned false on any rename and skipped the
-        // extension frame, which stalls a tail_v1 join until the handshake times out.
-        if (Convert.ToInt32(profile, CultureInfo.InvariantCulture) != ResolveTailProfileValue(host))
+        // The enum member's own constant is resolved once in TryCapture and compared as an integer, so a rename
+        // of either the enum or the member is a startup skip instead of a silently unbound extension frame
+        // (which stalls a tail_v1 join until the handshake times out).
+        if (Convert.ToInt32(profile, CultureInfo.InvariantCulture) != shape.TailProfileValue)
         {
             return false;
         }
 
-        Type runtimeType = Reflect.RequireType(host, TailRuntimeTypeName);
-
-        object offer = Reflect.GetField(flow, "_protocolOffer")
+        object offer = shape.ProtocolOffer.GetValue(flow)
             ?? throw new InvalidOperationException(
                 "tail_v1 join has no frozen protocol offer; refusing to continue without the extension frame.");
-        object? nonce = Reflect.GetField(flow, "_protocolFlowNonce")
+        object? nonce = shape.ProtocolFlowNonce.GetValue(flow)
             ?? throw new InvalidOperationException(
                 "tail_v1 join has no protocol flow nonce; refusing to continue without the extension frame.");
-        object? peerNativeBusTypeId = Reflect.GetField(flow, "_peerNativeBusTypeId");
+        object? peerNativeBusTypeId = shape.PeerNativeBusTypeId.GetValue(flow);
 
-        object shared = Reflect.RequireStaticPropertyValue(runtimeType, "Shared");
+        object shared = shape.Shared.GetValue(null)
+            ?? throw new InvalidOperationException($"{TailRuntimeTypeName}.Shared returned null.");
 
         // Do NOT call BindClient: its nonce parameter is ReadOnlySpan<byte>, which cannot be boxed, so
         // MethodInfo.Invoke always throws ArgumentException. Bind is the private overload BindClient
         // delegates to, and it takes byte[] — the same value, without the span.
-        object bus = Reflect.RequireMethodByName(runtimeType, "GetMessageBus", 1)
-            .Invoke(shared, new[] { (object?)netService })
+        object bus = shape.GetMessageBus.Invoke(shared, new[] { (object?)netService })
             ?? throw new InvalidOperationException("Tail runtime could not resolve the message bus for the client.");
 
         byte[] nonceBytes = nonce as byte[]
             ?? throw new InvalidOperationException(
                 $"tail_v1 join nonce is {nonce.GetType().Name}, expected byte[].");
 
-        int expectedNonceBytes = ReadFlowNonceBytes(host);
-        if (nonceBytes.Length != expectedNonceBytes)
+        if (nonceBytes.Length != shape.FlowNonceBytes)
         {
             throw new InvalidOperationException(
-                $"tail_v1 join nonce is {nonceBytes.Length} bytes, expected {expectedNonceBytes}.");
+                $"tail_v1 join nonce is {nonceBytes.Length} bytes, expected {shape.FlowNonceBytes}.");
         }
 
-        Reflect.RequireMethodByName(runtimeType, "Bind", 7).Invoke(
+        shape.Bind.Invoke(
             shared,
             new object?[] { netService, bus, offer, selection, false, nonceBytes, peerNativeBusTypeId });
 
@@ -383,45 +732,6 @@ internal sealed class JoinTakeoverFix : ICompatFix
         return true;
     }
 
-    /// <summary>Reads <c>LanConnectSidecarFrameCodec.FlowNonceBytes</c>, the nonce length BindClient enforces.</summary>
-    private static int ReadFlowNonceBytes(Assembly host)
-    {
-        Type codec = Reflect.RequireType(host, "Sts2LanConnect.Scripts.LanConnectSidecarFrameCodec");
-        FieldInfo? field = codec.GetField(
-            "FlowNonceBytes",
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-
-        if (field?.GetRawConstantValue() is int value)
-        {
-            return value;
-        }
-
-        throw new MissingFieldException(codec.FullName, "FlowNonceBytes");
-    }
-
-    /// <summary>
-    /// Reads <c>LanConnectProtocolProfile.TailV1</c>'s own constant value (1 in 0.6.3,
-    /// <c>dec-official/LanConnectProtocolProfile.cs:3-7</c>) instead of hardcoding it, and throws rather than
-    /// guessing when the member is gone: a tail_v1 join that silently skips the extension frame hangs, which
-    /// is a far worse failure mode than a loud one.
-    /// </summary>
-    private static int ResolveTailProfileValue(Assembly host)
-    {
-        Type profileType = Reflect.RequireType(host, ProfileTypeName);
-        FieldInfo field = profileType.GetField(
-                             TailProfileName,
-                             BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                         ?? throw new MissingFieldException(profileType.FullName, TailProfileName);
-
-        if (field.GetRawConstantValue() is not { } constant)
-        {
-            throw new MissingFieldException(
-                profileType.FullName,
-                $"{TailProfileName} (the member exists but is not a constant)");
-        }
-
-        return Convert.ToInt32(constant, CultureInfo.InvariantCulture);
-    }
 
     /// <summary>
     /// The reason upstream disconnects with when a join fails: <c>CancelledJoin</c> (6) when the host mod's own
@@ -459,10 +769,11 @@ internal sealed class JoinTakeoverFix : ICompatFix
         bool tailBound,
         NetErrorInfo info)
     {
-        MethodInfo? take = _takeValidatedRejection;
-        ConstructorInfo? exceptionCtor = _protocolExceptionCtor;
+        Shape? shape = _shape;
+        MethodInfo? take = shape?.TakeValidatedRejection;
+        ConstructorInfo? exceptionCtor = shape?.ProtocolExceptionCtor;
 
-        if (!tailBound || take == null || exceptionCtor == null)
+        if (!tailBound || shape == null || take == null || exceptionCtor == null)
         {
             // Not a tail session, or Apply already warned that the anchors are missing.
             return null;
@@ -470,7 +781,8 @@ internal sealed class JoinTakeoverFix : ICompatFix
 
         try
         {
-            object shared = RequireSharedRuntime();
+            object shared = shape.Shared.GetValue(null)
+                ?? throw new InvalidOperationException("The tail runtime Shared property returned null.");
             object?[] arguments = { netService, netService.HostNetId, null };
             bool taken = take.Invoke(shared, arguments) is bool value && value;
             if (!taken || arguments[2] is not { } failure)
@@ -507,25 +819,14 @@ internal sealed class JoinTakeoverFix : ICompatFix
         }
     }
 
-    private static object RequireSharedRuntime()
-    {
-        if (_tailRuntimeType == null)
-        {
-            throw new InvalidOperationException(
-                "The tail runtime type was not resolved; tail rejections cannot be read.");
-        }
-
-        return Reflect.RequireStaticPropertyValue(_tailRuntimeType, "Shared");
-    }
-
     private static void UnbindTail(NetClientGameService netService)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-        Type runtimeType = Reflect.RequireType(host, TailRuntimeTypeName);
+        Shape shape = _shape
+            ?? throw new InvalidOperationException("join-flow: the shape was not captured.");
 
-        object shared = Reflect.RequireStaticPropertyValue(runtimeType, "Shared");
-        Reflect.RequireMethodByName(runtimeType, "Unbind", 1).Invoke(shared, new object?[] { netService });
+        object shared = shape.Shared.GetValue(null)
+            ?? throw new InvalidOperationException($"{TailRuntimeTypeName}.Shared returned null.");
+        shape.Unbind.Invoke(shared, new object?[] { netService });
     }
 
     /// <summary>
@@ -533,7 +834,7 @@ internal sealed class JoinTakeoverFix : ICompatFix
     /// Throws when it is not one: silently continuing would leave the join un-cancellable.
     /// </summary>
     private static CancellationTokenSource RequireModCancelToken(object flow) =>
-        Reflect.GetPropertyValue(flow, "CancelToken") is CancellationTokenSource token
+        _shape?.CancelToken.GetValue(flow) is CancellationTokenSource token
             ? token
             : throw new InvalidOperationException(
                 "LanConnectLobbyManagedJoinFlow.CancelToken is not a CancellationTokenSource; " +

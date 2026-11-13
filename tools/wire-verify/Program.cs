@@ -97,7 +97,11 @@ internal static class Program
                     modifiers: null)
                 ?? throw new MissingMethodException(patchesType.FullName, BodyMethodName);
 
-        List<MethodBase> patched = new Harmony(Entry.HarmonyId).GetPatchedMethods().ToList();
+        // One Harmony id per FixGroup; GetPatchedMethods() only reports the instance it is called on.
+List<MethodBase> patched = Entry.AllHarmonyIds()
+    .SelectMany(id => new Harmony(id).GetPatchedMethods())
+    .Distinct()
+    .ToList();
         Check("Harmony 已挂在 SerializeJoinResponseBody 上", patched.Contains(_body), Describe(patched));
 
         Section("2. 位宽来源与触发条件（模拟 compat_4x5_v1 会话选择）");

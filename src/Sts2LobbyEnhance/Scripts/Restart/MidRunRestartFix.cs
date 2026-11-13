@@ -92,7 +92,15 @@ internal sealed class MidRunRestartFix : ICompatFix
 
     private const int MainMenuWaitFrames = 180;
 
+    /// <summary>Set by <see cref="Applies"/>, consumed by <see cref="Apply"/>. Non-null once <see cref="Applies"/> said yes.</summary>
     private static Shape? _shape;
+
+    /// <summary>Patched methods, resolved by <see cref="Applies"/> together with <see cref="_shape"/>.</summary>
+    private static PatchTargets _targets;
+
+    /// <summary>The host-mod assembly <see cref="Applies"/> resolved, reused by <see cref="Apply"/>.</summary>
+    private static Assembly? _host;
+
     private static PanelShape? _panelShape;
 
     // ---- session teardown suppression (one call, one service) -------------------------------------------
@@ -137,22 +145,53 @@ internal sealed class MidRunRestartFix : ICompatFix
 
     public string Id => "mid-run-restart";
 
-    public bool Applies(in CompatSnapshot snapshot) => snapshot.RequiresPatch;
+    public FixGroup Group => FixGroup.Restart;
+
+    /// <summary>
+    /// Answers "can this repair run on the build that is actually loaded", and resolves every anchor on the way.
+    ///
+    /// <paramref name="snapshot"/> is deliberately not read: none of the six 0.113 breakpoints is a precondition for a
+    /// same-session floor reload. The feature talks to <c>LoadRunLobby</c>, the two <c>NetService</c> classes and the
+    /// host mod's restart entry point, all of which are versioned independently of those flags. Gating on them is what
+    /// made a one-line game patch disable a feature it has nothing to do with.
+    ///
+    /// Resolving here rather than in <see cref="Apply"/> is what keeps the startup report honest: a missing anchor
+    /// becomes "skipped, here is why" instead of a repair that reports itself as applied and then does nothing.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = $"host mod '{Entry.HostModAssemblyName}' is not loaded";
+            return false;
+        }
+
+        if (!TryCapture(host, out Shape? shape, out PatchTargets targets, out string missing))
+        {
+            reason = "missing: " + missing;
+            return false;
+        }
+
+        _host = host;
+        _shape = shape;
+        _targets = targets;
+        reason = string.Empty;
+        return true;
+    }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)
     {
-        Assembly host = Reflect.FindAssembly(Entry.HostModAssemblyName)
-            ?? throw new InvalidOperationException("Host mod assembly is not loaded.");
-
-        _shape = Shape.Capture(host);
+        // Applies() resolved and cached these; reaching Apply without them is a host-contract violation, not a build
+        // problem, so it must not be silently tolerated. The shape itself is only needed at runtime, not here.
+        PatchTargets targets = _targets;
+        Assembly host = _host!;
 
         // Entry point: the room management panel's own "restart" button calls this. Taking over the async stub
         // changes every existing entry point at once (no second button, no divergent behaviour), and skipping the
         // state machine means the mod's "tear the room down and reconnect everyone" flow never runs.
-        Type runtimeType = Reflect.RequireType(host, RuntimeTypeName);
-        MethodInfo startHostedRestart = Reflect.RequireInstanceMethod(runtimeType, "StartHostedRunRestartAsync");
         harmony.Patch(
-            startHostedRestart,
+            targets.StartHostedRestart,
             prefix: new HarmonyMethod(typeof(MidRunRestartFix), nameof(StartHostedRunRestartPrefix))
             {
                 priority = Priority.First
@@ -160,30 +199,26 @@ internal sealed class MidRunRestartFix : ICompatFix
 
         // The only caller of that method is the room-management panel, and it writes our result into a Label that
         // this very flow has already destroyed. Replace its flow so the write cannot reach a freed Godot object.
-        InstallPanelRestartFlowPatch(harmony, host, startHostedRestart);
+        InstallPanelRestartFlowPatch(harmony, host, targets.StartHostedRestart);
 
         // Keeping the session alive across the teardown needs the same one-shot suppression the new-run button
         // uses; both sides call RunManager.CleanUp, so both services are covered.
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(NetHostGameService), "Disconnect", typeof(NetError), typeof(bool)),
+            targets.HostDisconnect,
             prefix: new HarmonyMethod(typeof(MidRunRestartFix), nameof(HostDisconnectPrefix))
             {
                 priority = Priority.First
             });
 
         harmony.Patch(
-            Reflect.RequireInstanceMethod(typeof(NetClientGameService), "Disconnect", typeof(NetError), typeof(bool)),
+            targets.ClientDisconnect,
             prefix: new HarmonyMethod(typeof(MidRunRestartFix), nameof(ClientDisconnectPrefix))
             {
                 priority = Priority.First
             });
 
         harmony.Patch(
-            Reflect.RequireInstanceMethod(
-                typeof(NetClientGameService),
-                "HandshakeSucceeded",
-                typeof(ulong),
-                typeof(PeerVersionInfo)),
+            targets.HandshakeSucceeded,
             postfix: new HarmonyMethod(typeof(MidRunRestartFix), nameof(HandshakeSucceededPostfix))
             {
                 priority = Priority.First
@@ -225,9 +260,11 @@ internal sealed class MidRunRestartFix : ICompatFix
             if (panelType == null)
             {
                 Entry.Warn(
-                    $"mid-run-restart: {PanelTypeName} is not present in the host mod, so its restart flow keeps its " +
-                    "own implementation (a failed restart may then log ObjectDisposedException instead of showing " +
-                    "the failure text).");
+                    "mid-run-restart: DEGRADED — the room-management panel was NOT taken over: " +
+                    $"{PanelTypeName} is not present in this host mod build. The restart itself still works, but a " +
+                    "failed restart will log ObjectDisposedException: 'Godot.Label' instead of showing its failure " +
+                    "text (field log 2026-11-13 PC 1803), because the host mod writes a freed label. This needs a " +
+                    "patch update; nothing else in this fix is affected.");
                 return;
             }
 
@@ -237,6 +274,16 @@ internal sealed class MidRunRestartFix : ICompatFix
                 throw new MissingMemberException(
                     panelType.FullName,
                     $"StartRestartFlowAsync returns {flow.ReturnType.Name}, expected Task");
+            }
+
+            // Arity alone is not enough: Reflect.RequireMethodByName compares the parameter *count* only
+            // (Reflect.cs:60-76), so a future one-parameter overload would be a coin flip. Pin the type.
+            ParameterInfo[] flowParameters = flow.GetParameters();
+            if (flowParameters[0].ParameterType.FullName != RuntimeTypeName)
+            {
+                throw new MissingMemberException(
+                    panelType.FullName,
+                    $"StartRestartFlowAsync takes {flowParameters[0].ParameterType.Name}, expected {RuntimeTypeName}");
             }
 
             _panelShape = PanelShape.Capture(panelType, startHostedRestart);
@@ -254,8 +301,10 @@ internal sealed class MidRunRestartFix : ICompatFix
         catch (Exception exception)
         {
             Entry.Warn(
-                "mid-run-restart: could not take over the room panel's restart flow; the host mod keeps its own " +
-                $"implementation ({exception.GetType().Name}: {exception.Message}).");
+                "mid-run-restart: DEGRADED — the room-management panel was NOT taken over, so a failed restart may " +
+                "log ObjectDisposedException: 'Godot.Label' instead of showing its failure text (field log " +
+                $"2026-11-13 PC 1803). The restart itself still works. Cause: {exception.GetType().Name}: " +
+                $"{exception.Message}");
         }
     }
 
@@ -638,7 +687,23 @@ internal sealed class MidRunRestartFix : ICompatFix
             {
                 bool stillInRun = RunManager.Instance.IsInProgress;
                 Entry.Error($"mid-run-restart: fallback unavailable (stillInRun={stillInRun}); nothing was changed.");
-                ShowInfo(stillInRun ? "重开失败，本局界面已保留。" : "重开失败，已退出本局。请重新加入房间。");
+
+                // stillInRun == true: the run is intact and the host can simply try again, so the session must stay.
+                // stillInRun == false: the run was already torn down but the session is still up, which leaves the
+                // room and its *frozen protocol lease* outliving the run. That is exactly the state that makes the
+                // next "load saved run" fail with "Protocol selection is already owned by Host:... in phase Frozen"
+                // (field log 2026-11-13 1654): the lease is released only when the session ends
+                // (LanConnectLobbyRuntime.cs:3591-3595). The confirmation screen cannot be shown here either (no
+                // menu / no connection), so there is nothing left to recover with — close the room, exactly like the
+                // catch branch below does.
+                if (!stillInRun)
+                {
+                    CloseHostSession(host, "the restart failed after the run was already torn down");
+                }
+
+                ShowInfo(stillInRun
+                    ? "重开失败，本局界面已保留。"
+                    : "重开失败，房间已关闭。请重新建房或加入房间。");
                 return;
             }
 
@@ -1753,6 +1818,376 @@ internal sealed class MidRunRestartFix : ICompatFix
     /// Every member is required: the whole point of the takeover is that the label write is guarded, so a partial
     /// shape must refuse to install rather than install a half-guarded flow.
     /// </summary>
+    // =====================================================================================================
+    // Installability probe
+    // =====================================================================================================
+
+    private const string LoadRunLobbyTypeName = "MegaCrit.Sts2.Core.Multiplayer.Game.Lobby.LoadRunLobby";
+    private const string NetHostGameServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetHostGameService";
+    private const string NetClientGameServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetClientGameService";
+    private const string NetClientDataTypeName = "MegaCrit.Sts2.Core.Entities.Multiplayer.NetClientData";
+    private const string LoadGameScreenTypeName =
+        "MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NMultiplayerLoadGameScreen";
+    private const string MainMenuTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMainMenu";
+    private const string SubmenuStackTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NSubmenuStack";
+    private const string GenericPopupTypeName = "MegaCrit.Sts2.Core.Nodes.Multiplayer.NGenericPopup";
+    private const string ModalContainerTypeName = "MegaCrit.Sts2.Core.Nodes.CommonUi.NModalContainer";
+    private const string ErrorPopupTypeName = "MegaCrit.Sts2.Core.Nodes.CommonUi.NErrorPopup";
+    private const string InputSynchronizerTypeName =
+        "MegaCrit.Sts2.Core.Multiplayer.Game.PeerInput.PeerInputSynchronizer";
+    private const string NetMessageBusTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetMessageBus";
+
+    /// <summary>
+    /// Decides whether this repair can be installed at all, without throwing and without touching the engine.
+    ///
+    /// Rules this method obeys, each for a concrete reason:
+    /// <list type="bullet">
+    /// <item>Every game type is looked up by *name* (<see cref="FindType"/>), never with <c>typeof</c>. A
+    /// <c>typeof</c> of a type that a future game build renamed makes this very method fail to JIT, which would turn
+    /// "one anchor moved" into "the probe itself is broken".</item>
+    /// <item>No <c>Invoke</c>, no <c>Activator</c>, no Godot node, no file system. Resolving a
+    /// <see cref="MethodInfo"/> does not JIT the target, so probing is safe before the game has created anything.</item>
+    /// <item>Every missing anchor is collected, not just the first one: one log line has to say what to fix. The old
+    /// <c>Shape.Capture</c> threw on the first miss, so a build with three renames reported one.</item>
+    /// <item>Nothing is thrown to the caller. The host treats an exception as "this repair failed" and, today, removes
+    /// every patch of the whole mod — a missing optional anchor must not do that.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="host">The loaded host-mod assembly.</param>
+    /// <param name="shape">The reflection anchors the runtime path uses, or <c>null</c> when this returns false.</param>
+    /// <param name="targets">The methods this repair patches, or <c>default</c> when this returns false.</param>
+    /// <param name="missing">Every anchor that could not be resolved, joined for one log line.</param>
+    private static bool TryCapture(
+        Assembly host,
+        out Shape? shape,
+        out PatchTargets targets,
+        out string missing)
+    {
+        List<string> problems = new();
+
+        // ---- host mod: save binding ----
+        Type? bindingType = HostType(host, BindingTypeName, problems);
+        MethodInfo? tryLoad = StaticMethod(
+            problems,
+            bindingType,
+            "TryLoadCurrentMultiplayerRun",
+            "MegaCrit.Sts2.Core.Saves.SerializableRun&",
+            "System.String&");
+        if (tryLoad != null && tryLoad.ReturnType.FullName != "System.Boolean")
+        {
+            problems.Add($"{BindingTypeName}.TryLoadCurrentMultiplayerRun returns {tryLoad.ReturnType.Name}, expected bool");
+        }
+        MethodInfo? buildSaveKey = StaticMethod(
+            problems,
+            bindingType,
+            "BuildSaveKey",
+            "MegaCrit.Sts2.Core.Saves.SerializableRun");
+
+        // ---- host mod: the restart entry point this repair takes over ----
+        Type? runtimeType = HostType(host, RuntimeTypeName, problems);
+        MethodInfo? startRestart = InstanceMethod(problems, runtimeType, "StartHostedRunRestartAsync");
+
+        // ---- host mod: tail_v1 binding probe ----
+        Type? tailType = HostType(host, TailRuntimeTypeName, problems);
+        MethodInfo? getMessageBus = StaticMethod(
+            problems,
+            tailType,
+            "GetMessageBus",
+            "MegaCrit.Sts2.Core.Multiplayer.Game.INetGameService");
+        FieldInfo? bindings = Field(problems, tailType, "_bindings");
+        FieldInfo? writerBindings = Field(problems, tailType, "_writerBindings");
+
+        if (getMessageBus != null && getMessageBus.ReturnType.FullName != NetMessageBusTypeName)
+        {
+            problems.Add(
+                $"{TailRuntimeTypeName}.GetMessageBus returns {getMessageBus.ReturnType.Name}, expected NetMessageBus");
+        }
+
+        if (bindings != null)
+        {
+            Type[] keyed = bindings.FieldType.GetGenericArguments();
+            if (keyed.Length != 2 || keyed[0].FullName != NetMessageBusTypeName)
+            {
+                problems.Add(
+                    $"{TailRuntimeTypeName}._bindings is not a NetMessageBus-keyed dictionary " +
+                    $"(found {bindings.FieldType.Name})");
+            }
+        }
+
+        // ---- game: the lobby we drive and the two services we suppress ----
+        Type? lobbyType = GameType(LoadRunLobbyTypeName, problems);
+        MethodInfo? admit = InstanceMethod(problems, lobbyType, "OnConnectedToClientAsHost", "System.UInt64");
+        if (admit != null && admit.ReturnType.FullName != "System.Void")
+        {
+            problems.Add($"{LoadRunLobbyTypeName}.OnConnectedToClientAsHost no longer returns void");
+        }
+
+        Type? hostService = GameType(NetHostGameServiceTypeName, problems);
+        MethodInfo? hostDisconnect = InstanceMethod(
+            problems,
+            hostService,
+            "Disconnect",
+            "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
+            "System.Boolean");
+        Property(problems, hostService, "ConnectedPeers");
+        InstanceMethod(problems, hostService, "GetVersionInfoForPeer", "System.UInt64");
+
+        Type? clientService = GameType(NetClientGameServiceTypeName, problems);
+        MethodInfo? clientDisconnect = InstanceMethod(
+            problems,
+            clientService,
+            "Disconnect",
+            "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
+            "System.Boolean");
+        MethodInfo? handshake = InstanceMethod(
+            problems,
+            clientService,
+            "HandshakeSucceeded",
+            "System.UInt64",
+            "MegaCrit.Sts2.Core.Multiplayer.PeerVersionInfo");
+
+        // The prefixes/postfixes below take these parameters by name; a rename would break the binding silently.
+        RequireParameterNames(problems, hostDisconnect, "reason");
+        RequireParameterNames(problems, clientDisconnect, "reason");
+        RequireParameterNames(problems, handshake, "peerId", "versionInfo");
+
+        // ---- game: types only referenced inside patch bodies ----
+        //
+        // These are the ones no "install-time" check would otherwise catch: they appear in handler bodies, so a rename
+        // surfaces as a TypeLoadException inside the game's own method the first time the handler runs, where a
+        // try/catch inside the handler cannot help (the parameter types are resolved when the method is JITted).
+        GameType(NetClientDataTypeName, problems);
+        Type? loadScreen = GameType(LoadGameScreenTypeName, problems);
+        Field(problems, loadScreen, "_runLobby");
+        GameType(MainMenuTypeName, problems);
+        GameType(SubmenuStackTypeName, problems);
+        GameType(GenericPopupTypeName, problems);
+        GameType(ModalContainerTypeName, problems);
+        GameType(ErrorPopupTypeName, problems);
+        GameType(InputSynchronizerTypeName, problems);
+
+        if (problems.Count > 0
+            || tryLoad == null
+            || buildSaveKey == null
+            || startRestart == null
+            || tailType == null
+            || getMessageBus == null
+            || bindings == null
+            || writerBindings == null
+            || admit == null
+            || hostDisconnect == null
+            || clientDisconnect == null
+            || handshake == null)
+        {
+            shape = null;
+            targets = default;
+            missing = problems.Count > 0 ? string.Join("; ", problems) : "an anchor resolved to null";
+            return false;
+        }
+
+        shape = new Shape(tryLoad, buildSaveKey, admit, tailType, getMessageBus, bindings, writerBindings);
+        targets = new PatchTargets(startRestart, hostDisconnect, clientDisconnect, handshake);
+        missing = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Methods this repair patches. Separated from <see cref="Shape"/> because they are install-time only.
+    /// </summary>
+    private readonly record struct PatchTargets(
+        MethodInfo StartHostedRestart,
+        MethodInfo HostDisconnect,
+        MethodInfo ClientDisconnect,
+        MethodInfo HandshakeSucceeded);
+
+    private static Type? HostType(Assembly host, string fullName, List<string> problems)
+    {
+        Type? type = host.GetType(fullName, throwOnError: false, ignoreCase: false);
+        if (type == null)
+        {
+            problems.Add($"type {fullName} (host mod)");
+        }
+
+        return type;
+    }
+
+    private static Type? GameType(string fullName, List<string> problems)
+    {
+        Type? type = FindType(fullName);
+        if (type == null)
+        {
+            problems.Add($"type {fullName} (game)");
+        }
+
+        return type;
+    }
+
+    /// <summary>
+    /// Finds a type by full name across the loaded assemblies. No <c>typeof</c>, so a game build that renamed the type
+    /// costs this anchor, not the whole probe.
+    /// </summary>
+    private static Type? FindType(string fullName)
+    {
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try
+            {
+                Type? type = assembly.GetType(fullName, throwOnError: false, ignoreCase: false);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+            catch (Exception)
+            {
+                // Dynamic and reflection-only assemblies refuse GetType; none of them can own a game type.
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Finds one instance method by name and *exact* parameter types.
+    ///
+    /// Arity alone is not enough to bind a patch: <c>Disconnect(NetError, bool)</c> and
+    /// <c>Disconnect(NetError, bool, string)</c> differ in count, but <c>Disconnect(NetError, bool)</c> and
+    /// <c>Disconnect(NetErrorInfo, bool)</c> do not — and patching the wrong one would silently hook an unrelated
+    /// path. Every call site below therefore spells out the parameter types it expects.
+    /// </summary>
+    private static MethodInfo? InstanceMethod(
+        List<string> problems,
+        Type? owner,
+        string name,
+        params string[] parameterTypeNames) =>
+        MatchMethod(problems, owner, name, BindingFlags.Instance, parameterTypeNames);
+
+    private static MethodInfo? StaticMethod(
+        List<string> problems,
+        Type? owner,
+        string name,
+        params string[] parameterTypeNames) =>
+        MatchMethod(problems, owner, name, BindingFlags.Static, parameterTypeNames);
+
+    private static MethodInfo? MatchMethod(
+        List<string> problems,
+        Type? owner,
+        string name,
+        BindingFlags scope,
+        string[] parameterTypeNames)
+    {
+        // A missing owner type was already reported by HostType/GameType; repeating it here would bury the reason.
+        if (owner == null)
+        {
+            return null;
+        }
+
+        MethodInfo[] byName = owner
+            .GetMethods(scope | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal)
+                             && method.GetParameters().Length == parameterTypeNames.Length)
+            .ToArray();
+
+        MethodInfo[] exact = byName
+            .Where(method => ParametersMatch(method.GetParameters(), parameterTypeNames))
+            .ToArray();
+
+        if (exact.Length == 1)
+        {
+            return exact[0];
+        }
+
+        string expected = $"{owner.FullName}.{name}({string.Join(", ", parameterTypeNames)})";
+        if (exact.Length > 1)
+        {
+            problems.Add($"{expected} is ambiguous ({exact.Length} overloads)");
+        }
+        else if (byName.Length > 0)
+        {
+            problems.Add($"{expected} has {byName.Length} same-arity overload(s) with different parameter types");
+        }
+        else
+        {
+            problems.Add($"{expected} (not found)");
+        }
+
+        return null;
+    }
+
+    private static bool ParametersMatch(ParameterInfo[] parameters, string[] parameterTypeNames)
+    {
+        for (int index = 0; index < parameters.Length; index++)
+        {
+            // By-ref parameters report "T&" as their FullName; the call sites spell that out explicitly so a
+            // by-value overload can never be mistaken for the by-ref one.
+            if (!string.Equals(parameters[index].ParameterType.FullName, parameterTypeNames[index], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+
+    /// <summary>
+    /// Verifies the parameter *names* of a method we patch.
+    ///
+    /// Harmony binds a prefix/postfix argument to the target parameter with the same name, so a rename
+    /// (<c>reason</c> to <c>error</c>) silently breaks the binding: the patch either fails to apply or, worse, binds
+    /// nothing and the guard stops guarding. Parameter types are checked separately; this is the name half.
+    /// </summary>
+    private static void RequireParameterNames(List<string> problems, MethodInfo? method, params string[] names)
+    {
+        if (method == null)
+        {
+            return;
+        }
+
+        ParameterInfo[] parameters = method.GetParameters();
+        for (int index = 0; index < parameters.Length && index < names.Length; index++)
+        {
+            if (!string.Equals(parameters[index].Name, names[index], StringComparison.Ordinal))
+            {
+                problems.Add(
+                    $"{method.DeclaringType?.Name}.{method.Name} parameter {index} is '{parameters[index].Name}', " +
+                    $"expected '{names[index]}' (Harmony binds by name)");
+            }
+        }
+    }
+
+    private static FieldInfo? Field(List<string> problems, Type? owner, string name)
+    {
+        if (owner == null)
+        {
+            return null;
+        }
+
+        FieldInfo? field = owner.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (field == null)
+        {
+            problems.Add($"{owner.FullName}.{name}");
+        }
+
+        return field;
+    }
+
+    private static PropertyInfo? Property(List<string> problems, Type? owner, string name)
+    {
+        if (owner == null)
+        {
+            return null;
+        }
+
+        PropertyInfo? property = owner.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (property == null)
+        {
+            problems.Add($"{owner.FullName}.{name}");
+        }
+
+        return property;
+    }
+
     private sealed class PanelShape
     {
         private PanelShape(
@@ -1847,12 +2282,14 @@ internal sealed class MidRunRestartFix : ICompatFix
     }
 
     /// <summary>
-    /// Every reflection anchor, captured once during <see cref="Apply"/>. Anything missing throws with the member
-    /// name, which the host turns into "this repair failed" — the feature never runs half-wired.
+    /// Every reflection anchor the runtime path uses, filled in by <see cref="TryCapture"/> only after all of them
+    /// resolved. Nothing here can be null once <see cref="Apply"/> installed the repair.
     /// </summary>
     private sealed class Shape
     {
-        private Shape(
+        // internal, not private: TryCapture lives in a sibling nested type, and a private
+        // constructor of a nested class is only reachable from its own containing type.
+        internal Shape(
             MethodInfo tryLoadCurrentMultiplayerRun,
             MethodInfo buildSaveKey,
             MethodInfo admitLoadPeer,
@@ -1888,66 +2325,9 @@ internal sealed class MidRunRestartFix : ICompatFix
         /// <summary><c>LanConnectTailMessageRuntime._writerBindings</c> (PacketWriter → session binding).</summary>
         internal FieldInfo TailWriterBindings { get; }
 
-        internal static Shape Capture(Assembly host)
-        {
-            Type binding = Reflect.RequireType(host, BindingTypeName);
-            MethodInfo load = Reflect.RequireStaticMethod(
-                binding,
-                "TryLoadCurrentMultiplayerRun",
-                typeof(SerializableRun).MakeByRefType(),
-                typeof(string).MakeByRefType());
-
-            MethodInfo buildSaveKey = Reflect.RequireStaticMethod(binding, "BuildSaveKey", typeof(SerializableRun));
-
-            MethodInfo admit = Reflect.RequireInstanceMethod(
-                typeof(LoadRunLobby),
-                "OnConnectedToClientAsHost",
-                typeof(ulong));
-            if (admit.ReturnType != typeof(void))
-            {
-                throw new MissingMemberException(typeof(LoadRunLobby).FullName, "OnConnectedToClientAsHost(ulong)");
-            }
-
-            Type tailRuntime = Reflect.RequireType(host, TailRuntimeTypeName);
-            // GetMessageBus is a *static* helper on the runtime; resolve it by name and arity, then verify the
-            // shape we depend on instead of guessing the binding flags.
-            MethodInfo tailGetMessageBus = Reflect.RequireMethodByName(tailRuntime, "GetMessageBus", 1);
-            if (!tailGetMessageBus.IsStatic
-                || tailGetMessageBus.ReturnType != typeof(NetMessageBus)
-                || tailGetMessageBus.GetParameters()[0].ParameterType != typeof(INetGameService))
-            {
-                throw new MissingMemberException(
-                    tailRuntime.FullName,
-                    $"GetMessageBus(INetGameService) is static={tailGetMessageBus.IsStatic} " +
-                    $"and returns {tailGetMessageBus.ReturnType.Name}");
-            }
-
-            FieldInfo tailBindings = Reflect.RequireField(tailRuntime, "_bindings");
-            FieldInfo tailWriterBindings = Reflect.RequireField(tailRuntime, "_writerBindings");
-
-            // _bindings is Dictionary<NetMessageBus, Binding> and Binding is a nested private type, so the
-            // only stable way to reach it is through the field's own generic arguments. ProbeTailBinding only
-            // needs the key type, but the shape is pinned here so a reshuffle fails loudly at startup.
-            Type[] bindingArguments = tailBindings.FieldType.GetGenericArguments();
-            if (bindingArguments.Length != 2 || bindingArguments[0] != typeof(NetMessageBus))
-            {
-                throw new MissingMemberException(
-                    tailRuntime.FullName,
-                    $"_bindings is not a NetMessageBus-keyed dictionary (found {tailBindings.FieldType.Name})");
-            }
-
-            // The roster epoch itself is reset by the shared TailRoster component (see TailRoster.Reset); it
-            // resolves Binding.RequireRoster()/RosterAuthorityState.Reset() on its own so both repairs that
-            // keep a session alive share one contract check.
-
-            return new Shape(
-                load,
-                buildSaveKey,
-                admit,
-                tailRuntime,
-                tailGetMessageBus,
-                tailBindings,
-                tailWriterBindings);
-        }
+        // Resolution lives in TryCapture: it collects every missing anchor instead of throwing on the first one,
+        // and it resolves game types by name so a rename cannot break the probe itself.
+        // The roster epoch is reset by the shared TailRoster component, which resolves
+        // Binding.RequireRoster()/LanConnectRosterAuthorityState.Reset() on its own.
     }
 }
