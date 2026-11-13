@@ -166,6 +166,21 @@ Copy-Item -LiteralPath $coverPng     -Destination (Join-Path $wsDir 'image.png')
 foreach ($name in $contentFiles) {
     Copy-Item -LiteralPath (Join-Path $contentDir $name) -Destination (Join-Path $wsContent $name)
 }
+
+# 条目 ID 必须跟着包走。没有它，上传器会新建第二个工坊条目，旧条目的订阅者迁不过去，
+# 而且条目一旦创建就无法把订阅者转过去 —— 这是整个流程里唯一不可逆的错误。
+$modIdPath = Join-Path $packaging 'mod_id.txt'
+$hasModId = Test-Path $modIdPath
+if ($hasModId) {
+    $modId = ([System.IO.File]::ReadAllText($modIdPath, [System.Text.Encoding]::UTF8)).Trim()
+    if ($modId -notmatch '^\d+$') { Fail ('packaging\mod_id.txt 的内容不是十进制条目 ID：' + $modId) }
+    # 上传器只接受「数字 + 换行」，这里重写一遍，避免 BOM 或空格混进去
+    # LF 而不是 CRLF：包里这份要与仓库里的 packaging\mod_id.txt 逐字节一致
+    [System.IO.File]::WriteAllText((Join-Path $wsDir 'mod_id.txt'), ($modId + [string][char]10), (New-Object System.Text.UTF8Encoding($false)))
+    Write-Ok ('workspace 带上了条目 ID ' + $modId + '（上传是更新，不会新建条目）')
+} else {
+    Write-Warn2 'packaging\mod_id.txt 不存在：这次上传会新建一个工坊条目'
+}
 Write-Ok 'workspace 已复制（workshop.json / image.png / content×4）'
 
 # ---------------------------------------------------------------- 3. CHECKSUMS
@@ -200,6 +215,7 @@ $expected = @(
     'workspace\content\sts2_lobby_enhance.dll',
     'workspace\content\sts2_lobby_enhance.json'
 )
+if ($hasModId) { $expected += 'workspace\mod_id.txt' }
 $actual = @(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object { $_.FullName.Substring($stage.Length + 1) } | Sort-Object)
 $expectedSorted = @($expected | Sort-Object)
 if (($actual -join '|') -ne ($expectedSorted -join '|')) {

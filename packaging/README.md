@@ -7,6 +7,8 @@ This folder is a workspace for the official
 ```
 packaging/
   workshop.json        item title / description / visibility / dependencies
+  mod_id.txt           the workshop item id (3839101755) - without it the next upload
+                       creates a SECOND item, and subscribers cannot be migrated
   image.png            512x512 preview, must stay under 1 MiB (Steam's limit)
   content/             the only thing that is actually uploaded
     sts2_lobby_enhance.dll

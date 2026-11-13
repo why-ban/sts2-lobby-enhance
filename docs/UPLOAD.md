@@ -1,6 +1,10 @@
 # 上传到 Steam 创意工坊
 
-面向本项目的维护者。AppID：**2868840**（Slay the Spire 2）；本模组工坊条目：首次上传后由上传器生成。
+面向本项目的维护者。AppID：**2868840**（Slay the Spire 2）；
+本模组工坊条目：[**3839101755**](https://steamcommunity.com/sharedfiles/filedetails/?id=3839101755)（2026-11-14 上传，公开）。
+
+> **更新必须由创建它的那个 Steam 账号上传**（2026-11-14 是朋友的账号「我是谁七柒呀」）。
+> Steam 工坊条目不能转让作者，换账号上传只会得到一个"没有权限"或一条新条目。
 
 上传工作区是 [`../packaging/`](../packaging/)，它已经是一个合法的工作区，不需要用上传器重新生成。
 
@@ -201,22 +205,25 @@ cd <解压目录>
 
    产物：`dist/sts2-lobby-enhance-v<version>.zip`，内含
    `sts2_lobby_enhance/{dll,json,LICENSE,THIRD_PARTY_NOTICES}` 四个文件。
-4. 上传（**本机没有 `mod_id.txt`，上传前必须先取回**，见 4.3）：
-
-   ```powershell
-   .\ModUploader.exe upload -w "D:\zhuanban\sts2m\work\companion\packaging"
-   ```
+4. 上传。**本机账号没有 AppID 2868840 的许可，所以不由本机上传** —— 走第 9 节的一键上传包，
+   由拥有游戏的账号双击一次。`packaging/mod_id.txt` 已经存在（`3839101755`），打出来的包会
+   带上它，所以那次上传是**更新**这条条目，不会新建第二条。
 
 上传器只做增量设置：它不会删除 `content/` 里已不存在的远端文件（远端内容以本次上传为准，整体替换），
 但**会**按 `workshop.json` 里的 `dependencies` 逐项增删必需物品——见下一节。
 
-### 4.3 `mod_id.txt` 的现状（**上传前必读**）
+### 4.3 `mod_id.txt`（**更新前必读**）
 
-**事实：本工作区没有 `mod_id.txt`。** 2026-11-13 对 `D:\zhuanban\sts2m` 全盘递归搜索，0 命中；
-`packaging/` 下也没有。
+**事实：`packaging/mod_id.txt` 已存在，内容 `3839101755`。**
+11 字节 = 10 个数字 + 换行，无 BOM。它是 2026-11-14 首次上传成功后由上传器写出、随即纳入版本管理的。
 
-**后果：** 按第 3 节的说明，没有这个文件时上传器会**新建**一个工坊条目，而不是更新既有条目；
-旧条目的订阅者拿不到这次更新，而条目一旦创建就无法把订阅者迁过去。
+**它的作用：** 上传器在**工作区**里找 `mod_id.txt` —— 找到就更新那条条目，找不到就**新建**一条。
+工坊条目一旦创建，订阅者**无法**迁移到另一条，所以这个文件丢了就等于永久分裂成两个条目。
+
+**一键上传包会带上它：** `tools/pack-upload-kit` 把 `packaging/mod_id.txt` 复制成
+`workspace/mod_id.txt`，并断言内容是纯数字；打包日志会打印
+`workspace 带上了条目 ID 3839101755（上传是更新，不会新建条目）`。
+`tests` 里的 `WorkshopItemIdIsRecordedSoAnUpdateNeverCreatesASecondItem` 把这条钉死。
 
 **依据强度（诚实标注）：** 本机现在**有**上传器副本（`C:\Users\Administrator\AppData\Local\Temp\sts2uploader\extracted`，
 v0.2.0）。"没有 `mod_id.txt` 就新建条目"这条行为已从**二进制里的命令行帮助原文**核对过，不是推测：
@@ -231,20 +238,19 @@ workspace. If it is also not present, a new item is created.
 `Successfully uploaded '<name>' to the workshop with id <id>`。所以一键上传包在"条目可能只建了一半"
 时会提示先别反复重试（第 9 节）。
 
-**上传前必须做的事（二选一）：**
+**格式要求：** 就是一个十进制数字加换行，不要有 BOM、空格、注释或第二行。
 
-- **条目已存在** → 把 `mod_id.txt` 取回来，放到 `packaging/mod_id.txt`，再上传。
-  它就是一个十进制数字加换行：
+```
+3839101755
+```
 
-  ```
-  3761234567
-  ```
+拿不到文件但知道物品 ID 时，可以用 `-i/--id` 显式指定（见第 3 节）：
+`.\ModUploader.exe upload -w <工作区> -i 3839101755`，但上传成功后仍要把它写回
+`packaging/mod_id.txt` 并提交。
 
-  不要有 BOM、空格、注释或第二行。拿不到文件但知道物品 ID 时，可以用
-  `-i/--id` 显式指定（见第 3 节）：`.\ModUploader.exe upload -w <工作区> -i 3761234567`，
-  但上传成功后仍应让上传器写出 `mod_id.txt` 并立刻纳入版本管理。
-- **首次上传（条目还不存在）** → 确认要新建后直接上传；上传器成功后会在工作区写出
-  `mod_id.txt`，**立刻**把它纳入版本管理，它是后续更新的唯一凭据。
+**如果哪天必须重新建条目**（例如条目被 Steam 删掉）：删掉 `packaging/mod_id.txt`、
+改掉 `WorkshopItemIdIsRecordedSoAnUpdateNeverCreatesASecondItem` 里写死的 ID、重新走一遍上传，
+并在第 9.4 节补一行记录。这是一次性的破坏性操作，**订阅者带不过去**。
 
 ---
 
@@ -329,9 +335,10 @@ pwsh -NoProfile -File tools/pack-upload-kit/test-upload-kit.ps1
 上传器 `steam_appid.txt` 是 `2868840`、`upload.ps1` 落盘时带 **UTF-8 BOM**（PS 5.1 没有 BOM 会整篇乱码）、
 打完后**重新解包**逐文件比对 sha256 与 `CHECKSUMS.txt`。任何一条不满足直接 exit 非 0。
 
-`test-upload-kit.ps1` 覆盖 5 个场景共 24 条断言：干净解压（真实 Steam，本机必然停在
-`k_EResultAccessDenied` → 必须被翻译成「换账号」）、缺文件、文件被改坏、`visibility` 被改回 `private`、
-以及用假上传器验证**成功分支**（条目链接、`上传结果.txt`、`mod_id.txt`）。
+`test-upload-kit.ps1` 覆盖 6 组场景共 28 条断言：包内是否带 `workspace/mod_id.txt`（无 BOM、纯数字）、
+干净解压（真实 Steam，本机必然停在 `k_EResultAccessDenied` → 必须被翻译成「换账号」）、缺文件、
+文件被改坏、`visibility` 被改回 `private`、以及用假上传器验证**成功分支**（条目链接、`上传结果.txt`、
+`mod_id.txt`）。场景 1 会先删掉包里的 `mod_id.txt`，避免对线上条目发写请求。
 
 ### 9.2 包里是什么
 
@@ -340,9 +347,9 @@ sts2-lobby-enhance-upload-kit/
   upload.bat            双击入口（纯 ASCII，chcp 65001）
   upload.ps1            主逻辑（UTF-8 带 BOM）
   README-上传说明.md      给朋友看的一页说明
-  CHECKSUMS.txt         12 个文件的 sha256，脚本自检用
+  CHECKSUMS.txt         13 个文件的 sha256，脚本自检用
   ModUploader/          官方上传器 v0.2.0 三件套
-  workspace/            workshop.json（public）+ image.png + content×4
+  workspace/            workshop.json（public）+ mod_id.txt + image.png + content×4
 ```
 
 ### 9.3 脚本行为（没有任何需要输入的选择题）
@@ -356,7 +363,24 @@ sts2-lobby-enhance-upload-kit/
 5. 无论成功失败都 `Read-Host` 停住窗口；脚本自己 `exit 0`，避免 `upload.bat` 二次 pause。
 
 朋友只需要：解压 → 双击 `upload.bat` → 把 `上传结果.txt` 发回来。
-拿到 `mod_id.txt` 后**立刻**纳入版本管理（放到 `packaging/mod_id.txt`）。
+`workspace/mod_id.txt` 是**包里自带**的，所以对方的每一次上传都是更新同一条目；
+`上传结果.txt` 里也会回显条目 ID 和链接。
 
 > **不要改 `upload.ps1` 的交互模型。** 它的全部价值在于"对方不用做任何判断"：
 > 任何需要输入的分支都会在现场变成一次沟通成本，而现场是没有日志的。
+
+### 9.4 发布记录
+
+| 项 | 值 |
+|---|---|
+| 工坊条目 | **3839101755** · <https://steamcommunity.com/sharedfiles/filedetails/?id=3839101755> |
+| 首次上传 | 2026-11-14 02:30:39（+08:00） |
+| 上传账号 | 朋友的 Steam 账号「我是谁七柒呀」（本机账号没有 AppID 2868840 的许可） |
+| 首次上传用的包 | 6,439,500 B · sha256 `72FEFE34…17365D`（**不含** `mod_id.txt`，只能用于这一次新建） |
+| 当前包（用于以后更新） | 6,439,816 B · sha256 `814BD138…BF26FC`（**含** `mod_id.txt`，上传即更新同一条目） |
+| 内容 | 226,838 B = dll 186,368 + 清单 651 + LICENSE 35,825 + NOTICES 3,994 |
+| 可见性 | public（页面匿名可访问、有订阅按钮） |
+| 必需物品 | 3749766330（游戏大厅 / STS2 LAN Connect） |
+
+**以后每次更新都必须由同一个账号上传。** 工坊条目不支持转让作者；换账号只会得到
+"没有权限"或者第二条新条目。

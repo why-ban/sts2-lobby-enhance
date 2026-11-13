@@ -116,6 +116,34 @@ public sealed class ReleasePackageTests
     }
 
     [Fact]
+    public void WorkshopItemIdIsRecordedSoAnUpdateNeverCreatesASecondItem()
+    {
+        // mod_id.txt is what turns the next upload into an *update*. Losing it is the only
+        // irreversible mistake in this pipeline: the uploader creates a brand-new item and the
+        // existing subscribers cannot be migrated to it. The value is pinned deliberately - if the
+        // item ever has to be recreated, this assertion must be changed by hand, which is exactly
+        // the review moment we want.
+        string path = Path.Combine(Workspace, "mod_id.txt");
+
+        Assert.True(
+            File.Exists(path),
+            "packaging/mod_id.txt is missing. Without it the uploader creates a second workshop item " +
+            "and the subscribers of 3839101755 can never be moved over.");
+
+        byte[] raw = File.ReadAllBytes(path);
+        Assert.False(
+            raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF,
+            "mod_id.txt must not carry a UTF-8 BOM; the uploader parses the file as a plain number.");
+
+        string text = File.ReadAllText(path).Trim();
+        Assert.True(
+            ulong.TryParse(text, out ulong itemId),
+            $"mod_id.txt must contain nothing but a decimal item id; it contains '{text}'.");
+
+        Assert.Equal(3839101755UL, itemId);
+    }
+
+    [Fact]
     public void ContentShipsThePatchManifest()
     {
         string manifestPath = Path.Combine(ContentDirectory, "sts2_lobby_enhance.json");

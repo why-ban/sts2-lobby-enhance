@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     对「创意工坊一键上传包」做端到端验收：解压 → 双击 upload.bat → 看窗口和 上传结果.txt。
@@ -178,11 +178,30 @@ try {
     Write-Host ''
     Write-Host ('验收：' + $Zip) -ForegroundColor White
 
+    # ---------------------------------------------------------------- 0
+    Write-Host ''
+    Write-Host '=== 0. 包内凭据（条目 ID 必须跟着包走） ===' -ForegroundColor Cyan
+    $k = New-Kit 'credential'
+    $idPath = Join-Path $k 'workspace\mod_id.txt'
+    Assert-True '包内带 workspace\mod_id.txt' (Test-Path $idPath)
+    if (Test-Path $idPath) {
+        $idBytes = [System.IO.File]::ReadAllBytes($idPath)
+        $idText = ([System.IO.File]::ReadAllText($idPath, [System.Text.Encoding]::UTF8)).Trim()
+        Assert-True     '条目 ID 是 3839101755' ($idText -eq '3839101755')
+        Assert-True     'mod_id.txt 没有 BOM' (-not ($idBytes.Length -ge 3 -and $idBytes[0] -eq 0xEF -and $idBytes[1] -eq 0xBB))
+        Assert-True     'mod_id.txt 只有数字和换行' ($idBytes.Length -eq 11)
+    }
+
     # ---------------------------------------------------------------- 1
     if (-not $SkipLive) {
         Write-Host ''
         Write-Host '=== 1. 干净解压 + 真实 Steam（本机账号无许可） ===' -ForegroundColor Cyan
         $k = New-Kit 'clean'
+        # 删掉条目 ID 才能复现「首次上传」路径：否则本机会去尝试更新真实条目 3839101755。
+        # 这一步本来就会被 Steam 拒（没有许可），但没必要真的对线上条目发写请求。
+        Remove-Item -LiteralPath (Join-Path $k 'workspace\mod_id.txt') -Force -ErrorAction SilentlyContinue
+        # mod_id.txt 也在 CHECKSUMS.txt 里，删掉它必须重算哈希，否则会先被自检拦住
+        Update-Checksums $k
         $run = Invoke-Kit $k
         $res = Get-ResultText $k
         Assert-True     '退出码 0（脚本自己停住，不会被 bat 二次 pause）' ($run.Code -eq 0)

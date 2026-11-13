@@ -74,7 +74,10 @@ sts2-lobby-enhance-upload-kit/
       THIRD_PARTY_NOTICES
 ```
 
-上传成功后还会多出：`workspace\mod_id.txt`、`ModUploader\mod-uploader.log`、`上传结果.txt`。
+上传成功后还会多出：`ModUploader\mod-uploader.log`、`上传结果.txt`。
+
+`workspace\mod_id.txt` **包里本来就带着**（内容是工坊条目的数字 ID）。它是"更新同一个条目"的凭据，
+删掉它下次上传就会新建第二个条目 —— 所以整个文件夹别删别挪。
 
 ---
 

@@ -130,7 +130,8 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 
 **方式一：Steam 创意工坊（推荐）**
 
-订阅本条目即可。原模组 `sts2_lan_connect`（工坊物品 3749766330）已声明为必需物品，Steam 会一并订阅。
+工坊条目：[**3839101755**](https://steamcommunity.com/sharedfiles/filedetails/?id=3839101755) —— 订阅即可。原模组 `sts2_lan_connect`（工坊物品 3749766330）
+已声明为必需物品，Steam 会一并订阅。
 
 **方式二：手动安装**
 
@@ -452,8 +453,8 @@ are unlocked legitimately.
 
 ### Installation
 
-**Steam Workshop (recommended):** subscribe to this item. The original mod (workshop item 3749766330)
-is declared as a required item, so Steam installs it too.
+**Steam Workshop (recommended):** subscribe to [workshop item 3839101755](https://steamcommunity.com/sharedfiles/filedetails/?id=3839101755). The original mod
+(workshop item 3749766330) is declared as a required item, so Steam installs it too.
 
 **Manual:** create `<game>\mods\sts2_lobby_enhance\` and put
 `sts2_lobby_enhance.dll` and `sts2_lobby_enhance.json` in it. The official mod must also
