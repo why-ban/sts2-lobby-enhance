@@ -372,6 +372,21 @@ try {
     $manifest = [System.IO.File]::ReadAllText((Join-Path $contentDir 'sts2_lobby_enhance.json'), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     $script:Version = [string]$manifest.version
 
+    # 混合版本检测。覆盖解压最容易出的错是「新脚本 + 旧内容」：资源管理器逐项问是否替换，
+    # 误点一次「否」就会留下这种文件夹，然后它会安安静静地把上一版传上去。
+    # README 里的版本号由打包脚本从模组清单填入，两者不一致就说明这个文件夹混了两个版本。
+    $readmePath = Join-Path $root 'README-上传说明.md'
+    if (Test-Path $readmePath) {
+        $readmeText = [System.IO.File]::ReadAllText($readmePath, [System.Text.Encoding]::UTF8)
+        $declared = [regex]::Match($readmeText, '版本：\*\*(\d+\.\d+\.\d+)\*\*')
+        if ($declared.Success -and $declared.Groups[1].Value -ne $script:Version) {
+            Stop-Step ('这个文件夹里混了两个版本：说明文件写的是 ' + $declared.Groups[1].Value + '，内容清单是 ' + $script:Version + '。') @(
+                '把整个文件夹删掉，重新解压新的压缩包。',
+                '不要在旧文件夹上覆盖解压：资源管理器会逐项询问是否替换，漏掉一次就会变成这种混合状态。'
+            )
+        }
+    }
+
     $sumPath = Join-Path $root 'CHECKSUMS.txt'
     if (Test-Path $sumPath) {
         $bad = New-Object System.Collections.Generic.List[string]

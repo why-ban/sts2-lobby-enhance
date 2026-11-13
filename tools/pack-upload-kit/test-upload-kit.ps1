@@ -13,6 +13,7 @@
       3. 文件被改坏（image.png 多一个字节 → 必须报哈希不符，且不去连 Steam）
       4. visibility 被改成 private（必须在上传前拦住）
       5. 假上传器模拟成功（必须打印条目链接、写对 上传结果.txt）
+      6. 覆盖解压造成的「新脚本 + 旧内容」混合版本（必须拦住，不许上传）
 
     场景 1 会真的调用 Steam 接口（在无许可账号上只会得到 k_EResultAccessDenied，不会创建条目）。
     不想碰 Steam 就加 -SkipLive。
@@ -278,6 +279,20 @@ try {
     Assert-Contains    '窗口里说了上传成功' $run.Text '上传成功，条目已经公开'
     Assert-True        '上传器把 mod_id.txt 写进了 workspace' (Test-Path (Join-Path $k 'workspace\mod_id.txt'))
     Assert-NotContains '没把成功误判成失败' $run.Text '上传没有成功'
+
+    # ---------------------------------------------------------------- 6
+    Write-Host ''
+    Write-Host '=== 6. 覆盖解压留下的混合版本（新脚本 + 旧内容） ===' -ForegroundColor Cyan
+    $k = New-Kit 'mixed'
+    $mf = Join-Path $k 'workspace\content\sts2_lobby_enhance.json'
+    $raw = [System.IO.File]::ReadAllText($mf, [System.Text.Encoding]::UTF8)
+    $raw = $raw -replace '"version"\s*:\s*"[^"]*"', '"version": "9.9.9"'
+    [System.IO.File]::WriteAllText($mf, $raw, (New-Object System.Text.UTF8Encoding($false)))
+    $run = Invoke-Kit $k
+    $res = Get-ResultText $k
+    Assert-Contains    '认出文件夹混了两个版本' $res '混了两个版本'
+    Assert-Contains    '给出「删掉重解」的指令' $res '把整个文件夹删掉'
+    Assert-NotContains '没有去连 Steam' $run.Text 'Initializing Steam'
 
     Write-Host ''
     if ($script:fail -eq 0) {
