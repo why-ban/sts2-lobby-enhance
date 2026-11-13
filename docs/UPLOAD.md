@@ -99,7 +99,7 @@ pwsh -NoProfile -File tools/pack-release/pack-release.ps1
 | `content/*.dll` 与当前构建逐字节一致 | 必须 | 本仓库测试 |
 | `dist/` 里的发布包与 `content/` 逐字节一致（且只有一个候选包） | 必须 | 本仓库测试（`dist/` 存在时）+ `tools/pack-release` |
 | `dependencies` 含 `3749766330` | 必须 | 本仓库测试 |
-| `workshop.json` 的 `visibility` | 首次上传保持 `private` | 人工 |
+| `workshop.json` 的 `visibility` | **必须是 `public`**（一次性公开上传，不做先私有再公开） | 本仓库测试 + `tools/pack-upload-kit` |
 | 版本号 | `content/sts2_lobby_enhance.json` 与 `CHANGELOG.md` 一致 | 人工 |
 
 `dotnet test tests` 通过即表示表格里"本仓库测试"那几行都成立。
@@ -107,6 +107,10 @@ pwsh -NoProfile -File tools/pack-release/pack-release.ps1
 ---
 
 ## 3. 首次上传
+
+> **真实上传不由本机执行。** 本机的 Steam 账号没有 AppID 2868840 的许可，创建工坊条目会被
+> `k_EResultAccessDenied` 拒绝（见第 7 节最后一行）。实际流程是：打「一键上传包」交给拥有游戏的
+> 账号，对方双击一次（第 9 节）。下面这段是上传器本身的行为说明，用来理解到底发生了什么。
 
 ```powershell
 # 1) 进入上传器所在目录（steam_appid.txt 必须在这里）
@@ -214,10 +218,18 @@ cd <解压目录>
 **后果：** 按第 3 节的说明，没有这个文件时上传器会**新建**一个工坊条目，而不是更新既有条目；
 旧条目的订阅者拿不到这次更新，而条目一旦创建就无法把订阅者迁过去。
 
-**依据强度（诚实标注）：** "没有 `mod_id.txt` 就新建条目"这条行为，来自上传器 v0.2.0 的源码
-（第 5 节开头那句"这些行为来自上传器 v0.2.0 源码，不是推测"）。但**本机没有上传器副本**
-（全盘搜索 `ModUploader*` 同样 0 命中），本轮也无法联网复核，所以这条依据本轮**未确证**。
-如果它其实是错的，本节和 4.2 的第 4 步都要跟着改。
+**依据强度（诚实标注）：** 本机现在**有**上传器副本（`C:\Users\Administrator\AppData\Local\Temp\sts2uploader\extracted`，
+v0.2.0）。"没有 `mod_id.txt` 就新建条目"这条行为已从**二进制里的命令行帮助原文**核对过，不是推测：
+
+```
+The ID of the workshop item to update. If this is not specified, we'll look for mod_id.txt in the
+workspace. If it is also not present, a new item is created.
+```
+
+仍**未确证**的一点：条目创建成功、但后续某一步（例如设置可见性）失败时，`mod_id.txt` 会不会
+已经被写出。上传器的用户可见输出里没有"新建成功"这一行，只有最后那句
+`Successfully uploaded '<name>' to the workshop with id <id>`。所以一键上传包在"条目可能只建了一半"
+时会提示先别反复重试（第 9 节）。
 
 **上传前必须做的事（二选一）：**
 
@@ -238,7 +250,8 @@ cd <解压目录>
 
 ## 5. workshop.json 各字段的实际行为
 
-这些行为来自上传器 v0.2.0 源码，不是推测：
+这些行为来自上传器 v0.2.0 二进制里的命令行帮助、运行日志与用户可见文案，不是推测
+（本机副本：`C:\Users\Administrator\AppData\Local\Temp\sts2uploader\extracted`）：
 
 | 字段 | 行为 |
 |------|------|
@@ -258,11 +271,10 @@ cd <解压目录>
 1. 打开条目页面，确认：
    - 标题、描述（BBCode 是否正常渲染）、预览图正确；
    - "必需物品"里能看到 `sts2_lan_connect`（3749766330）；
-   - 可见性是 Private。
+   - 可见性是 **Public** —— `packaging/workshop.json` 写的就是 `public`，**一次上传即公开**，
+     没有"先私有看一眼再公开"这一步（作者 2026-11-14 明确要求直接公开）。
 2. 用另一个账号或本机订阅一次，验证能正常下载并加载（日志出现 `[lobby-enhance] ... applied=9 ... failed=0`）。
-3. 确认无误后，把 `packaging/workshop.json` 的 `visibility` 改成 `public` 再上传一次，
-   或者直接在网页上改成 Public（两者等价；改 JSON 的好处是仓库里能留下记录）。
-4. 如果 Steam 提示需要先接受工坊法律协议，请在浏览器里接受后重新上传：
+3. 如果 Steam 提示需要先接受工坊法律协议，请在浏览器里接受后重新上传：
    `https://steamcommunity.com/sharedfiles/workshoplegalagreement`
 5. **上传账号必须拥有本游戏。** 2026-11-14 实测：在没有 AppID 2868840 许可的账号上，
    上传器能登录、能初始化 Steam，但创建条目直接返回 `k_EResultAccessDenied`，
@@ -285,6 +297,7 @@ cd <解压目录>
 | 上传成功但条目仍是隐藏 | 未接受工坊法律协议 | 接受协议后重新上传 |
 | `Failed to create workshop item! Result: k_EResultAccessDenied` | **该 Steam 账号没有本游戏（AppID 2868840）的许可**。创建工坊条目要求账号拥有该 AppID，不是"协议没接受" | 换用**拥有本游戏**的账号上传。判据：Steam 日志 `E:\steam\logs\workshop_log.txt` 里会出现 `Create new workshop item of type Community for AppID 2868840 : ... (Access Denied)`；游戏自己的日志里也能看到 `Steam is enabled, we will write saves to steam storage. Enabled for account: True, app: False`（`app: False` 就是没有该 AppID 的许可） |
 | 需要更多信息 | 上传器会在其所在目录写 `mod-uploader.log` | 查看该日志 |
+| 一键上传包（交给朋友跑的那个）报错 | 包里的 `upload.ps1` 会把已知错误翻译成「原因 + 怎么办」 | 让对方把 `上传结果.txt` 发回来；**不要让对方自己判断或反复重试**（条目可能只建了一半） |
 
 ---
 
@@ -295,3 +308,55 @@ cd <解压目录>
   删除后 `mod_id.txt` 仍指向旧 ID，下次上传会报"不存在"——如果确实要重新开始，删掉 `mod_id.txt`。
 - **回滚内容**：从版本库取回上一版的 `content/`（或直接切回上一个提交重新构建），再上传一次即可；
   工坊内容以最近一次上传为准。
+
+---
+
+## 9. 一键上传包（交给拥有游戏的账号代传）
+
+因为本机账号没有 AppID 2868840 的许可，真实上传走这条路：**打一个包，对方双击一次**。
+
+### 9.1 打与验收
+
+```powershell
+# 打包（产物：dist/sts2-lobby-enhance-upload-kit.zip + dist/upload-kit/ 暂存目录）
+pwsh -NoProfile -File tools/pack-upload-kit/pack-upload-kit.ps1 -Force
+
+# 验收（解压 → 双击 upload.bat → 断言窗口与 上传结果.txt 的每一句话）
+pwsh -NoProfile -File tools/pack-upload-kit/test-upload-kit.ps1
+```
+
+`pack-upload-kit.ps1` 会强制检查：`workshop.json` 的 `visibility` 是 `public`、`content/` 正好 4 个文件、
+上传器 `steam_appid.txt` 是 `2868840`、`upload.ps1` 落盘时带 **UTF-8 BOM**（PS 5.1 没有 BOM 会整篇乱码）、
+打完后**重新解包**逐文件比对 sha256 与 `CHECKSUMS.txt`。任何一条不满足直接 exit 非 0。
+
+`test-upload-kit.ps1` 覆盖 5 个场景共 24 条断言：干净解压（真实 Steam，本机必然停在
+`k_EResultAccessDenied` → 必须被翻译成「换账号」）、缺文件、文件被改坏、`visibility` 被改回 `private`、
+以及用假上传器验证**成功分支**（条目链接、`上传结果.txt`、`mod_id.txt`）。
+
+### 9.2 包里是什么
+
+```
+sts2-lobby-enhance-upload-kit/
+  upload.bat            双击入口（纯 ASCII，chcp 65001）
+  upload.ps1            主逻辑（UTF-8 带 BOM）
+  README-上传说明.md      给朋友看的一页说明
+  CHECKSUMS.txt         12 个文件的 sha256，脚本自检用
+  ModUploader/          官方上传器 v0.2.0 三件套
+  workspace/            workshop.json（public）+ image.png + content×4
+```
+
+### 9.3 脚本行为（没有任何需要输入的选择题）
+
+1. 自检：文件齐不齐、哈希对不对、`visibility` 是不是 `public`。
+2. 检查 Steam 进程在不在。
+3. 把上一次的 `ModUploader\mod-uploader.log` 改名成 `mod-uploader.previous.log`，
+   然后在 `ModUploader\` 目录里跑 `ModUploader.exe upload -w <workspace>`。
+4. 按日志把失败翻译成人话（无许可 / 未接受法律协议 / 离线 / 没登录 / 内容上传失败 / 条目已被删 …），
+   并把「原因 + 怎么办 + 完整日志」写进同目录的 **`上传结果.txt`**。
+5. 无论成功失败都 `Read-Host` 停住窗口；脚本自己 `exit 0`，避免 `upload.bat` 二次 pause。
+
+朋友只需要：解压 → 双击 `upload.bat` → 把 `上传结果.txt` 发回来。
+拿到 `mod_id.txt` 后**立刻**纳入版本管理（放到 `packaging/mod_id.txt`）。
+
+> **不要改 `upload.ps1` 的交互模型。** 它的全部价值在于"对方不用做任何判断"：
+> 任何需要输入的分支都会在现场变成一次沟通成本，而现场是没有日志的。

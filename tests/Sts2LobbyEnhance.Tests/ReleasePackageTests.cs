@@ -87,8 +87,10 @@ public sealed class ReleasePackageTests
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("description").GetString()));
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("changeNote").GetString()));
 
-        // Private until the author has uploaded and inspected the item once.
-        Assert.Equal("private", root.GetProperty("visibility").GetString());
+        // Public. The maintainer's own account cannot upload at all (no app licence), so the item is
+        // published through a licensed friend running the one-click upload kit. That flow has no review
+        // step by design, therefore the workspace must already say "public" when the kit runs.
+        Assert.Equal("public", root.GetProperty("visibility").GetString());
 
         Assert.Equal(JsonValueKind.Array, root.GetProperty("tags").ValueKind);
         Assert.Equal(JsonValueKind.Array, root.GetProperty("contentDescriptors").ValueKind);
