@@ -264,6 +264,10 @@ cd <解压目录>
    或者直接在网页上改成 Public（两者等价；改 JSON 的好处是仓库里能留下记录）。
 4. 如果 Steam 提示需要先接受工坊法律协议，请在浏览器里接受后重新上传：
    `https://steamcommunity.com/sharedfiles/workshoplegalagreement`
+5. **上传账号必须拥有本游戏。** 2026-11-14 实测：在没有 AppID 2868840 许可的账号上，
+   上传器能登录、能初始化 Steam，但创建条目直接返回 `k_EResultAccessDenied`，
+   Steam 日志写明 `Create new workshop item ... (Access Denied)`。这不是协议问题，换账号才能解决。
+   工作区与发布包本身不受影响，任何拥有游戏的账号拿同一份 `packaging/` 目录都能上传。
 
 ---
 
@@ -279,6 +283,7 @@ cd <解压目录>
 | `Failed to upload content!` | `content/` 路径不可读或文件被占用 | 关闭占用 DLL 的进程后重试 |
 | `Tried to upload to workshop item with ID ... but it doesn't exist!` | `mod_id.txt` 指向已删除的条目 | 确认要新建条目后删除 `mod_id.txt`，或用 `-i` 指定正确 ID |
 | 上传成功但条目仍是隐藏 | 未接受工坊法律协议 | 接受协议后重新上传 |
+| `Failed to create workshop item! Result: k_EResultAccessDenied` | **该 Steam 账号没有本游戏（AppID 2868840）的许可**。创建工坊条目要求账号拥有该 AppID，不是"协议没接受" | 换用**拥有本游戏**的账号上传。判据：Steam 日志 `E:\steam\logs\workshop_log.txt` 里会出现 `Create new workshop item of type Community for AppID 2868840 : ... (Access Denied)`；游戏自己的日志里也能看到 `Steam is enabled, we will write saves to steam storage. Enabled for account: True, app: False`（`app: False` 就是没有该 AppID 的许可） |
 | 需要更多信息 | 上传器会在其所在目录写 `mod-uploader.log` | 查看该日志 |
 
 ---
