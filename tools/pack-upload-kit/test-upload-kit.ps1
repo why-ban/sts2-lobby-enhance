@@ -194,6 +194,19 @@ try {
     }
 
     # ---------------------------------------------------------------- 1
+    #
+    # 场景 1 要求 Steam 正在运行：它验证的是「上传器真的连上 Steam 之后，失败被翻译成人话」。
+    # Steam 不在时不能硬跑——脚本会（正确地）停在「Steam 没有运行」，那不是要验的路径，
+    # 继续断言只会产生一堆假失败。明确跳过并说明原因，比伪装成通过或伪装成失败都诚实。
+    $steamRunning = [bool](Get-Process -Name steam -ErrorAction SilentlyContinue)
+    if (-not $SkipLive -and -not $steamRunning) {
+        Write-Host ''
+        Write-Host '=== 1. 干净解压 + 真实 Steam ===' -ForegroundColor Cyan
+        Write-Host '  SKIP  Steam 没有运行。场景 1 需要真实 Steam 才能验证「连上 Steam 后的失败翻译」，' -ForegroundColor Yellow
+        Write-Host '        跳过它不会掩盖任何东西：其余 5 个场景不依赖 Steam。要跑全量请先打开 Steam。' -ForegroundColor Yellow
+        $SkipLive = $true
+    }
+
     if (-not $SkipLive) {
         Write-Host ''
         Write-Host '=== 1. 干净解压 + 真实 Steam（本机账号无许可） ===' -ForegroundColor Cyan
@@ -265,6 +278,8 @@ try {
     Write-Host ''
     Write-Host '=== 5. 假上传器模拟成功（验收成功分支） ===' -ForegroundColor Cyan
     $mockOut = New-MockUploader
+    # 场景 5 换掉了真上传器，Steam 不参与；逃生口只作用在「Steam 进程存在」这一条前置检查上。
+    $env:LOBBY_ENHANCE_KIT_SKIP_STEAM = '1'
     $k = New-Kit 'success'
     Remove-Item -LiteralPath (Join-Path $k 'ModUploader') -Recurse -Force
     New-Item -ItemType Directory -Path (Join-Path $k 'ModUploader') -Force | Out-Null
@@ -279,6 +294,7 @@ try {
     Assert-Contains    '窗口里说了上传成功' $run.Text '上传成功，条目已经公开'
     Assert-True        '上传器把 mod_id.txt 写进了 workspace' (Test-Path (Join-Path $k 'workspace\mod_id.txt'))
     Assert-NotContains '没把成功误判成失败' $run.Text '上传没有成功'
+    $env:LOBBY_ENHANCE_KIT_SKIP_STEAM = $null
 
     # ---------------------------------------------------------------- 6
     Write-Host ''

@@ -21,7 +21,7 @@
 | 兼容修复 · 0.113 新模式 | **1 项** | 客户端加入极速 / 恐惧房间时，官方模组的推屏逻辑认不出新模式 |
 | 便利功能 | **4 项** | 局终新开一局、局中重开本层、极速 / 恐惧建房、解锁这两个模式 |
 
-合计 **10 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
+合计 **11 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
 
 ### 兼容修复：6 个元数据断点
 
@@ -48,7 +48,7 @@
 上表不是抄来的结论：`tests/` 里的 `BreakpointRegressionTests` 扫描官方 DLL 的 22,774 个元数据候选，
 断言"恰好这 6 个无法解析"；`GameApiShapeTests` 则直接读 `sts2.dll` 的元数据，断言每个断点的新旧形态。
 
-### 十项修复清单
+### 十一项修复清单
 
 | # | id | 类别 | 解决什么 | 用户看到什么 |
 |---|----|------|----------|--------------|
@@ -60,9 +60,26 @@
 | 6 | `new-run-button` | 功能 | 局终结算页由房主一键把全房带回准备页，见下节 | 不用重建房间、不用重新找队友 |
 | 7 | `mid-run-restart` | 功能 | 局中回到本层开头，见下节 | 打错了不用退房重开 |
 | 8 | `extra-game-modes` | 功能 | 建房选择器新增极速 / 恐惧；大厅房间卡片也像「自定义」一样标注「极速」「恐惧」，见下节 | 大厅能选这两个模式，房间列表里也看得出类型 |
-| 9 | `unlock-extra-modes` | 功能 | 装补丁即可使用这两个模式，见下节 | 不必先打完时间线 |
+| 9 | `room-card-pill` | 功能 | 大厅房间卡片标注「极速」「恐惧」（从 `extra-game-modes` 拆出的独立项，纯装饰、可单独失败而不牵连其它修复） | 房间列表里看得出模式 |
+| 10 | `new-protocol-only` | 功能 | 建房时只保留「新协议」，隐藏「兼容旧版 Mod」入口，见下节 | 不用再在两种协议之间做选择 |
+| 11 | `unlock-extra-modes` | 功能 | 装补丁即可使用这两个模式，见下节 | 不必先打完时间线 |
 
 ### 功能详解
+
+#### 建房只用新协议（`new-protocol-only`）
+
+官方模组建房时会让房主在「兼容旧版 Mod」（协议 id 300）和「新协议」（id 301）之间二选一。本补丁把旧协议
+那个**入口隐藏**，只留「新协议」，并默认选中它。
+
+**为什么**：RitsuLib 是很多模组的依赖库，而官方模组明确不允许在旧协议房间里启用它
+（`LanConnectCreateRoomIntent.cs:17-19` 直接抛 `RitsuLibNotAllowedInCompat`）。两种协议在联机体验上
+没有区别，所以同时摆出两个选项只会让人选错。
+
+**没有删任何东西**：按钮、说明文字、协议 id、以及背后所有处理旧协议的代码都原样保留。
+**加入旧协议房间完全不受影响**——那条路径读的是房间广播的协议，和这个对话框无关。
+
+**会自己让位**：只有当上游仍然同时提供两个协议按钮、并且它自己的判定认为「新协议当前可选」时才动手。
+如果联机消息注册表没就绪（此时新协议不可用），旧按钮是唯一能建房的方式，就什么都不隐藏。
 
 #### 局终「新开一局」（`new-run-button`）
 
@@ -166,14 +183,14 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 [lobby-enhance] applied: extra-game-modes
 [lobby-enhance] applied: room-card-pill
 [lobby-enhance] applied: unlock-extra-modes
-[lobby-enhance] summary: applied=10[join-flow,join-screen-modes,host-wire,tail-error-paths,
-          abandon-run,new-run-button,mid-run-restart,extra-game-modes,room-card-pill,
-          unlock-extra-modes] skipped=0[] failed=0
+[lobby-enhance] summary: applied=11[join-flow,join-screen-modes,host-wire,tail-error-paths,
+          abandon-run,new-run-button,mid-run-restart,extra-game-modes,new-protocol-only,
+          room-card-pill,unlock-extra-modes] skipped=0[] failed=0
 ```
 
 判定标准：
 
-- `applied=10 ... failed=0` → 10 项修复全部装上。
+- `applied=11 ... failed=0` → 11 项修复全部装上。
 - `skipped=<n>` → 有 n 项判断为「这个构建不需要」，每一项都会单独打印原因
   （形如 `skipped: <id>: missing: <具体锚点>`）。
 - 出现 `no repair reported itself as needed` → 这个构建不需要任何修复，什么都没装（正常状态）。
@@ -188,7 +205,7 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 # 1) 只校验 6 个元数据断点的判定结果（不安装任何补丁）
 dotnet run --project tools/probe-check -c Release
 
-# 2) 跑 Entry.RunSilently()，确认 10 项修复真的挂上了
+# 2) 跑 Entry.RunSilently()，确认 11 项修复真的挂上了
 dotnet run --project tools/smoke-test -c Release
 
 # 3) 补丁依赖的每一个上游反射成员（30 条契约）
@@ -223,7 +240,7 @@ dotnet test tests
 5. **发布工作区**：`packaging/` 结构符合官方上传器要求，`image.png` 是 <1 MiB 的正方形 PNG，
    `content/` 只有 4 个文件、绝不含官方模组的任何文件，且其中的 DLL 与当前构建逐字节一致。
 6. **修复清单**：`FixRegistryTests`（4 个用例）断言 `Entry.cs` 里 `CompatFixes.Build()` 产出的 id
-   **集合与顺序**就是那 10 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
+   **集合与顺序**就是那 11 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
    `join-screen-modes` 的分派、`unlock-extra-modes` 的两个 epoch 与「不写盘」、`mid-run-restart` 的反射锚点。
 7. **反假绿闸门**：`GameDependentCoverageTests`（1 个用例）检查「依赖游戏 DLL 的那些用例真的跑过了」——
    22 个用例在缺输入时会静默跳过，这条断言让「全绿但其实没跑」变成红色（可用
@@ -276,7 +293,7 @@ dotnet test tests
 6. 局中重开：打到第二层中途 → 房主点「重开一局」→ 全房回到本层开头，无需逐人确认。
 7. 局终新开一局：打完一局 → 结算页点「新开一局」→ 全房回到对应模式的准备页；
    同时确认客户端结算页显示了提示文案。
-8. 双方日志都没有 `FAILED:`，且都有 `applied=10`。
+8. 双方日志都没有 `FAILED:`，且都有 `applied=11`。
 
 ### 构建与发布
 
@@ -291,7 +308,7 @@ pwsh -File packaging/build-content.ps1
 python packaging/make-image.py
 ```
 
-发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（10 项 applied）+
+发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（11 项 applied）+
 `tools/contract-check`（30 条契约）。
 
 > **官方模组升级后必须重跑 `tools/wire-verify`。** `host-wire` 用 `Priority.First` 覆盖宿主自己的
@@ -372,7 +389,7 @@ to take over a *readable* caller or an async stub.
 exactly these six fail to resolve; `GameApiShapeTests` reads the game's metadata directly and asserts
 each old/new shape.
 
-### The ten fixes
+### The eleven fixes
 
 | # | id | Kind | What it solves | What the player sees |
 |---|----|------|----------------|----------------------|
@@ -474,12 +491,12 @@ be installed (workshop, or `<game>\mods\sts2_lan_connect\`).
 Search the game log for `[lobby-enhance]`. On 0.113 the expected summary line is:
 
 ```
-[lobby-enhance] summary: applied=10[join-flow,join-screen-modes,host-wire,tail-error-paths,
-          abandon-run,new-run-button,mid-run-restart,extra-game-modes,room-card-pill,
-          unlock-extra-modes] skipped=0[] failed=0
+[lobby-enhance] summary: applied=11[join-flow,join-screen-modes,host-wire,tail-error-paths,
+          abandon-run,new-run-button,mid-run-restart,extra-game-modes,new-protocol-only,
+          room-card-pill,unlock-extra-modes] skipped=0[] failed=0
 ```
 
-- `applied=10 ... failed=0` — all ten fixes installed.
+- `applied=11 ... failed=0` — all eleven fixes installed.
 - `skipped=<n>` — n repairs decided this build does not need them; each prints its own reason
   (`skipped: <id>: missing: <anchor>`).
 - `no repair reported itself as needed` — this build needs no repair at all; nothing was installed (normal).
@@ -594,7 +611,7 @@ but `GameDependentCoverageTests` then fails on purpose: "green" must not mean "n
    that floor with no per-player confirmation.
 7. New run: finish a run, press "new run" on the game-over screen — the room returns to the lobby for
    the same mode, and the client-side hint is visible.
-8. Neither log contains `FAILED:`, and both contain `applied=10`.
+8. Neither log contains `FAILED:`, and both contain `applied=11`.
 
 ### Build and test
 

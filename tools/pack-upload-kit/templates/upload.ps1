@@ -372,6 +372,14 @@ try {
     $manifest = [System.IO.File]::ReadAllText((Join-Path $contentDir 'sts2_lobby_enhance.json'), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     $script:Version = [string]$manifest.version
 
+    # 可见性是包本身的性质，不是上传时才成立的条件：先查它，才能在还没碰 Steam 的时候就把
+    # 「这个包配错了」说出来。排在 Steam 检查之后会让「Steam 没开」掩盖掉真正的配置问题。
+    if ($script:Visible -ne 'public') {
+        Stop-Step ('workshop.json 里的可见性是「' + $script:Visible + '」，不是 public。') @(
+            '上传包被改动过，请重新解压整个压缩包。'
+        )
+    }
+
     # 混合版本检测。覆盖解压最容易出的错是「新脚本 + 旧内容」：资源管理器逐项问是否替换，
     # 误点一次「否」就会留下这种文件夹，然后它会安安静静地把上一版传上去。
     # README 里的版本号由打包脚本从模组清单填入，两者不一致就说明这个文件夹混了两个版本。
@@ -413,11 +421,18 @@ try {
     # ---------------------------------------------------------- 2/3 Steam
     Write-Step '2/3 检查 Steam'
 
-    $steam = Get-Process -Name steam -ErrorAction SilentlyContinue
-    if (-not $steam) {
-        Stop-Step 'Steam 没有运行。' @('先打开 Steam 客户端并登录（用拥有《杀戮尖塔 2》的账号），然后再双击 upload.bat。')
+    # 逃生口只给仓库自带的验收脚本用（tools/pack-upload-kit/test-upload-kit.ps1 会用假上传器验成功分支，
+    # 那条路径不需要 Steam）。真实使用者永远不会设置这个变量；即使设置了，下面也会打印一行明确提示，
+    # 不会有任何一步在"看起来正常"的情况下继续。
+    if ($env:LOBBY_ENHANCE_KIT_SKIP_STEAM -eq '1') {
+        Write-Warn2 '注意：已跳过 Steam 进程检查（LOBBY_ENHANCE_KIT_SKIP_STEAM=1，仅供自动化验收使用）'
+    } else {
+        $steam = Get-Process -Name steam -ErrorAction SilentlyContinue
+        if (-not $steam) {
+            Stop-Step 'Steam 没有运行。' @('先打开 Steam 客户端并登录（用拥有《杀戮尖塔 2》的账号），然后再双击 upload.bat。')
+        }
+        Write-Ok 'Steam 正在运行'
     }
-    Write-Ok 'Steam 正在运行'
 
     # ---------------------------------------------------------- 3/3 上传
     Write-Step '3/3 上传到创意工坊'
@@ -425,10 +440,6 @@ try {
     Write-Note ('标题    : ' + $script:Title)
     Write-Note ('版本    : ' + $script:Version)
     Write-Note ('可见性  : ' + $script:Visible)
-
-    if ($script:Visible -ne 'public') {
-        Stop-Step ('workshop.json 里的可见性是「' + $script:Visible + '」，不是 public。') @('上传包被改动过，请重新解压整个压缩包。')
-    }
 
     $existingId = ''
     foreach ($candidate in @((Join-Path $workspace 'mod_id.txt'), (Join-Path $toolDir 'mod_id.txt'))) {
