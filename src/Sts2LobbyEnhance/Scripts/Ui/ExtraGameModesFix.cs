@@ -712,7 +712,7 @@ internal sealed class ExtraGameModesFix : ICompatFix
             // Instance, not static: the real seam is "private Control BuildCreateDialog()" on the overlay
             // (dec-official LanConnectLobbyOverlay.cs:6314) and the postfix takes __instance. Demanding static
             // here disabled this whole repair on the shipped 0.6.3 build — the probe was wrong, not the host.
-            MethodInfo? buildCreateDialog = Unique(overlay, "BuildCreateDialog", 0, missing);
+            MethodInfo? buildCreateDialog = ReflectScope.UniqueMethod(overlay, "BuildCreateDialog", 0, missing);
 
             FieldInfo? roomTypeOption = overlay?.GetField(
                 "_roomTypeOption",
@@ -722,7 +722,7 @@ internal sealed class ExtraGameModesFix : ICompatFix
                 missing.Add(OverlayShort + "._roomTypeOption (OptionButton)");
             }
 
-            MethodInfo? modeFromId = Unique(overlay, "GameModeFromCreateId", 1, missing);
+            MethodInfo? modeFromId = ReflectScope.UniqueMethod(overlay, "GameModeFromCreateId", 1, missing);
             if (modeFromId != null)
             {
                 if (!modeFromId.IsStatic)
@@ -744,7 +744,7 @@ internal sealed class ExtraGameModesFix : ICompatFix
                 }
             }
 
-            MethodInfo? selected = Unique(overlay, "GetSelectedCreateGameMode", 0, missing);
+            MethodInfo? selected = ReflectScope.UniqueMethod(overlay, "GetSelectedCreateGameMode", 0, missing);
             if (selected != null)
             {
                 if (selected.IsStatic)
@@ -774,7 +774,7 @@ internal sealed class ExtraGameModesFix : ICompatFix
                 selectedId = null;
             }
 
-            MethodInfo? isAvailable = Unique(overlay, "IsCreateGameModeAvailable", 2, missing);
+            MethodInfo? isAvailable = ReflectScope.UniqueMethod(overlay, "IsCreateGameModeAvailable", 2, missing);
             if (isAvailable != null)
             {
                 if (!isAvailable.IsStatic)
@@ -791,7 +791,7 @@ internal sealed class ExtraGameModesFix : ICompatFix
                 }
             }
 
-            MethodInfo? pushHostScreen = Unique(hostFlow, "PushHostScreen", 4, missing);
+            MethodInfo? pushHostScreen = ReflectScope.UniqueMethod(hostFlow, "PushHostScreen", 4, missing);
             if (pushHostScreen != null)
             {
                 if (!pushHostScreen.IsStatic)
@@ -911,28 +911,5 @@ internal sealed class ExtraGameModesFix : ICompatFix
             return dot >= 0 ? fullName[(dot + 1)..] : fullName;
         }
 
-        private static MethodInfo? Unique(Type? type, string name, int parameterCount, List<string> missing)
-        {
-            if (type == null)
-            {
-                return null;
-            }
-
-            MethodInfo[] matches = type
-                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-                .Where(method => method.GetParameters().Length == parameterCount)
-                .ToArray();
-
-            if (matches.Length == 1)
-            {
-                return matches[0];
-            }
-
-            missing.Add(matches.Length == 0
-                ? type.Name + "." + name + "/" + parameterCount + " param(s)"
-                : type.Name + "." + name + "/" + parameterCount + " param(s) (ambiguous: " + matches.Length + " overloads)");
-            return null;
-        }
     }
 }

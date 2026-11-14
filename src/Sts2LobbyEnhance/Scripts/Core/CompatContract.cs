@@ -91,7 +91,7 @@ internal readonly record struct CompatSnapshot(
 /// </item>
 /// <item>
 /// <b>Report what is missing, do not die on the first miss.</b> Collect missing anchors while resolving
-/// (<see cref="AnchorProbe"/> exists for exactly this) and either answer <c>false</c> from
+/// (<see cref="ReflectScope"/> exists for exactly this) and either answer <c>false</c> from
 /// <see cref="Applies"/> with them as the reason, or throw one exception naming all of them. "missing:
 /// LanConnectLobbyOverlay.GameModeFromCreateId, GameMode.Blitz" is actionable; a
 /// <c>NullReferenceException</c> from the middle of a lookup is not.

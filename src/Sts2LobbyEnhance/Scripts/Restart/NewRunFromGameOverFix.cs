@@ -2019,25 +2019,25 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         List<string> problems = new();
 
         // ---- host mod: the three helpers reached through reflection ----
-        Type? compatibility = HostType(host, CompatibilityTypeName, problems);
-        MethodInfo? getMaxPlayers = StaticMethod(problems, compatibility, "GetEffectiveMaxPlayers");
+        Type? compatibility = ReflectScope.HostType(host, CompatibilityTypeName, problems);
+        MethodInfo? getMaxPlayers = ReflectScope.StaticMethod(problems, compatibility, "GetEffectiveMaxPlayers");
 
-        Type? bindingType = HostType(host, BindingTypeName, problems);
-        MethodInfo? buildSaveKey = StaticMethod(
+        Type? bindingType = ReflectScope.HostType(host, BindingTypeName, problems);
+        MethodInfo? buildSaveKey = ReflectScope.StaticMethod(
             problems,
             bindingType,
             "BuildSaveKey",
             "MegaCrit.Sts2.Core.Saves.SerializableRun");
 
-        Type? configType = HostType(host, ConfigTypeName, problems);
-        MethodInfo? removeBinding = StaticMethod(problems, configType, "RemoveSaveRoomBinding", "System.String");
+        Type? configType = ReflectScope.HostType(host, ConfigTypeName, problems);
+        MethodInfo? removeBinding = ReflectScope.StaticMethod(problems, configType, "RemoveSaveRoomBinding", "System.String");
 
         // ---- game: the game-over screen ----
-        Type? screenType = GameType(GameOverScreenTypeName, problems);
-        FieldInfo? mainMenuButton = Field(problems, screenType, "_mainMenuButton");
-        FieldInfo? resultField = Field(problems, screenType, "_result");
-        FieldInfo? runStateField = Field(problems, screenType, "_runState");
-        FieldInfo? uiNode = Field(problems, screenType, "_uiNode");
+        Type? screenType = ReflectScope.GameType(GameOverScreenTypeName, problems);
+        FieldInfo? mainMenuButton = ReflectScope.Field(problems, screenType, "_mainMenuButton");
+        FieldInfo? resultField = ReflectScope.Field(problems, screenType, "_result");
+        FieldInfo? runStateField = ReflectScope.Field(problems, screenType, "_runState");
+        FieldInfo? uiNode = ReflectScope.Field(problems, screenType, "_uiNode");
 
         if (mainMenuButton != null && mainMenuButton.FieldType.FullName != ReturnToMainMenuButtonTypeName)
         {
@@ -2063,18 +2063,18 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             problems.Add($"{GameOverScreenTypeName}._uiNode is {uiNode.FieldType.Name}, expected a Control");
         }
 
-        MethodInfo? ready = InstanceMethod(problems, screenType, "_Ready");
-        MethodInfo? openSummary = InstanceMethod(
+        MethodInfo? ready = ReflectScope.InstanceMethod(problems, screenType, "_Ready");
+        MethodInfo? openSummary = ReflectScope.InstanceMethod(
             problems,
             screenType,
             "OpenSummaryScreen",
             "MegaCrit.Sts2.Core.Nodes.GodotExtensions.NButton");
-        MethodInfo? hideSummary = InstanceMethod(problems, screenType, "HideSummary");
+        MethodInfo? hideSummary = ReflectScope.InstanceMethod(problems, screenType, "HideSummary");
 
         // ---- game: the button we duplicate ----
-        Type? buttonType = GameType(ReturnToMainMenuButtonTypeName, problems);
-        FieldInfo? showPosition = Field(problems, buttonType, "_showPosition");
-        FieldInfo? shaderMaterial = Field(problems, buttonType, "_hsv");
+        Type? buttonType = ReflectScope.GameType(ReturnToMainMenuButtonTypeName, problems);
+        FieldInfo? showPosition = ReflectScope.Field(problems, buttonType, "_showPosition");
+        FieldInfo? shaderMaterial = ReflectScope.Field(problems, buttonType, "_hsv");
 
         if (showPosition != null && showPosition.FieldType.FullName != "Godot.Vector2")
         {
@@ -2088,13 +2088,13 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
                 $"{ReturnToMainMenuButtonTypeName}._hsv is {shaderMaterial.FieldType.Name}, expected ShaderMaterial");
         }
 
-        Type? nButtonType = GameType(ButtonTypeName, problems);
-        MethodInfo? unregisterHotkeys = InstanceMethod(problems, nButtonType, "UnregisterHotkeys");
+        Type? nButtonType = ReflectScope.GameType(ButtonTypeName, problems);
+        MethodInfo? unregisterHotkeys = ReflectScope.InstanceMethod(problems, nButtonType, "UnregisterHotkeys");
 
         // ---- game: the lobby we rebuild and the two services we suppress ----
-        Type? lobbyType = GameType(StartRunLobbyTypeName, problems);
-        MethodInfo? admitPeer = InstanceMethod(problems, lobbyType, "OnConnectedToClientAsHost", "System.UInt64");
-        MethodInfo? admitClients = InstanceMethod(
+        Type? lobbyType = ReflectScope.GameType(StartRunLobbyTypeName, problems);
+        MethodInfo? admitPeer = ReflectScope.InstanceMethod(problems, lobbyType, "OnConnectedToClientAsHost", "System.UInt64");
+        MethodInfo? admitClients = ReflectScope.InstanceMethod(
             problems,
             lobbyType,
             "AdmitClientsConnectedBeforeLobbyExisted");
@@ -2104,22 +2104,22 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             problems.Add($"{StartRunLobbyTypeName}.OnConnectedToClientAsHost no longer returns void");
         }
 
-        Type? hostService = GameType(NetHostGameServiceTypeName, problems);
-        MethodInfo? hostDisconnect = InstanceMethod(
+        Type? hostService = ReflectScope.GameType(NetHostGameServiceTypeName, problems);
+        MethodInfo? hostDisconnect = ReflectScope.InstanceMethod(
             problems,
             hostService,
             "Disconnect",
             "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
             "System.Boolean");
 
-        Type? clientService = GameType(NetClientGameServiceTypeName, problems);
-        MethodInfo? clientDisconnect = InstanceMethod(
+        Type? clientService = ReflectScope.GameType(NetClientGameServiceTypeName, problems);
+        MethodInfo? clientDisconnect = ReflectScope.InstanceMethod(
             problems,
             clientService,
             "Disconnect",
             "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
             "System.Boolean");
-        MethodInfo? handshake = InstanceMethod(
+        MethodInfo? handshake = ReflectScope.InstanceMethod(
             problems,
             clientService,
             "HandshakeSucceeded",
@@ -2127,9 +2127,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             "MegaCrit.Sts2.Core.Multiplayer.PeerVersionInfo");
 
         // The prefixes/postfixes below take these parameters by name; a rename would break the binding silently.
-        RequireParameterNames(problems, hostDisconnect, "reason");
-        RequireParameterNames(problems, clientDisconnect, "reason");
-        RequireParameterNames(problems, handshake, "peerId", "versionInfo");
+        ReflectScope.RequireParameterNames(problems, hostDisconnect, "reason");
+        ReflectScope.RequireParameterNames(problems, clientDisconnect, "reason");
+        ReflectScope.RequireParameterNames(problems, handshake, "peerId", "versionInfo");
 
         // ---- game: types only referenced inside patch bodies ----
         //
@@ -2140,21 +2140,21 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // throw — FindLobby returns null, the repair throws "did not create a lobby", and the failure path tears
         // the whole room down. That is a far worse outcome than the feature being absent, so the field is part of
         // the shape: if it is gone we simply do not install.
-        RequireLobbyField(GameType(CharacterSelectScreenTypeName, problems), problems);
-        RequireLobbyField(GameType(DailyRunScreenTypeName, problems), problems);
-        RequireLobbyField(GameType(CustomRunScreenTypeName, problems), problems);
-        RequireLobbyField(GameType(BlitzScreenTypeName, problems), problems);
-        RequireLobbyField(GameType(DreadScreenTypeName, problems), problems);
-        GameType(MegaLabelTypeName, problems);
-        GameType(NSubmenuTypeName, problems);
-        GameType(NMainMenuTypeName, problems);
-        GameType(NSubmenuStackTypeName, problems);
-        GameType(PostRunResultTypeName, problems);
-        GameType(RunStateTypeName, problems);
-        GameType(ErrorPopupTypeName, problems);
-        GameType(ModalContainerTypeName, problems);
+        RequireLobbyField(ReflectScope.GameType(CharacterSelectScreenTypeName, problems), problems);
+        RequireLobbyField(ReflectScope.GameType(DailyRunScreenTypeName, problems), problems);
+        RequireLobbyField(ReflectScope.GameType(CustomRunScreenTypeName, problems), problems);
+        RequireLobbyField(ReflectScope.GameType(BlitzScreenTypeName, problems), problems);
+        RequireLobbyField(ReflectScope.GameType(DreadScreenTypeName, problems), problems);
+        ReflectScope.GameType(MegaLabelTypeName, problems);
+        ReflectScope.GameType(NSubmenuTypeName, problems);
+        ReflectScope.GameType(NMainMenuTypeName, problems);
+        ReflectScope.GameType(NSubmenuStackTypeName, problems);
+        ReflectScope.GameType(PostRunResultTypeName, problems);
+        ReflectScope.GameType(RunStateTypeName, problems);
+        ReflectScope.GameType(ErrorPopupTypeName, problems);
+        ReflectScope.GameType(ModalContainerTypeName, problems);
 
-        Type? clickable = GameType(ClickableControlTypeName, problems);
+        Type? clickable = ReflectScope.GameType(ClickableControlTypeName, problems);
         if (clickable != null)
         {
             Type? signalNames = clickable.GetNestedType("SignalName", BindingFlags.Public | BindingFlags.NonPublic);
@@ -2164,11 +2164,11 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             }
             else
             {
-                StaticField(problems, signalNames, "Released");
+                ReflectScope.StaticField(problems, signalNames, "Released");
             }
         }
 
-        Type? gameMode = GameType(GameModeTypeName, problems);
+        Type? gameMode = ReflectScope.GameType(GameModeTypeName, problems);
         if (gameMode != null)
         {
             // Enum.GetNames throws on a non-enum, so the kind check comes first: the probe must never throw.
@@ -2243,28 +2243,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         MethodInfo HandshakeSucceeded,
         MethodInfo AdmitClientsConnected);
 
-    private static Type? HostType(Assembly host, string fullName, List<string> problems)
-    {
-        Type? type = host.GetType(fullName, throwOnError: false, ignoreCase: false);
-        if (type == null)
-        {
-            problems.Add($"type {fullName} (host mod)");
-        }
-
-        return type;
-    }
-
-    private static Type? GameType(string fullName, List<string> problems)
-    {
-        Type? type = FindType(fullName);
-        if (type == null)
-        {
-            problems.Add($"type {fullName} (game)");
-        }
-
-        return type;
-    }
-
     /// <summary>
     /// Verifies a lobby screen still declares the private <c>_lobby</c> field <see cref="FindLobby"/> reads.
     /// A renamed field is silent at read time (FindLobby returns null), and the failure path for a missing lobby
@@ -2281,31 +2259,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         {
             problems.Add($"{(screen.FullName ?? screen.Name)}._lobby (StartRunLobby field)");
         }
-    }
-
-    /// <summary>
-    /// Finds a type by full name across the loaded assemblies. No <c>typeof</c>, so a game build that renamed the type
-    /// costs this anchor, not the whole probe.
-    /// </summary>
-    private static Type? FindType(string fullName)
-    {
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            try
-            {
-                Type? type = assembly.GetType(fullName, throwOnError: false, ignoreCase: false);
-                if (type != null)
-                {
-                    return type;
-                }
-            }
-            catch (Exception)
-            {
-                // Dynamic and reflection-only assemblies refuse GetType; none of them can own a game type.
-            }
-        }
-
-        return null;
     }
 
     private static bool InheritsFrom(Type? type, string baseTypeFullName)
@@ -2333,146 +2286,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         }
 
         return true;
-    }
-
-    /// <summary>
-    /// Finds one instance method by name and *exact* parameter types.
-    ///
-    /// Arity alone is not enough to bind a patch: two overloads can share a parameter count and differ in types, and
-    /// patching the wrong one would silently hook an unrelated path. Every call site below spells out the parameter
-    /// types it expects.
-    /// </summary>
-    private static MethodInfo? InstanceMethod(
-        List<string> problems,
-        Type? owner,
-        string name,
-        params string[] parameterTypeNames) =>
-        MatchMethod(problems, owner, name, BindingFlags.Instance, parameterTypeNames);
-
-    private static MethodInfo? StaticMethod(
-        List<string> problems,
-        Type? owner,
-        string name,
-        params string[] parameterTypeNames) =>
-        MatchMethod(problems, owner, name, BindingFlags.Static, parameterTypeNames);
-
-    private static MethodInfo? MatchMethod(
-        List<string> problems,
-        Type? owner,
-        string name,
-        BindingFlags scope,
-        string[] parameterTypeNames)
-    {
-        // A missing owner type was already reported by HostType/GameType; repeating it here would bury the reason.
-        if (owner == null)
-        {
-            return null;
-        }
-
-        MethodInfo[] byName = owner
-            .GetMethods(scope | BindingFlags.Public | BindingFlags.NonPublic)
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal)
-                             && method.GetParameters().Length == parameterTypeNames.Length)
-            .ToArray();
-
-        MethodInfo[] exact = byName
-            .Where(method => ParametersMatch(method.GetParameters(), parameterTypeNames))
-            .ToArray();
-
-        if (exact.Length == 1)
-        {
-            return exact[0];
-        }
-
-        string expected = $"{owner.FullName}.{name}({string.Join(", ", parameterTypeNames)})";
-        if (exact.Length > 1)
-        {
-            problems.Add($"{expected} is ambiguous ({exact.Length} overloads)");
-        }
-        else if (byName.Length > 0)
-        {
-            problems.Add($"{expected} has {byName.Length} same-arity overload(s) with different parameter types");
-        }
-        else
-        {
-            problems.Add($"{expected} (not found)");
-        }
-
-        return null;
-    }
-
-    private static bool ParametersMatch(ParameterInfo[] parameters, string[] parameterTypeNames)
-    {
-        for (int index = 0; index < parameters.Length; index++)
-        {
-            // By-ref parameters report "T&" as their FullName; the call sites spell that out explicitly so a
-            // by-value overload can never be mistaken for the by-ref one.
-            if (!string.Equals(parameters[index].ParameterType.FullName, parameterTypeNames[index], StringComparison.Ordinal))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-
-    /// <summary>
-    /// Verifies the parameter *names* of a method we patch.
-    ///
-    /// Harmony binds a prefix/postfix argument to the target parameter with the same name, so a rename
-    /// (<c>reason</c> to <c>error</c>) silently breaks the binding: the patch either fails to apply or, worse, binds
-    /// nothing and the guard stops guarding. Parameter types are checked separately; this is the name half.
-    /// </summary>
-    private static void RequireParameterNames(List<string> problems, MethodInfo? method, params string[] names)
-    {
-        if (method == null)
-        {
-            return;
-        }
-
-        ParameterInfo[] parameters = method.GetParameters();
-        for (int index = 0; index < parameters.Length && index < names.Length; index++)
-        {
-            if (!string.Equals(parameters[index].Name, names[index], StringComparison.Ordinal))
-            {
-                problems.Add(
-                    $"{method.DeclaringType?.Name}.{method.Name} parameter {index} is '{parameters[index].Name}', " +
-                    $"expected '{names[index]}' (Harmony binds by name)");
-            }
-        }
-    }
-
-    private static FieldInfo? Field(List<string> problems, Type? owner, string name)
-    {
-        if (owner == null)
-        {
-            return null;
-        }
-
-        FieldInfo? field = owner.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (field == null)
-        {
-            problems.Add($"{owner.FullName}.{name}");
-        }
-
-        return field;
-    }
-
-    private static FieldInfo? StaticField(List<string> problems, Type? owner, string name)
-    {
-        if (owner == null)
-        {
-            return null;
-        }
-
-        FieldInfo? field = owner.GetField(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-        if (field == null)
-        {
-            problems.Add($"{owner.FullName}.{name} (static)");
-        }
-
-        return field;
     }
 
     /// <summary>

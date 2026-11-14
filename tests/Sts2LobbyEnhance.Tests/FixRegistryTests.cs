@@ -41,6 +41,7 @@ public sealed class FixRegistryTests
         "new-run-button",
         "mid-run-restart",
         "extra-game-modes",
+        "new-protocol-only",
         "room-card-pill",
         "unlock-extra-modes"
     ];

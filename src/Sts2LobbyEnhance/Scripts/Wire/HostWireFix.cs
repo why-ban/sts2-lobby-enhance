@@ -174,13 +174,13 @@ internal sealed class HostWireFix : ICompatFix
             }
             else
             {
-                shape.PlayersInLobby = FieldOf(response, "playersInLobby", missing);
-                shape.DailyTime = FieldOf(response, "dailyTime", missing);
-                shape.Seed = FieldOf(response, "seed", missing);
-                shape.GameMode = FieldOf(response, "gameMode", missing);
-                shape.IsCustom = FieldOf(response, "isCustom", missing);
-                shape.Ascension = FieldOf(response, "ascension", missing);
-                shape.Modifiers = FieldOf(response, "modifiers", missing);
+                shape.PlayersInLobby = ReflectScope.InstanceFieldOf(response, "playersInLobby", missing);
+                shape.DailyTime = ReflectScope.InstanceFieldOf(response, "dailyTime", missing);
+                shape.Seed = ReflectScope.InstanceFieldOf(response, "seed", missing);
+                shape.GameMode = ReflectScope.InstanceFieldOf(response, "gameMode", missing);
+                shape.IsCustom = ReflectScope.InstanceFieldOf(response, "isCustom", missing);
+                shape.Ascension = ReflectScope.InstanceFieldOf(response, "ascension", missing);
+                shape.Modifiers = ReflectScope.InstanceFieldOf(response, "modifiers", missing);
 
                 if (shape.GameMode != null
                     && !string.Equals(shape.GameMode.FieldType.FullName, GameModeTypeName, StringComparison.Ordinal))
@@ -250,19 +250,6 @@ internal sealed class HostWireFix : ICompatFix
         }
 
         return null;
-    }
-
-    private static FieldInfo? FieldOf(Type type, string name, List<string> missing)
-    {
-        FieldInfo? field = type.GetField(
-            name,
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (field == null)
-        {
-            missing.Add($"{type.FullName}.{name}");
-        }
-
-        return field;
     }
 
     public void Apply(Harmony harmony, in CompatSnapshot snapshot)

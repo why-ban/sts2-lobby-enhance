@@ -289,7 +289,7 @@ internal sealed class TailErrorPathFix : ICompatFix
 
     private static void CapturePatchedMethods(Type runtimeType, Type? bindingType, Shape shape, List<string> missing)
     {
-        MethodInfo? abort = MethodOf(runtimeType, "AbortActiveBinding", 3, missing);
+        MethodInfo? abort = ReflectScope.MethodOf(runtimeType, "AbortActiveBinding", 3, missing);
         if (abort != null)
         {
             ParameterInfo[] parameters = abort.GetParameters();
@@ -308,7 +308,7 @@ internal sealed class TailErrorPathFix : ICompatFix
             }
         }
 
-        MethodInfo? reject = MethodOf(runtimeType, "RejectAndDisconnect", 3, missing);
+        MethodInfo? reject = ReflectScope.MethodOf(runtimeType, "RejectAndDisconnect", 3, missing);
         if (reject != null)
         {
             ParameterInfo[] parameters = reject.GetParameters();
@@ -330,11 +330,11 @@ internal sealed class TailErrorPathFix : ICompatFix
 
     private static void CaptureRuntimeState(Type runtimeType, Type? bindingType, Shape shape, List<string> missing)
     {
-        shape.Sync = FieldOf(runtimeType, "_sync", missing)!;
-        shape.Bindings = FieldOf(runtimeType, "_bindings", missing)!;
-        shape.WriterBindings = FieldOf(runtimeType, "_writerBindings", missing)!;
-        shape.OutgoingRejections = FieldOf(runtimeType, "_outgoingRejections", missing)!;
-        shape.ClearPendingOutgoing = MethodOf(runtimeType, "ClearPendingOutgoing", 1, missing)!;
+        shape.Sync = ReflectScope.FieldOf(runtimeType, "_sync", missing)!;
+        shape.Bindings = ReflectScope.FieldOf(runtimeType, "_bindings", missing)!;
+        shape.WriterBindings = ReflectScope.FieldOf(runtimeType, "_writerBindings", missing)!;
+        shape.OutgoingRejections = ReflectScope.FieldOf(runtimeType, "_outgoingRejections", missing)!;
+        shape.ClearPendingOutgoing = ReflectScope.MethodOf(runtimeType, "ClearPendingOutgoing", 1, missing)!;
 
         // [_ThreadStatic] private static: GetOrCreateRejectionStack reads it with GetValue(null). If upstream ever
         // makes it an instance field that call throws TargetException, and nothing above it in the rejection path
@@ -348,12 +348,12 @@ internal sealed class TailErrorPathFix : ICompatFix
         if (shape.OutgoingRejections != null)
         {
             Type stackType = shape.OutgoingRejections.FieldType;
-            if (MethodOf(stackType, "Push", 1, new List<string>()) == null)
+            if (ReflectScope.MethodOf(stackType, "Push", 1, new List<string>()) == null)
             {
                 missing.Add($"{stackType.FullName}.Push/1");
             }
 
-            if (MethodOf(stackType, "Pop", 0, new List<string>()) == null)
+            if (ReflectScope.MethodOf(stackType, "Pop", 0, new List<string>()) == null)
             {
                 missing.Add($"{stackType.FullName}.Pop/0");
             }
@@ -364,12 +364,12 @@ internal sealed class TailErrorPathFix : ICompatFix
             return;
         }
 
-        shape.BindingService = PropertyOf(bindingType, "Service", missing)!;
-        shape.BindingWriter = PropertyOf(bindingType, "Writer", missing)!;
-        shape.BindingMessageBus = PropertyOf(bindingType, "MessageBus", missing)!;
-        shape.BindingBoundPeerIds = PropertyOf(bindingType, "BoundPeerIds", missing)!;
-        shape.TryMarkTerminated = MethodOf(bindingType, "TryMarkTerminated", 0, missing)!;
-        shape.ClearNative = MethodOf(bindingType, "ClearNative", 0, missing)!;
+        shape.BindingService = ReflectScope.PropertyOf(bindingType, "Service", missing)!;
+        shape.BindingWriter = ReflectScope.PropertyOf(bindingType, "Writer", missing)!;
+        shape.BindingMessageBus = ReflectScope.PropertyOf(bindingType, "MessageBus", missing)!;
+        shape.BindingBoundPeerIds = ReflectScope.PropertyOf(bindingType, "BoundPeerIds", missing)!;
+        shape.TryMarkTerminated = ReflectScope.MethodOf(bindingType, "TryMarkTerminated", 0, missing)!;
+        shape.ClearNative = ReflectScope.MethodOf(bindingType, "ClearNative", 0, missing)!;
     }
 
     /// <summary>
@@ -387,7 +387,7 @@ internal sealed class TailErrorPathFix : ICompatFix
                 return;
             }
 
-            MethodInfo? schedule = MethodOf(patchesType, "ScheduleDelayedDisconnect", 3, new List<string>());
+            MethodInfo? schedule = ReflectScope.MethodOf(patchesType, "ScheduleDelayedDisconnect", 3, new List<string>());
             if (schedule == null)
             {
                 shape.OptionalNote = KickNote($"{KickPatchesTypeName}.ScheduleDelayedDisconnect/3");
@@ -408,10 +408,10 @@ internal sealed class TailErrorPathFix : ICompatFix
             Type? lobbyRuntime = host.GetType(LobbyRuntimeTypeName, throwOnError: false, ignoreCase: false);
             MethodInfo? getHostService = lobbyRuntime == null
                 ? null
-                : MethodOf(lobbyRuntime, "GetHostNetService", 0, new List<string>());
+                : ReflectScope.MethodOf(lobbyRuntime, "GetHostNetService", 0, new List<string>());
             MethodInfo? createAction = lobbyRuntime == null
                 ? null
-                : MethodOf(lobbyRuntime, "CreateKickDisconnectAction", 1, new List<string>());
+                : ReflectScope.MethodOf(lobbyRuntime, "CreateKickDisconnectAction", 1, new List<string>());
 
             if (getHostService == null || createAction == null)
             {
@@ -437,47 +437,6 @@ internal sealed class TailErrorPathFix : ICompatFix
 
     private static string Describe(ParameterInfo[] parameters) =>
         string.Join(", ", parameters.Select(parameter => parameter.ParameterType.FullName ?? parameter.ParameterType.Name));
-
-    private static FieldInfo? FieldOf(Type type, string name, List<string> missing)
-    {
-        FieldInfo? field = type.GetField(name, AnyMember);
-        if (field == null)
-        {
-            missing.Add($"{type.FullName}.{name}");
-        }
-
-        return field;
-    }
-
-    private static PropertyInfo? PropertyOf(Type type, string name, List<string> missing)
-    {
-        PropertyInfo? property = type.GetProperty(name, AnyMember);
-        if (property == null)
-        {
-            missing.Add($"{type.FullName}.{name}");
-        }
-
-        return property;
-    }
-
-    private static MethodInfo? MethodOf(Type type, string name, int parameterCount, List<string> missing)
-    {
-        MethodInfo[] matches = type
-            .GetMethods(AnyMember)
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-            .Where(method => method.GetParameters().Length == parameterCount)
-            .ToArray();
-
-        if (matches.Length == 1)
-        {
-            return matches[0];
-        }
-
-        missing.Add(matches.Length == 0
-            ? $"{type.FullName}.{name} ({parameterCount} parameter(s))"
-            : $"{type.FullName}.{name} ({parameterCount} parameter(s)) is ambiguous: {matches.Length} overloads");
-        return null;
-    }
 
     private static IEnumerable<MethodBase> EnumerateMethods(Type type)
     {

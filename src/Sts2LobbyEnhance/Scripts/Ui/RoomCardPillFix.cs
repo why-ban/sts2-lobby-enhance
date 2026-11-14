@@ -162,7 +162,7 @@ internal sealed class RoomCardPillFix : ICompatFix
                 return null;
             }
 
-            MethodInfo? pill = Unique(overlay, PillMethodName, 1, missing);
+            MethodInfo? pill = ReflectScope.UniqueMethod(overlay, PillMethodName, 1, missing);
             if (pill != null)
             {
                 if (!pill.IsStatic)
@@ -230,23 +230,5 @@ internal sealed class RoomCardPillFix : ICompatFix
             return property;
         }
 
-        private static MethodInfo? Unique(Type type, string name, int parameterCount, List<string> missing)
-        {
-            MethodInfo[] matches = type
-                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-                .Where(method => method.GetParameters().Length == parameterCount)
-                .ToArray();
-
-            if (matches.Length == 1)
-            {
-                return matches[0];
-            }
-
-            missing.Add(matches.Length == 0
-                ? type.Name + "." + name + "/" + parameterCount + " param(s)"
-                : type.Name + "." + name + "/" + parameterCount + " param(s) (ambiguous: " + matches.Length + " overloads)");
-            return null;
-        }
     }
 }

@@ -133,6 +133,8 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 工坊条目：[**3839101755**](https://steamcommunity.com/sharedfiles/filedetails/?id=3839101755) —— 订阅即可。原模组 `sts2_lan_connect`（工坊物品 3749766330）
 已声明为必需物品，Steam 会一并订阅。
 
+> 安装或联机遇到问题，可以加本模组的 QQ 群 **1135970470**。
+
 **方式二：手动安装**
 
 1. 确认官方模组已安装（工坊订阅，或放在 `<游戏目录>\mods\sts2_lan_connect\`）。

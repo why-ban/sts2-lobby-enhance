@@ -321,7 +321,7 @@ internal sealed class UnlockExtraModesFix : ICompatFix
             if (saveManager == null) missing.Add(SaveManagerTypeName);
             if (progress == null) missing.Add(ProgressStateTypeName);
 
-            MethodInfo? generate = Exact(
+            MethodInfo? generate = ReflectScope.Exact(
                 saveManager,
                 "GenerateUnlockStateFromProgress",
                 requireStatic: false,
@@ -329,7 +329,7 @@ internal sealed class UnlockExtraModesFix : ICompatFix
                 UnlockStateTypeName,
                 missing);
 
-            MethodInfo? isEpochRevealed = Exact(
+            MethodInfo? isEpochRevealed = ReflectScope.Exact(
                 progress,
                 "IsEpochRevealed",
                 requireStatic: false,
@@ -365,51 +365,5 @@ internal sealed class UnlockExtraModesFix : ICompatFix
             return new Shape(generate!, isEpochRevealed!, missingEpochs);
         }
 
-        /// <summary>
-        /// Finds one method by name, static-ness and exact parameter/return type names — string comparisons
-        /// only, so the probe cannot fail to JIT on a build that dropped a type.
-        /// </summary>
-        private static MethodInfo? Exact(
-            Type? type,
-            string name,
-            bool requireStatic,
-            string[] parameterTypeNames,
-            string? returnTypeName,
-            List<string> missing)
-        {
-            if (type == null)
-            {
-                return null;
-            }
-
-            MethodInfo[] matches = type
-                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-                .Where(method => method.IsStatic == requireStatic)
-                .Where(method => method.GetParameters().Length == parameterTypeNames.Length)
-                .Where(method => method.GetParameters()
-                    .Select(parameter => parameter.ParameterType.FullName)
-                    .SequenceEqual(parameterTypeNames))
-                .Where(method => returnTypeName == null || method.ReturnType.FullName == returnTypeName)
-                .ToArray();
-
-            if (matches.Length == 1)
-            {
-                return matches[0];
-            }
-
-            missing.Add(matches.Length == 0
-                ? type.Name + "." + name + "(" + string.Join(", ", parameterTypeNames.Select(Short)) + ")" +
-                  (returnTypeName == null ? string.Empty : " -> " + Short(returnTypeName))
-                : type.Name + "." + name + " (ambiguous: " + matches.Length + " overloads)");
-            return null;
-        }
-
-        /// <summary>Last segment of a type name, for a reason line a person reads.</summary>
-        private static string Short(string typeName)
-        {
-            int dot = typeName.LastIndexOf('.');
-            return dot >= 0 ? typeName[(dot + 1)..] : typeName;
-        }
     }
 }

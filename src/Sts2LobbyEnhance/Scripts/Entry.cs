@@ -489,6 +489,7 @@ internal static class CompatFixes
         yield return new NewRunFromGameOverFix();
         yield return new MidRunRestartFix();
         yield return new ExtraGameModesFix();
+        yield return new NewProtocolOnlyFix();
         yield return new RoomCardPillFix();
         yield return new UnlockExtraModesFix();
     }

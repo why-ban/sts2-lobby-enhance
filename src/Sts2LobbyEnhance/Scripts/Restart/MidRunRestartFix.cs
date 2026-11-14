@@ -52,7 +52,6 @@ internal sealed class MidRunRestartFix : ICompatFix
     private const string BindingTypeName = "Sts2LanConnect.Scripts.LanConnectMultiplayerSaveRoomBinding";
     private const string PanelTypeName = "Sts2LanConnect.Scripts.LanConnectRoomManagementPanel";
     private const string ModIdPrefix = "sts2_lobby_enhance";
-    private const string SaveRelativePath = "saves/current_run_mp.save";
 
     /// <summary>
     /// How long the client waits for the host's <c>ClientLoadJoinResponseMessage</c>.
@@ -1866,8 +1865,8 @@ internal sealed class MidRunRestartFix : ICompatFix
         List<string> problems = new();
 
         // ---- host mod: save binding ----
-        Type? bindingType = HostType(host, BindingTypeName, problems);
-        MethodInfo? tryLoad = StaticMethod(
+        Type? bindingType = ReflectScope.HostType(host, BindingTypeName, problems);
+        MethodInfo? tryLoad = ReflectScope.StaticMethod(
             problems,
             bindingType,
             "TryLoadCurrentMultiplayerRun",
@@ -1877,25 +1876,25 @@ internal sealed class MidRunRestartFix : ICompatFix
         {
             problems.Add($"{BindingTypeName}.TryLoadCurrentMultiplayerRun returns {tryLoad.ReturnType.Name}, expected bool");
         }
-        MethodInfo? buildSaveKey = StaticMethod(
+        MethodInfo? buildSaveKey = ReflectScope.StaticMethod(
             problems,
             bindingType,
             "BuildSaveKey",
             "MegaCrit.Sts2.Core.Saves.SerializableRun");
 
         // ---- host mod: the restart entry point this repair takes over ----
-        Type? runtimeType = HostType(host, RuntimeTypeName, problems);
-        MethodInfo? startRestart = InstanceMethod(problems, runtimeType, "StartHostedRunRestartAsync");
+        Type? runtimeType = ReflectScope.HostType(host, RuntimeTypeName, problems);
+        MethodInfo? startRestart = ReflectScope.InstanceMethod(problems, runtimeType, "StartHostedRunRestartAsync");
 
         // ---- host mod: tail_v1 binding probe ----
-        Type? tailType = HostType(host, TailRuntimeTypeName, problems);
-        MethodInfo? getMessageBus = StaticMethod(
+        Type? tailType = ReflectScope.HostType(host, TailRuntimeTypeName, problems);
+        MethodInfo? getMessageBus = ReflectScope.StaticMethod(
             problems,
             tailType,
             "GetMessageBus",
             "MegaCrit.Sts2.Core.Multiplayer.Game.INetGameService");
-        FieldInfo? bindings = Field(problems, tailType, "_bindings");
-        FieldInfo? writerBindings = Field(problems, tailType, "_writerBindings");
+        FieldInfo? bindings = ReflectScope.Field(problems, tailType, "_bindings");
+        FieldInfo? writerBindings = ReflectScope.Field(problems, tailType, "_writerBindings");
 
         if (getMessageBus != null && getMessageBus.ReturnType.FullName != NetMessageBusTypeName)
         {
@@ -1915,36 +1914,36 @@ internal sealed class MidRunRestartFix : ICompatFix
         }
 
         // ---- game: the lobby we drive and the two services we suppress ----
-        Type? lobbyType = GameType(LoadRunLobbyTypeName, problems);
-        MethodInfo? admit = InstanceMethod(problems, lobbyType, "OnConnectedToClientAsHost", "System.UInt64");
+        Type? lobbyType = ReflectScope.GameType(LoadRunLobbyTypeName, problems);
+        MethodInfo? admit = ReflectScope.InstanceMethod(problems, lobbyType, "OnConnectedToClientAsHost", "System.UInt64");
         if (admit != null && admit.ReturnType.FullName != "System.Void")
         {
             problems.Add($"{LoadRunLobbyTypeName}.OnConnectedToClientAsHost no longer returns void");
         }
 
-        Type? hostService = GameType(NetHostGameServiceTypeName, problems);
-        MethodInfo? hostDisconnect = InstanceMethod(
+        Type? hostService = ReflectScope.GameType(NetHostGameServiceTypeName, problems);
+        MethodInfo? hostDisconnect = ReflectScope.InstanceMethod(
             problems,
             hostService,
             "Disconnect",
             "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
             "System.Boolean");
-        Property(problems, hostService, "ConnectedPeers");
-        InstanceMethod(problems, hostService, "GetVersionInfoForPeer", "System.UInt64");
+        ReflectScope.Property(problems, hostService, "ConnectedPeers");
+        ReflectScope.InstanceMethod(problems, hostService, "GetVersionInfoForPeer", "System.UInt64");
 
         // ProbeTailBinding reads LanConnectTailMessageRuntime.Shared before every restart. A rename there would not
         // throw at install time — the restart would fail its own pre-check and tell the player to "leave and host
         // again", which is a wrong instruction for a patch-anchor mismatch.
-        StaticProperty(problems, tailType, "Shared");
+        ReflectScope.StaticProperty(problems, tailType, "Shared");
 
-        Type? clientService = GameType(NetClientGameServiceTypeName, problems);
-        MethodInfo? clientDisconnect = InstanceMethod(
+        Type? clientService = ReflectScope.GameType(NetClientGameServiceTypeName, problems);
+        MethodInfo? clientDisconnect = ReflectScope.InstanceMethod(
             problems,
             clientService,
             "Disconnect",
             "MegaCrit.Sts2.Core.Entities.Multiplayer.NetError",
             "System.Boolean");
-        MethodInfo? handshake = InstanceMethod(
+        MethodInfo? handshake = ReflectScope.InstanceMethod(
             problems,
             clientService,
             "HandshakeSucceeded",
@@ -1952,24 +1951,24 @@ internal sealed class MidRunRestartFix : ICompatFix
             "MegaCrit.Sts2.Core.Multiplayer.PeerVersionInfo");
 
         // The prefixes/postfixes below take these parameters by name; a rename would break the binding silently.
-        RequireParameterNames(problems, hostDisconnect, "reason");
-        RequireParameterNames(problems, clientDisconnect, "reason");
-        RequireParameterNames(problems, handshake, "peerId", "versionInfo");
+        ReflectScope.RequireParameterNames(problems, hostDisconnect, "reason");
+        ReflectScope.RequireParameterNames(problems, clientDisconnect, "reason");
+        ReflectScope.RequireParameterNames(problems, handshake, "peerId", "versionInfo");
 
         // ---- game: types only referenced inside patch bodies ----
         //
         // These are the ones no "install-time" check would otherwise catch: they appear in handler bodies, so a rename
         // surfaces as a TypeLoadException inside the game's own method the first time the handler runs, where a
         // try/catch inside the handler cannot help (the parameter types are resolved when the method is JITted).
-        GameType(NetClientDataTypeName, problems);
-        Type? loadScreen = GameType(LoadGameScreenTypeName, problems);
-        Field(problems, loadScreen, "_runLobby");
-        GameType(MainMenuTypeName, problems);
-        GameType(SubmenuStackTypeName, problems);
-        GameType(GenericPopupTypeName, problems);
-        GameType(ModalContainerTypeName, problems);
-        GameType(ErrorPopupTypeName, problems);
-        GameType(InputSynchronizerTypeName, problems);
+        ReflectScope.GameType(NetClientDataTypeName, problems);
+        Type? loadScreen = ReflectScope.GameType(LoadGameScreenTypeName, problems);
+        ReflectScope.Field(problems, loadScreen, "_runLobby");
+        ReflectScope.GameType(MainMenuTypeName, problems);
+        ReflectScope.GameType(SubmenuStackTypeName, problems);
+        ReflectScope.GameType(GenericPopupTypeName, problems);
+        ReflectScope.GameType(ModalContainerTypeName, problems);
+        ReflectScope.GameType(ErrorPopupTypeName, problems);
+        ReflectScope.GameType(InputSynchronizerTypeName, problems);
 
         if (problems.Count > 0
             || tryLoad == null
@@ -2004,214 +2003,6 @@ internal sealed class MidRunRestartFix : ICompatFix
         MethodInfo HostDisconnect,
         MethodInfo ClientDisconnect,
         MethodInfo HandshakeSucceeded);
-
-    private static Type? HostType(Assembly host, string fullName, List<string> problems)
-    {
-        Type? type = host.GetType(fullName, throwOnError: false, ignoreCase: false);
-        if (type == null)
-        {
-            problems.Add($"type {fullName} (host mod)");
-        }
-
-        return type;
-    }
-
-    private static Type? GameType(string fullName, List<string> problems)
-    {
-        Type? type = FindType(fullName);
-        if (type == null)
-        {
-            problems.Add($"type {fullName} (game)");
-        }
-
-        return type;
-    }
-
-    /// <summary>
-    /// Finds a type by full name across the loaded assemblies. No <c>typeof</c>, so a game build that renamed the type
-    /// costs this anchor, not the whole probe.
-    /// </summary>
-    private static Type? FindType(string fullName)
-    {
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            try
-            {
-                Type? type = assembly.GetType(fullName, throwOnError: false, ignoreCase: false);
-                if (type != null)
-                {
-                    return type;
-                }
-            }
-            catch (Exception)
-            {
-                // Dynamic and reflection-only assemblies refuse GetType; none of them can own a game type.
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Finds one instance method by name and *exact* parameter types.
-    ///
-    /// Arity alone is not enough to bind a patch: <c>Disconnect(NetError, bool)</c> and
-    /// <c>Disconnect(NetError, bool, string)</c> differ in count, but <c>Disconnect(NetError, bool)</c> and
-    /// <c>Disconnect(NetErrorInfo, bool)</c> do not — and patching the wrong one would silently hook an unrelated
-    /// path. Every call site below therefore spells out the parameter types it expects.
-    /// </summary>
-    private static MethodInfo? InstanceMethod(
-        List<string> problems,
-        Type? owner,
-        string name,
-        params string[] parameterTypeNames) =>
-        MatchMethod(problems, owner, name, BindingFlags.Instance, parameterTypeNames);
-
-    private static MethodInfo? StaticMethod(
-        List<string> problems,
-        Type? owner,
-        string name,
-        params string[] parameterTypeNames) =>
-        MatchMethod(problems, owner, name, BindingFlags.Static, parameterTypeNames);
-
-    private static MethodInfo? MatchMethod(
-        List<string> problems,
-        Type? owner,
-        string name,
-        BindingFlags scope,
-        string[] parameterTypeNames)
-    {
-        // A missing owner type was already reported by HostType/GameType; repeating it here would bury the reason.
-        if (owner == null)
-        {
-            return null;
-        }
-
-        MethodInfo[] byName = owner
-            .GetMethods(scope | BindingFlags.Public | BindingFlags.NonPublic)
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal)
-                             && method.GetParameters().Length == parameterTypeNames.Length)
-            .ToArray();
-
-        MethodInfo[] exact = byName
-            .Where(method => ParametersMatch(method.GetParameters(), parameterTypeNames))
-            .ToArray();
-
-        if (exact.Length == 1)
-        {
-            return exact[0];
-        }
-
-        string expected = $"{owner.FullName}.{name}({string.Join(", ", parameterTypeNames)})";
-        if (exact.Length > 1)
-        {
-            problems.Add($"{expected} is ambiguous ({exact.Length} overloads)");
-        }
-        else if (byName.Length > 0)
-        {
-            problems.Add($"{expected} has {byName.Length} same-arity overload(s) with different parameter types");
-        }
-        else
-        {
-            problems.Add($"{expected} (not found)");
-        }
-
-        return null;
-    }
-
-    private static bool ParametersMatch(ParameterInfo[] parameters, string[] parameterTypeNames)
-    {
-        for (int index = 0; index < parameters.Length; index++)
-        {
-            // By-ref parameters report "T&" as their FullName; the call sites spell that out explicitly so a
-            // by-value overload can never be mistaken for the by-ref one.
-            if (!string.Equals(parameters[index].ParameterType.FullName, parameterTypeNames[index], StringComparison.Ordinal))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-
-    /// <summary>
-    /// Verifies the parameter *names* of a method we patch.
-    ///
-    /// Harmony binds a prefix/postfix argument to the target parameter with the same name, so a rename
-    /// (<c>reason</c> to <c>error</c>) silently breaks the binding: the patch either fails to apply or, worse, binds
-    /// nothing and the guard stops guarding. Parameter types are checked separately; this is the name half.
-    /// </summary>
-    private static void RequireParameterNames(List<string> problems, MethodInfo? method, params string[] names)
-    {
-        if (method == null)
-        {
-            return;
-        }
-
-        ParameterInfo[] parameters = method.GetParameters();
-        for (int index = 0; index < parameters.Length && index < names.Length; index++)
-        {
-            if (!string.Equals(parameters[index].Name, names[index], StringComparison.Ordinal))
-            {
-                problems.Add(
-                    $"{method.DeclaringType?.Name}.{method.Name} parameter {index} is '{parameters[index].Name}', " +
-                    $"expected '{names[index]}' (Harmony binds by name)");
-            }
-        }
-    }
-
-    private static FieldInfo? Field(List<string> problems, Type? owner, string name)
-    {
-        if (owner == null)
-        {
-            return null;
-        }
-
-        FieldInfo? field = owner.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (field == null)
-        {
-            problems.Add($"{owner.FullName}.{name}");
-        }
-
-        return field;
-    }
-
-    private static PropertyInfo? Property(List<string> problems, Type? owner, string name)
-    {
-        if (owner == null)
-        {
-            return null;
-        }
-
-        PropertyInfo? property = owner.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (property == null)
-        {
-            problems.Add($"{owner.FullName}.{name}");
-        }
-
-        return property;
-    }
-
-    /// <summary>
-    /// Same as <see cref="Property"/> but for a static member — <c>LanConnectTailMessageRuntime.Shared</c> is a
-    /// static property, and the instance-only lookup above would never find it.
-    /// </summary>
-    private static PropertyInfo? StaticProperty(List<string> problems, Type? owner, string name)
-    {
-        if (owner == null)
-        {
-            return null;
-        }
-
-        PropertyInfo? property = owner.GetProperty(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-        if (property == null)
-        {
-            problems.Add($"{owner.FullName}.{name} (static)");
-        }
-
-        return property;
-    }
 
     private sealed class PanelShape
     {

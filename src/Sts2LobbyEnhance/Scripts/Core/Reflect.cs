@@ -22,7 +22,7 @@ namespace Sts2LobbyEnhance;
 ///   * <c>Require*</c> throws with the member name. For call sites that genuinely cannot continue
 ///     without the member, where "found nothing" is a bug worth a stack trace.
 ///   * <c>Try*</c> returns <c>null</c> and never throws. For probes and repairs that must report
-///     *every* missing anchor instead of dying on the first one (see <see cref="AnchorProbe"/>).
+///     *every* missing anchor instead of dying on the first one (see <see cref="ReflectScope"/>).
 ///     Ambiguity counts as "not found" there: a probe must never bind to an arbitrary overload.
 /// </summary>
 internal static class Reflect
@@ -48,10 +48,6 @@ internal static class Reflect
 
     internal static MethodInfo RequireInstanceMethod(Type type, string name, params Type[] parameters) =>
         type.GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, binder: null, types: parameters, modifiers: null)
-        ?? throw new MissingMemberException(type.FullName, name);
-
-    internal static MethodInfo RequireStaticMethod(Type type, string name, params Type[] parameters) =>
-        type.GetMethod(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, binder: null, types: parameters, modifiers: null)
         ?? throw new MissingMemberException(type.FullName, name);
 
     /// <summary>
@@ -184,16 +180,6 @@ internal static class Reflect
     internal static object RequireStaticPropertyValue(Type type, string name) =>
         RequireProperty(type, name).GetValue(null)
         ?? throw new InvalidOperationException($"{type.FullName}.{name} returned null.");
-
-    /// <summary>Writes a property whose setter is private (LAN Connect uses private setters heavily).</summary>
-    internal static void SetPropertyValue(object instance, string name, object? value)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        PropertyInfo property = RequireProperty(instance.GetType(), name);
-        MethodInfo? setter = property.GetSetMethod(nonPublic: true)
-            ?? throw new MissingMemberException(instance.GetType().FullName, name + ".set");
-        setter.Invoke(instance, new[] { value });
-    }
 
     internal static object? InvokeStatic(Type type, string name, params object?[] arguments)
     {

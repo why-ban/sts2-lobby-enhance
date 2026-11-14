@@ -1,0 +1,293 @@
+using System.Reflection;
+using Godot;
+using HarmonyLib;
+
+namespace Sts2LobbyEnhance;
+
+/// <summary>
+/// Leaves only 「新协议」 in the create-room dialog and preselects it. The legacy option is hidden, not removed:
+/// the upstream button, its description, its protocol id and every code path that handles 兼容旧版 Mod stay
+/// untouched, and joining a room that was created with the legacy protocol is unaffected — that path reads the
+/// room's advertised profile, not this dialog.
+///
+/// Why: RitsuLib is a dependency of many mods, and upstream refuses to host it on the legacy profile at all
+/// (LanConnectCreateRoomIntent.cs:17-19 throws RitsuLibNotAllowedInCompat). So a host who picks 兼容旧版 Mod
+/// while RitsuLib is installed gets an error, and a host who does not have RitsuLib installed silently creates a
+/// room that cannot carry it. The two profiles are otherwise identical in play, so presenting both is a trap
+/// with no upside.
+///
+/// Upstream's own reason for keeping the option is "players on older mod versions could not join otherwise".
+/// Hiding the entry does not change what those players can join: they still see and enter legacy rooms created
+/// elsewhere, and Workshop subscriptions update the mod automatically, so the population still on 0.3–0.5 keeps
+/// shrinking. If upstream ever ships a reason to keep the entry, this fix steps aside on its own — see the
+/// self-healing rule below.
+///
+/// Self-healing by construction: the postfix does nothing unless upstream still offers BOTH protocol buttons and
+/// considers 新协议 selectable. Any other shape (one button, renamed field, new protocol id, tail runtime
+/// unavailable) leaves the dialog exactly as upstream built it.
+/// </summary>
+internal sealed class NewProtocolOnlyFix : ICompatFix
+{
+    private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyOverlay";
+    private const string RefreshMethodName = "RefreshProtocolProfileOptionAvailability";
+    private const string TailButtonFieldName = "_protocolTailButton";
+    private const string CompatButtonFieldName = "_protocolCompatButton";
+    private const string SelectedIdFieldName = "_selectedCreateProtocolId";
+    private const string SelectableMethodName = "IsCreateProtocolSelectable";
+    private const string TailRuntimeMethodName = "IsStandaloneTailRuntimeAvailable";
+    private const string StylesMethodName = "UpdateProtocolChoiceStyles";
+    private const string HintMethodName = "UpdateProtocolProfileHint";
+
+    /// <summary>Upstream's protocol id for 新协议 (<c>LanConnectLobbyOverlay.cs:7301</c>, id <c>301</c>).</summary>
+    private const int TailProtocolId = 301;
+
+    private static Shape? _shape;
+
+    public string Id => "new-protocol-only";
+
+    /// <summary>
+    /// Same group as <see cref="ExtraGameModesFix"/>: both edit the same create-room dialog, so a shape change
+    /// that breaks one almost always breaks the other, and they should be rolled back together.
+    /// </summary>
+    public FixGroup Group => FixGroup.Modes;
+
+    /// <summary>
+    /// Applicable when the dialog's protocol controls resolve. <see cref="CompatSnapshot"/> is not read — no
+    /// game-version breakpoint has anything to say about which protocol buttons exist.
+    /// </summary>
+    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    {
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod 'sts2_lan_connect' is not loaded";
+            return false;
+        }
+
+        Shape? shape = Shape.TryCapture(host, out reason);
+        if (shape == null)
+        {
+            return false;
+        }
+
+        _shape = shape;
+        reason = string.Empty;
+        return true;
+    }
+
+    public void Apply(Harmony harmony, in CompatSnapshot snapshot)
+    {
+        Shape shape = _shape ?? throw new InvalidOperationException(
+            "new-protocol-only: Applies() did not capture the dialog shape; refusing to patch blind.");
+
+        harmony.Patch(
+            shape.Refresh,
+            postfix: new HarmonyMethod(typeof(NewProtocolOnlyFix), nameof(RefreshPostfix))
+            {
+                priority = Priority.Last
+            });
+
+        Entry.Info(
+            "new-protocol-only: patched " + OverlayTypeName + "." + RefreshMethodName + "; the create-room dialog " +
+            "now offers 新协议 only (the legacy button is hidden, not removed).");
+    }
+
+    // ReSharper disable once UnusedParameter.Local — Harmony binds by position.
+    private static void RefreshPostfix(object __instance)
+    {
+        if (_shape is not { } shape || __instance == null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (shape.TailButton.GetValue(__instance) is not Button tail ||
+                shape.CompatButton.GetValue(__instance) is not Button compat)
+            {
+                // Dialog not built yet (upstream returns early in the same situation), or the buttons were
+                // removed. Either way there is nothing to hide and forcing a selection would be wrong.
+                return;
+            }
+
+            // Only act when upstream agrees 新协议 is actually usable right now. If the message registry is not
+            // ready, the legacy button is the only way to host at all, and hiding it would strand the player.
+            if (!IsTailSelectable(shape))
+            {
+                return;
+            }
+
+            compat.Visible = false;
+
+            if (shape.SelectedId.GetValue(__instance) is int selected && selected == TailProtocolId)
+            {
+                return;
+            }
+
+            shape.SelectedId.SetValue(__instance, TailProtocolId);
+            shape.UpdateStyles.Invoke(__instance, null);
+            shape.UpdateHint.Invoke(__instance, null);
+        }
+        catch (Exception exception)
+        {
+            // A UI preference must never break room creation. Leave upstream's dialog as it is and say so once.
+            WarnOnce("could not hide the legacy protocol entry: " + exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Asks upstream whether 新协议 is selectable right now, using upstream's own predicate so this fix can never
+    /// disagree with the button's disabled state.
+    /// </summary>
+    private static bool IsTailSelectable(Shape shape)
+    {
+        object? offer = shape.CreateOffer.Invoke(null, null);
+        object? tailAvailable = shape.TailRuntimeAvailable.Invoke(null, null);
+        if (offer == null || tailAvailable is not bool available)
+        {
+            return false;
+        }
+
+        return shape.IsSelectable.Invoke(null, new[] { (object)TailProtocolId, offer, available }) is true;
+    }
+
+    private static int _warned;
+
+    private static void WarnOnce(string message)
+    {
+        if (Interlocked.Exchange(ref _warned, 1) != 0)
+        {
+            return;
+        }
+
+        Entry.Warn("new-protocol-only: " + message);
+    }
+
+    /// <summary>
+    /// Every member this fix touches, resolved once in <see cref="Applies"/> and never again. Metadata only: no
+    /// <c>typeof</c> on a host type, nothing invoked while probing.
+    /// </summary>
+    internal sealed class Shape
+    {
+        private Shape(
+            MethodInfo refresh,
+            FieldInfo tailButton,
+            FieldInfo compatButton,
+            FieldInfo selectedId,
+            MethodInfo isSelectable,
+            MethodInfo createOffer,
+            MethodInfo tailRuntimeAvailable,
+            MethodInfo updateStyles,
+            MethodInfo updateHint)
+        {
+            Refresh = refresh;
+            TailButton = tailButton;
+            CompatButton = compatButton;
+            SelectedId = selectedId;
+            IsSelectable = isSelectable;
+            CreateOffer = createOffer;
+            TailRuntimeAvailable = tailRuntimeAvailable;
+            UpdateStyles = updateStyles;
+            UpdateHint = updateHint;
+        }
+
+        internal MethodInfo Refresh { get; }
+
+        internal FieldInfo TailButton { get; }
+
+        internal FieldInfo CompatButton { get; }
+
+        internal FieldInfo SelectedId { get; }
+
+        internal MethodInfo IsSelectable { get; }
+
+        internal MethodInfo CreateOffer { get; }
+
+        internal MethodInfo TailRuntimeAvailable { get; }
+
+        internal MethodInfo UpdateStyles { get; }
+
+        internal MethodInfo UpdateHint { get; }
+
+        internal static Shape? TryCapture(Assembly host, out string reason)
+        {
+            var missing = new List<string>();
+
+            Type? overlay = host.GetType(OverlayTypeName, throwOnError: false, ignoreCase: false);
+            if (overlay == null)
+            {
+                reason = "missing: " + OverlayTypeName;
+                return null;
+            }
+
+            MethodInfo? refresh = Instance(overlay, RefreshMethodName, 0, missing);
+            FieldInfo? tail = Field(overlay, TailButtonFieldName, missing);
+            FieldInfo? compat = Field(overlay, CompatButtonFieldName, missing);
+            FieldInfo? selected = Field(overlay, SelectedIdFieldName, missing);
+            MethodInfo? selectable = Static(overlay, SelectableMethodName, 3, missing);
+            MethodInfo? styles = Instance(overlay, StylesMethodName, 0, missing);
+            MethodInfo? hint = Instance(overlay, HintMethodName, 0, missing);
+
+            // LanConnectProtocolOffer is a host type, so it is resolved by name rather than named here.
+            Type? offerType = host.GetType("Sts2LanConnect.Scripts.LanConnectProtocolOffer", throwOnError: false, ignoreCase: false);
+            MethodInfo? createOffer = offerType == null
+                ? null
+                : offerType.GetMethod("CreateCurrent", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            if (createOffer == null)
+            {
+                missing.Add("LanConnectProtocolOffer.CreateCurrent");
+            }
+
+            // Static, not instance: dec-official LanConnectLobbyOverlay.cs:10667 is
+            // "private static bool IsStandaloneTailRuntimeAvailable()". Checking the wrong shape here is exactly
+            // what silently disabled extra-game-modes once, so the probe reports it as a missing anchor.
+            MethodInfo? tailRuntimeAvailable = Static(overlay, TailRuntimeMethodName, 0, missing);
+
+            if (missing.Count > 0)
+            {
+                reason = "missing: " + string.Join(", ", missing);
+                return null;
+            }
+
+            reason = string.Empty;
+            return new Shape(refresh!, tail!, compat!, selected!, selectable!, createOffer!, tailRuntimeAvailable!, styles!, hint!);
+        }
+
+        private static MethodInfo? Instance(Type owner, string name, int arity, List<string> missing)
+        {
+            MethodInfo? method = owner
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(candidate => candidate.Name == name && candidate.GetParameters().Length == arity);
+            if (method == null)
+            {
+                missing.Add(OverlayTypeName + "." + name + "/" + arity);
+            }
+
+            return method;
+        }
+
+        private static MethodInfo? Static(Type owner, string name, int arity, List<string> missing)
+        {
+            MethodInfo? method = owner
+                .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(candidate => candidate.Name == name && candidate.GetParameters().Length == arity);
+            if (method == null)
+            {
+                missing.Add(OverlayTypeName + "." + name + "/" + arity + " (static)");
+            }
+
+            return method;
+        }
+
+        private static FieldInfo? Field(Type owner, string name, List<string> missing)
+        {
+            FieldInfo? field = owner.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (field == null)
+            {
+                missing.Add(OverlayTypeName + "." + name);
+            }
+
+            return field;
+        }
+    }
+}

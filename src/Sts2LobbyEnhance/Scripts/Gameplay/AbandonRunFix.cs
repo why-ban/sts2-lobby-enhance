@@ -442,7 +442,7 @@ internal sealed class AbandonRunFix : ICompatFix
             if (submenu == null) missing.Add(SubmenuTypeName);
 
             // The stub: static, one NMultiplayerSubmenu parameter, returns Task.
-            MethodInfo? stub = Exact(
+            MethodInfo? stub = ReflectScope.Exact(
                 compatibility,
                 StubMethodName,
                 requireStatic: true,
@@ -450,7 +450,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 TaskTypeName,
                 missing);
 
-            MethodInfo? confirm = Exact(
+            MethodInfo? confirm = ReflectScope.Exact(
                 compatibility,
                 "ConfirmPermanentAbandonAsync",
                 requireStatic: true,
@@ -458,7 +458,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 null,
                 missing);
 
-            MethodInfo? load = Exact(
+            MethodInfo? load = ReflectScope.Exact(
                 compatibility,
                 "TryLoadSafeCurrentRun",
                 requireStatic: true,
@@ -466,7 +466,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 null,
                 missing);
 
-            MethodInfo? tryCreate = Exact(
+            MethodInfo? tryCreate = ReflectScope.Exact(
                 backup,
                 "TryCreate",
                 requireStatic: true,
@@ -478,7 +478,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 null,
                 missing);
 
-            MethodInfo? resolveDataDirectory = Exact(
+            MethodInfo? resolveDataDirectory = ReflectScope.Exact(
                 paths,
                 "ResolveWritableDataDirectory",
                 requireStatic: true,
@@ -486,7 +486,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 null,
                 missing);
 
-            MethodInfo? buildSaveKey = Exact(
+            MethodInfo? buildSaveKey = ReflectScope.Exact(
                 binding,
                 "BuildSaveKey",
                 requireStatic: true,
@@ -494,7 +494,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 null,
                 missing);
 
-            MethodInfo? removeBinding = Exact(
+            MethodInfo? removeBinding = ReflectScope.Exact(
                 config,
                 "RemoveSaveRoomBinding",
                 requireStatic: true,
@@ -502,7 +502,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 null,
                 missing);
 
-            MethodInfo? showInfo = Exact(
+            MethodInfo? showInfo = ReflectScope.Exact(
                 popup,
                 "ShowInfo",
                 requireStatic: true,
@@ -510,7 +510,7 @@ internal sealed class AbandonRunFix : ICompatFix
                 null,
                 missing);
 
-            MethodInfo? updateButtons = Exact(
+            MethodInfo? updateButtons = ReflectScope.Exact(
                 submenu,
                 "UpdateButtons",
                 requireStatic: false,
@@ -521,7 +521,7 @@ internal sealed class AbandonRunFix : ICompatFix
             // The game-side break itself: UpdateProgressWithRunData must return exactly PostRunProgressUpdateResult.
             // "Returns something that is not void" is not enough — a ValueTask or Task<T> return would satisfy that
             // check and then fail inside AbandonAsync, which assigns the result to PostRunProgressUpdateResult.
-            MethodInfo? updateProgress = Exact(
+            MethodInfo? updateProgress = ReflectScope.Exact(
                 saveManager,
                 "UpdateProgressWithRunData",
                 requireStatic: false,
@@ -531,7 +531,7 @@ internal sealed class AbandonRunFix : ICompatFix
 
             if (updateProgress == null)
             {
-                // Exact() already recorded the mismatch; add the reason in the operator's language.
+                // ReflectScope.Exact() already recorded the mismatch; add the reason in the operator's language.
                 missing.Add(
                     "SaveManager.UpdateProgressWithRunData must return " + PostRunProgressUpdateResultTypeName +
                     " for this repair to be applicable");
@@ -556,58 +556,5 @@ internal sealed class AbandonRunFix : ICompatFix
                 updateButtons!);
         }
 
-        /// <summary>
-        /// Finds one method by name, static-ness and exact parameter/return type names. Names are compared as
-        /// strings so the probe never has to <c>typeof</c> a type that a future build might have dropped.
-        /// </summary>
-        private static MethodInfo? Exact(
-            Type? type,
-            string name,
-            bool requireStatic,
-            string[] parameterTypeNames,
-            string? returnTypeName,
-            List<string> missing)
-        {
-            if (type == null)
-            {
-                return null;
-            }
-
-            MethodInfo[] matches = type
-                .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-                .Where(method => method.IsStatic == requireStatic)
-                .Where(method => method.GetParameters().Length == parameterTypeNames.Length)
-                .Where(method => method.GetParameters()
-                    .Select(parameter => parameter.ParameterType.FullName)
-                    .SequenceEqual(parameterTypeNames))
-                .Where(method => returnTypeName == null || method.ReturnType.FullName == returnTypeName)
-                .ToArray();
-
-            if (matches.Length == 1)
-            {
-                return matches[0];
-            }
-
-            missing.Add(matches.Length == 0
-                ? type.Name + "." + name + "(" + string.Join(", ", parameterTypeNames.Select(Short)) + ")" +
-                  (returnTypeName == null ? string.Empty : " -> " + Short(returnTypeName))
-                : type.Name + "." + name + " (ambiguous: " + matches.Length + " overloads)");
-            return null;
-        }
-
-        /// <summary>
-        /// Last segment of a type name, keeping the by-ref marker. The reason line is read by a person
-        /// looking at a log, and <c>SerializableRun&amp;</c> says the same thing as
-        /// <c>MegaCrit.Sts2.Core.Runs.SerializableRun&amp;</c> in a tenth of the width.
-        /// </summary>
-        private static string Short(string typeName)
-        {
-            bool byRef = typeName.EndsWith("&", StringComparison.Ordinal);
-            string bare = byRef ? typeName[..^1] : typeName;
-            int dot = bare.LastIndexOf('.');
-            string shortName = dot >= 0 ? bare[(dot + 1)..] : bare;
-            return byRef ? shortName + "&" : shortName;
-        }
     }
 }

@@ -217,7 +217,7 @@ internal sealed class JoinTakeoverFix : ICompatFix
         Type? flowType = TypeOf(host, FlowTypeName, missing);
         if (flowType != null)
         {
-            MethodInfo? beginAsync = MethodOf(flowType, "BeginAsync", 2, missing);
+            MethodInfo? beginAsync = ReflectScope.MethodOf(flowType, "BeginAsync", 2, missing);
             if (beginAsync != null)
             {
                 ParameterInfo[] parameters = beginAsync.GetParameters();
@@ -232,12 +232,12 @@ internal sealed class JoinTakeoverFix : ICompatFix
                 }
             }
 
-            shape.NetService = PropertyOf(flowType, "NetService", missing)!;
-            shape.CancelToken = PropertyOf(flowType, "CancelToken", missing)!;
-            shape.ProtocolSelection = FieldOf(flowType, "_protocolSelection", missing)!;
-            shape.ProtocolOffer = FieldOf(flowType, "_protocolOffer", missing)!;
-            shape.ProtocolFlowNonce = FieldOf(flowType, "_protocolFlowNonce", missing)!;
-            shape.PeerNativeBusTypeId = FieldOf(flowType, "_peerNativeBusTypeId", missing)!;
+            shape.NetService = ReflectScope.PropertyOf(flowType, "NetService", missing)!;
+            shape.CancelToken = ReflectScope.PropertyOf(flowType, "CancelToken", missing)!;
+            shape.ProtocolSelection = ReflectScope.FieldOf(flowType, "_protocolSelection", missing)!;
+            shape.ProtocolOffer = ReflectScope.FieldOf(flowType, "_protocolOffer", missing)!;
+            shape.ProtocolFlowNonce = ReflectScope.FieldOf(flowType, "_protocolFlowNonce", missing)!;
+            shape.PeerNativeBusTypeId = ReflectScope.FieldOf(flowType, "_peerNativeBusTypeId", missing)!;
 
             if (shape.NetService != null && shape.NetService.GetSetMethod(nonPublic: true) == null)
             {
@@ -284,7 +284,7 @@ internal sealed class JoinTakeoverFix : ICompatFix
             if (shape.ProtocolSelection != null)
             {
                 Type selectionType = shape.ProtocolSelection.FieldType;
-                PropertyInfo? profile = PropertyOf(selectionType, "Profile", missing);
+                PropertyInfo? profile = ReflectScope.PropertyOf(selectionType, "Profile", missing);
                 if (profile != null)
                 {
                     if (profile.PropertyType != profileType)
@@ -348,10 +348,10 @@ internal sealed class JoinTakeoverFix : ICompatFix
         if (runtimeType != null)
         {
             shape.TailRuntimeType = runtimeType;
-            shape.Shared = PropertyOf(runtimeType, "Shared", missing)!;
-            shape.GetMessageBus = MethodOf(runtimeType, "GetMessageBus", 1, missing)!;
-            shape.Bind = MethodOf(runtimeType, "Bind", 7, missing)!;
-            shape.Unbind = MethodOf(runtimeType, "Unbind", 1, missing)!;
+            shape.Shared = ReflectScope.PropertyOf(runtimeType, "Shared", missing)!;
+            shape.GetMessageBus = ReflectScope.MethodOf(runtimeType, "GetMessageBus", 1, missing)!;
+            shape.Bind = ReflectScope.MethodOf(runtimeType, "Bind", 7, missing)!;
+            shape.Unbind = ReflectScope.MethodOf(runtimeType, "Unbind", 1, missing)!;
 
             if (shape.Shared != null && shape.Shared.GetGetMethod(nonPublic: true) is not { IsStatic: true })
             {
@@ -438,47 +438,6 @@ internal sealed class JoinTakeoverFix : ICompatFix
         }
 
         return type;
-    }
-
-    private static FieldInfo? FieldOf(Type type, string name, List<string> missing)
-    {
-        FieldInfo? field = type.GetField(name, AnyMember);
-        if (field == null)
-        {
-            missing.Add($"{type.FullName}.{name}");
-        }
-
-        return field;
-    }
-
-    private static PropertyInfo? PropertyOf(Type type, string name, List<string> missing)
-    {
-        PropertyInfo? property = type.GetProperty(name, AnyMember);
-        if (property == null)
-        {
-            missing.Add($"{type.FullName}.{name}");
-        }
-
-        return property;
-    }
-
-    private static MethodInfo? MethodOf(Type type, string name, int parameterCount, List<string> missing)
-    {
-        MethodInfo[] matches = type
-            .GetMethods(AnyMember)
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-            .Where(method => method.GetParameters().Length == parameterCount)
-            .ToArray();
-
-        if (matches.Length == 1)
-        {
-            return matches[0];
-        }
-
-        missing.Add(matches.Length == 0
-            ? $"{type.FullName}.{name} ({parameterCount} parameter(s))"
-            : $"{type.FullName}.{name} ({parameterCount} parameter(s)) is ambiguous: {matches.Length} overloads");
-        return null;
     }
 
     // ReSharper disable once UnusedParameter.Local — Harmony binds by position.

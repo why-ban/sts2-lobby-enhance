@@ -39,6 +39,7 @@ string[] expectedFixIds =
     "new-run-button",
     "mid-run-restart",
     "extra-game-modes",
+    "new-protocol-only",
     "room-card-pill",
     "unlock-extra-modes"
 ];
@@ -61,6 +62,7 @@ string[] expectedFixIds =
     ("extra-game-modes",   "LanConnectLobbyOverlay",           "GameModeFromCreateId"),
     // The room-card mode pill is a separate Harmony postfix on a private static method of the same
     // type; without this row, deleting that patch would leave the fix "applied" with no proof.
+    ("new-protocol-only",  "LanConnectLobbyOverlay",           "RefreshProtocolProfileOptionAvailability"),
     ("room-card-pill",     "LanConnectLobbyOverlay",           "GetRoomGameModePill"),
     ("unlock-extra-modes", "SaveManager",                      "GenerateUnlockStateFromProgress")
 ];
