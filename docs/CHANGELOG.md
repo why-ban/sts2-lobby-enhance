@@ -99,6 +99,8 @@
   原因：功能早已不止「兼容 0.113」，而 id 里带死版本号会在游戏后续更新时变得荒谬。
 - **联机双方必须同时换成新版本**：握手报文里报的是 `id-version`，新旧 id 会互相认不出，
   旧对端会被判「没装补丁」而走保守分支（不崩，但「新开一局」等功能不对等）。
+  注意这条**只管「换 id」这一次**：`ContainsOurId` 按 id 前缀匹配、**不比较版本号**
+  （`NewRunFromGameOverFix.cs:59-64`），所以同一 id 下 1.7.0 与 1.8.0 可以互通，不需要双方同版本。
 - 游戏按 `manifest.id + ".dll"` 找程序集，所以 DLL / 清单 / 安装目录同步改名：
   `sts2_lobby_enhance.dll`、`sts2_lobby_enhance.json`、`mods/sts2_lobby_enhance/`。
 
