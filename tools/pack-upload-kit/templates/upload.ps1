@@ -141,6 +141,24 @@ function Get-Diagnosis {
             )
         }
         @{
+            Key     = 'submit-nologin'
+            Pattern = 'k_EResultNotLoggedOn'
+            Reason  = 'Steam 认为这个会话没有登录：登录状态失效，或者 Steam 还停在登录界面。'
+            Advice  = @(
+                '打开 Steam 客户端确认已经处于登录状态（能看到自己的库），然后重新双击 upload.bat。'
+                '如果刚改过密码、被踢下线，或者 Steam 是刚启动还没登录完，请先在 Steam 里登录一次。'
+            )
+        }
+        @{
+            Key     = 'not-owner'
+            Pattern = 'k_EItemUpdateStatusInvalid'
+            Reason  = 'Steam 不允许这个账号更新工坊条目 3839101755 —— 通常是因为当前登录的账号不是该条目的作者。'
+            Advice  = @(
+                '换回当初上传这个条目的那个 Steam 账号（条目作者），再双击一次 upload.bat。'
+                '创意工坊条目不能转让作者，换账号只会得到这个错误。'
+            )
+        }
+        @{
             Key     = 'steam-init'
             Pattern = 'Steam initialization failed!'
             Reason  = 'Steam 初始化失败，上传器拿不到 Steam 接口。'

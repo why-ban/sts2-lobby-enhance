@@ -4,12 +4,12 @@ using Xunit;
 namespace Sts2LobbyEnhance.Tests;
 
 /// <summary>
-/// Pins down the *inventory* of repairs and the three repairs that had no automation at all.
+/// Pins down the *inventory* of repairs and the two repairs that had no automation at all.
 ///
 /// Why this file exists: until it was added, nothing in the suite asserted how many repairs the patch
 /// installs, so deleting one line from <c>Entry.cs</c>'s <c>CompatFixes.Build()</c> left every case green.
-/// <c>join-screen-modes</c>, <c>mid-run-restart</c> and <c>unlock-extra-modes</c> had zero coverage of any
-/// kind, and the v1.5 headline feature was <c>join-screen-modes</c>.
+/// <c>join-screen-modes</c> and <c>unlock-extra-modes</c> had zero coverage of any kind, and the v1.5
+/// headline feature was <c>join-screen-modes</c>.
 ///
 /// Scope, stated honestly:
 ///   * These assertions read the **source** of the patch. They are not a build and not a runtime test;
@@ -42,7 +42,6 @@ public sealed class FixRegistryTests
         "abandon-run",
         "new-run-button",
         "new-run-save-binding",
-        "mid-run-restart",
         "extra-game-modes",
         "new-protocol-only",
         "room-card-pill",
@@ -202,30 +201,6 @@ public sealed class FixRegistryTests
         Assert.Contains("\"IsEpochRevealed\"", code, StringComparison.Ordinal);
         Assert.Contains("UnlockStateTypeName", code, StringComparison.Ordinal);
         Assert.Contains("BooleanTypeName", code, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void MidRunRestartKeyAnchorsStillExist()
-    {
-        string source = ReadScript(Path.Combine("Restart", "MidRunRestartFix.cs"));
-
-        Assert.Equal("mid-run-restart", ExtractFixId(source));
-
-        // 这些锚点只证明「要接管的方法名与签名还在源码里」。它们**不能**证明运行时行为：
-        // 「重开真的回到本层起点」「存档与房间绑定真的没被动」只有真机验证能证明，本仓库没有自动化。
-        // 运行期「这些接缝真的被打上补丁」由 tools/smoke-test 的 one-real-seam-per-fix 断言覆盖。
-        // Since v1.8.0 every anchor is resolved by Shape.TryCapture (metadata only, name + exact parameter
-        // types), so the assertion pins the names and the two Disconnect prefixes rather than the old
-        // Reflect.RequireInstanceMethod call shapes.
-        Assert.Contains("\"StartHostedRunRestartAsync\"", source, StringComparison.Ordinal);
-        Assert.Contains("\"StartRestartFlowAsync\"", source, StringComparison.Ordinal);
-        Assert.Contains("\"HandshakeSucceeded\"", source, StringComparison.Ordinal);
-        Assert.Contains("private static bool HostDisconnectPrefix", source, StringComparison.Ordinal);
-        Assert.Contains("private static bool ClientDisconnectPrefix", source, StringComparison.Ordinal);
-
-        // The panel takeover is deliberately optional (it is the only patch that touches a UI type); if it
-        // is ever made mandatory, this comment and the try/catch have to change together.
-        Assert.Contains("InstallPanelRestartFlowPatch(harmony, host, targets.StartHostedRestart);", source, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------- helpers

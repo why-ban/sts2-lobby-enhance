@@ -8,14 +8,16 @@
     每一条已知失败路径都真的跑一遍，断言脚本给出的「原因」和「怎么办」是人话、是对的。
 
     覆盖 5 个场景：
-      1. 干净解压 + 真实 Steam（本机账号无许可 → 必须翻译成「换账号」）
+      1. 干净解压 + 真实 Steam（失败必须被翻译成人话，而不是「未知错误」）
       2. 解压不完整（缺 content\LICENSE → 必须点名缺哪个文件，且不去连 Steam）
       3. 文件被改坏（image.png 多一个字节 → 必须报哈希不符，且不去连 Steam）
       4. visibility 被改成 private（必须在上传前拦住）
       5. 假上传器模拟成功（必须打印条目链接、写对 上传结果.txt）
       6. 覆盖解压造成的「新脚本 + 旧内容」混合版本（必须拦住，不许上传）
 
-    场景 1 会真的调用 Steam 接口（在无许可账号上只会得到 k_EResultAccessDenied，不会创建条目）。
+    场景 1 会真的调用 Steam 接口。它删掉 workspace\mod_id.txt 复现「首次上传」路径，所以只会尝试
+    新建条目、不会对线上条目 3839101755 发写请求；失败原因随本机 Steam 状态而变（没登录 / 没许可 /
+    不是条目作者），断言只要求「被翻译成人话」。
     不想碰 Steam 就加 -SkipLive。
 
 .PARAMETER Zip
@@ -209,7 +211,7 @@ try {
 
     if (-not $SkipLive) {
         Write-Host ''
-        Write-Host '=== 1. 干净解压 + 真实 Steam（本机账号无许可） ===' -ForegroundColor Cyan
+        Write-Host '=== 1. 干净解压 + 真实 Steam（失败必须被翻译成人话） ===' -ForegroundColor Cyan
         $k = New-Kit 'clean'
         # 删掉条目 ID 才能复现「首次上传」路径：否则本机会去尝试更新真实条目 3839101755。
         # 这一步本来就会被 Steam 拒（没有许可），但没必要真的对线上条目发写请求。
@@ -221,15 +223,22 @@ try {
         Assert-True     '退出码 0（脚本自己停住，不会被 bat 二次 pause）' ($run.Code -eq 0)
         Assert-True     '生成了 上传结果.txt' (Test-Path (Join-Path $k '上传结果.txt'))
         Assert-Contains '结果文件判定为失败' $res '结果        : 失败'
-        Assert-Contains '失败原因翻译成「换账号」' $res '没有《杀戮尖塔 2》'
+        # 失败原因必须是「人话」，不能落到兜底文案。具体是哪一种取决于跑验收这台机器的 Steam 状态
+        # （没登录 / 没许可 / 不是条目作者），所以这里钉的是「已经被翻译过」，不是某个特定句子。
+        Assert-NotContains '失败原因不是兜底文案' $res '没有匹配到已知的错误类型'
+        Assert-Contains    '结果文件给出了怎么办' $res '建议        :'
         Assert-Contains '结果文件带上了标题' $res '游戏大厅增强 / Game Lobby Enhance'
         # 版本号从包内清单读，不写死：写死的话每次发版都要改这一行，漏改就是假红。
         $manifestVersion = ([System.IO.File]::ReadAllText(
             (Join-Path $k 'workspace\content\sts2_lobby_enhance.json'),
             [System.Text.Encoding]::UTF8) | ConvertFrom-Json).version
         Assert-Contains '结果文件带上了版本' $res ('模组版本    : ' + $manifestVersion)
-        Assert-Contains '结果文件带上了上传器日志' $res 'k_EResultAccessDenied'
-        Assert-Contains '窗口里也打印了原因' $run.Text '这个 Steam 账号没有《杀戮尖塔 2》'
+        Assert-Contains '结果文件带上了上传器日志' $res 'Initializing Steam'
+        # 窗口里必须打印同一句原因：从结果文件里把原因抽出来，再要求窗口里也出现它
+        $reasonLine = (($res -split "`n") | Where-Object { $_ -match '失败原因' } | Select-Object -First 1)
+        $reasonText = ([string]$reasonLine -split ':', 2)[1].Trim()
+        $probe = $reasonText.Substring(0, [Math]::Min(10, $reasonText.Length))
+        Assert-Contains '窗口里也打印了原因' $run.Text $probe
         Assert-Contains '窗口里指明了要发回哪个文件' $run.Text '请把这个文件发回给作者'
     }
 

@@ -40,7 +40,6 @@ string[] expectedFixIds =
     "abandon-run",
     "new-run-button",
     "new-run-save-binding",
-    "mid-run-restart",
     "extra-game-modes",
     "new-protocol-only",
     "room-card-pill",
@@ -64,7 +63,6 @@ string[] expectedFixIds =
     ("abandon-run",        "LanConnectMultiplayerSaveCompatibility", "AbandonCurrentRunAsync"),
     ("new-run-button",     "NGameOverScreen",                  "_Ready"),
     ("new-run-save-binding", "RunManager",                       "SetUpNewMultiplayer"),
-    ("mid-run-restart",    "LanConnectLobbyRuntime",           "StartHostedRunRestartAsync"),
     ("extra-game-modes",   "LanConnectLobbyOverlay",           "GameModeFromCreateId"),
     // The room-card mode pill is a separate Harmony postfix on a private static method of the same
     // type; without this row, deleting that patch would leave the fix "applied" with no proof.

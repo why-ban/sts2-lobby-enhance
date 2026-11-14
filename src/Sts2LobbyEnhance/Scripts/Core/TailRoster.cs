@@ -9,8 +9,8 @@ namespace Sts2LobbyEnhance;
     /// Drops the accepted Tail roster epoch of one live session, so the next roster-bearing message from the
     /// host is validated as a bootstrap instead of as a "current state" repeat
     ///
-    /// Shared by <see cref="MidRunRestartFix"/> and <see cref="NewRunFromGameOverFix"/> because both keep the
-    /// <c>NetService</c> alive across a room rebuild and re-handshake on that same session
+    /// Used by <see cref="NewRunFromGameOverFix"/>, which keeps the <c>NetService</c> alive across a room rebuild
+    /// and re-handshakes on that same session
     ///
     /// The trap, from the shipped 0.6.3 binary under <c>work/lobby/dec-official</c>:
     /// <c>LanConnectTailMessageRuntime.AcceptRoster</c> picks the snapshot use with

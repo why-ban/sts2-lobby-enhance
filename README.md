@@ -24,9 +24,9 @@
 
 1. **兼容**：官方 0.6.3 是按游戏 0.111 编译的，在 0.113 上有 6 处成员签名断裂 —— 加入房间、
    建房、放弃本局等流程会抛异常或直接崩。这些被逐个接管修好。
-2. **功能**：局中「重开本层」、结算页「新开一局」、极速 / 恐惧模式建房与加入、房间列表标注模式。
+2. **功能**：结算页「新开一局」、极速 / 恐惧模式建房与加入、房间列表标注模式。
 
-完整清单见 [技术文档](docs/README.md)（14 项修复，每项都有 id、注入点与替代方案），
+完整清单见 [技术文档](docs/README.md)（13 项修复，每项都有 id、注入点与替代方案），
 逐版本改动见 [更新日志](docs/CHANGELOG.md)。
 
 ## 可靠性设计
@@ -34,14 +34,14 @@
 每个版本、每次官方模组更新，最常见的失败模式不是崩溃，而是**补丁悄悄没装上**。
 所以这一版把「版本开关」整个拆掉了：
 
-- 14 项修复各自实现 `ICompatFix`，自己解析锚点（类型 / 方法 / 参数类型逐个比对）；
-- 11 个 `FixGroup`，每组一个 Harmony id，某组失败只回滚自己那组，其它照常工作；
+- 13 项修复各自实现 `ICompatFix`，自己解析锚点（类型 / 方法 / 参数类型逐个比对）；
+- 10 个 `FixGroup`，每组一个 Harmony id，某组失败只回滚自己那组，其它照常工作；
 - 对不上时日志里明确写 `skipped: <id>: missing: <具体锚点>`，而不是整体静默失效。
 
 启动日志里能看到一行汇总：
 
 ```
-[lobby-enhance] summary: applied=14[...] skipped=0[] failed=0
+[lobby-enhance] summary: applied=13[...] skipped=0[] failed=0
 ```
 
 ## 环境要求
@@ -50,7 +50,7 @@
 |---|---|
 | 游戏 | Slay the Spire 2 **0.113.0**（Windows 桌面版 / Android 第三方启动器） |
 | 官方模组 | `sts2_lan_connect` **0.6.3 或更新**（创意工坊必需物品，订阅本模组会自动装上） |
-| 联机双方 | **都要装**本模组。只装一边能用，但「重开 / 新开一局」等功能不对等 |
+| 联机双方 | **都要装**本模组。只装一边能用，但「新开一局」等新功能不对等 |
 
 > **1.7.0 与 1.8.0 可以一起联机。** 对端识别只比对模组 id 前缀、不比较版本号
 > （`NewRunFromGameOverFix.cs:59-64`），所以不需要双方同时更新；只是没升级的那一端享受不到新修的几项。
@@ -99,7 +99,7 @@ Android 作房主验证过一次；**PC 作为加入方（客户端）尚未验�
 
 | 路径 | 内容 |
 |---|---|
-| `src/Sts2LobbyEnhance/` | 模组本体（`Scripts/` 按修复分组：Join / Wire / Tail / Gameplay / Restart / Ui / Unlock / Core） |
+| `src/Sts2LobbyEnhance/` | 模组本体（`Scripts/` 按注入点分目录：Join / Wire / Tail / Gameplay / Restart / Ui / Unlock / Core） |
 | `tests/` | xUnit 套件：契约、断点、发布件、UI 布局 |
 | `tools/` | 离线复现与验证工具（每个都是独立可运行项目） |
 | `packaging/` | 创意工坊上传工作区（`workshop.json`、封面、内容文件、条目 ID） |
@@ -113,7 +113,8 @@ Android 作房主验证过一次；**PC 作为加入方（客户端）尚未验�
 - [emptylower/STS2-Game-Lobby#44](https://github.com/emptylower/STS2-Game-Lobby/issues/44) ——
   0.113 的签名断裂清单与编译错误对照；
 - [emptylower/STS2-Game-Lobby#45](https://github.com/emptylower/STS2-Game-Lobby/issues/45) ——
-  「重开本层 / 新开一局」的设计与实现要点。
+  结算页「新开一局」的设计与实现要点（该 issue 最初还提过「局中重开本层」，我们后来撤回了，
+  原因见 issue 里的评论：房间中途有人掉线时它本来就失效，而那正是最需要它的场景）。
 
 代码里对每一处上游行为都标了 `文件:行号`（以部署版 0.6.3 的反编译为基准）。
 如果有用得上的地方，按 GPL-3.0 直接取用即可，不需要额外授权。
@@ -149,7 +150,7 @@ and an unpatched machine still join each other.
 Two jobs: (1) keep the official mod usable on game **0.113.0**, where six of its member signatures no
 longer resolve, and (2) add the multiplayer features players kept asking for — restart the current floor,
 start a new run from the game-over screen, host Blitz / Dread rooms, and label the room type in the lobby
-list. 14 repairs across 11 isolated Harmony groups; anything that no longer resolves disables only itself
+list. 13 repairs across 10 isolated Harmony groups; anything that no longer resolves disables only itself
 and says so in the log.
 
 Build with `dotnet build src/Sts2LobbyEnhance/Sts2LobbyEnhance.csproj -c Release -p:SkipModCopy=true`,

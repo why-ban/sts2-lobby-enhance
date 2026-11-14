@@ -1,9 +1,9 @@
-# 游戏大厅增强 v1.8.0（sts2_lobby_enhance）
+# 游戏大厅增强 v1.8.1（sts2_lobby_enhance）
 
-独立模组 `sts2_lobby_enhance`（**v1.8.0**）—— 让官方模组 `sts2_lan_connect` 0.6.3 在
+独立模组 `sts2_lobby_enhance`（**v1.8.1**）—— 让官方模组 `sts2_lan_connect` 0.6.3 在
 《Slay the Spire 2》0.113.0 上继续可用，并补上 0.113 新增的极速（Blitz）/ 恐惧（Dread）模式的联机支持。
 
-发布包按 `dist/sts2-lobby-enhance-v1.8.0.zip` 命名（打包步骤见 [`UPLOAD.md`](UPLOAD.md)）。
+发布包按 `dist/sts2-lobby-enhance-v1.8.1.zip` 命名（打包步骤见 [`UPLOAD.md`](UPLOAD.md)）。
 `ReleasePackageTests.LatestReleaseZipShipsTheContentAssembly` 会断言 `dist/` 里那个包与
 `packaging/content/` 逐条目一致（2026-11-13 出过一次「dist 里的包和 content 不是同一次构建」，
 这条测试就是补那个洞的）。本次改动见 [`CHANGELOG.md`](CHANGELOG.md)。
@@ -20,9 +20,9 @@
 |------|------|------|
 | 兼容修复 · 元数据断点 | **6 个断点 / 4 项修复** | 0.113 改了成员签名或删了字段，官方 0.6.3 的引用直接解析不了（#5 不需要修复，见下） |
 | 兼容修复 · 0.113 新模式 | **1 项** | 客户端加入极速 / 恐惧房间时，官方模组的推屏逻辑认不出新模式 |
-| 便利功能 | **4 项** | 局终新开一局、局中重开本层、极速 / 恐惧建房、解锁这两个模式 |
+| 便利功能 | **3 项** | 局终新开一局、极速 / 恐惧建房、解锁这两个模式 |
 
-合计 **14 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
+合计 **13 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
 
 ### 兼容修复：6 个元数据断点
 
@@ -49,7 +49,7 @@
 上表不是抄来的结论：`tests/` 里的 `BreakpointRegressionTests` 扫描官方 DLL 的 22,774 个元数据候选，
 断言"恰好这 6 个无法解析"；`GameApiShapeTests` 则直接读 `sts2.dll` 的元数据，断言每个断点的新旧形态。
 
-### 十四项修复清单
+### 十三项修复清单
 
 | # | id | 类别 | 解决什么 | 用户看到什么 |
 |---|----|------|----------|--------------|
@@ -60,13 +60,12 @@
 | 5 | `abandon-run` | 断点 #6 | 被破坏的是 `LanConnectMultiplayerSaveCompatibility.<AbandonCurrentRunAsync>d__14.MoveNext`。同样接管异步存根，按 0.113 签名重跑同一流程（确认框、备份、进度写入、历史记录、每日分数上传、删存档、房间绑定清理、按钮刷新）；新的返回值会被检查，写入失败会记日志 | "备份并放弃本局"正常完成 |
 | 6 | `new-run-button` | 功能 | 局终结算页由房主一键把全房带回准备页，见下节 | 不用重建房间、不用重新找队友 |
 | 7 | `new-run-save-binding` | 功能 | 「新开一局」复用同一个房间，而上游把房间的存档键（`HostedRoomSession.BoundSaveKey`）钉在第一局的存档上。新局的存档键必然不同（`BuildSaveKey` 含 `StartTime`），于是新存档的绑定写入被上游以 `save_key_mismatch` 拒绝；而更新键的那行代码只在写入成功后才执行——形成死锁。结果是新开一局之后的存档**没有房间绑定**，下次读档就报「无法确认这个多人存档原先使用的联机协议」。本修复在新一局真正开始时清空该键（上游对空键会直接采纳新 key） | 新开一局之后存档仍可正常续玩 |
-| 8 | `mid-run-restart` | 功能 | 局中回到本层开头，见下节 | 打错了不用退房重开 |
-| 9 | `extra-game-modes` | 功能 | 建房选择器新增极速 / 恐惧；大厅房间卡片也像「自定义」一样标注「极速」「恐惧」，见下节 | 大厅能选这两个模式，房间列表里也看得出类型 |
-| 10 | `roster-rebaseline` | 协议稳健性 | 上游的 tail 名册**只能表达"有人加入"，不能表达"有人离开"**（0.6.3 全树没有 `PlayerLeft` 处理）。因此开局前只要有减员，客户端名册就会停留在旧状态：开始游戏被 `StateTransition` 的成员校验拒、之后有人加入被 `MembershipMutation` 拒、续局/重开被 `CurrentState` 的逐字节校验拒——**该客户端本轮报废，只能退出重进**。本修复在 `LanConnectRosterAuthorityState.Accept` 前置判断：只要"我们手里有、房主快照里没有"的成员，就重新基线化 | 开局前踢人 / 有人掉线，不再让整个房间崩掉 |
-| 11 | `load-join-order` | 协议稳健性 | 上游 `RestoreLoadJoinPlayers` 用 `SequenceEqual` **逐位**比较两张表：左边是加入顺序，右边是存档顺序（快照按 `(RealSlotId, PlayerId)` 规范排序）。同集合不同序必判为不一致，于是"读档续玩必须按最初加入顺序进房"——第一个不按顺序的人只有 2 项尚能过，第二个就必然失败。本修复在比较前把已连接列表按存档下标重排 | 不必再按原顺序加入 |
-| 12 | `room-card-pill` | 功能 | 大厅房间卡片标注「极速」「恐惧」（从 `extra-game-modes` 拆出的独立项，纯装饰、可单独失败而不牵连其它修复） | 房间列表里看得出模式 |
-| 13 | `new-protocol-only` | 功能 | 建房时只保留「新协议」，隐藏「兼容旧版 Mod」入口，见下节 | 不用再在两种协议之间做选择 |
-| 14 | `unlock-extra-modes` | 功能 | 装补丁即可使用这两个模式，见下节 | 不必先打完时间线 |
+| 8 | `extra-game-modes` | 功能 | 建房选择器新增极速 / 恐惧；大厅房间卡片也像「自定义」一样标注「极速」「恐惧」，见下节 | 大厅能选这两个模式，房间列表里也看得出类型 |
+| 9 | `roster-rebaseline` | 协议稳健性 | 上游的 tail 名册**只能表达"有人加入"，不能表达"有人离开"**（0.6.3 全树没有 `PlayerLeft` 处理）。因此开局前只要有减员，客户端名册就会停留在旧状态：开始游戏被 `StateTransition` 的成员校验拒、之后有人加入被 `MembershipMutation` 拒、续局/重开被 `CurrentState` 的逐字节校验拒——**该客户端本轮报废，只能退出重进**。本修复在 `LanConnectRosterAuthorityState.Accept` 前置判断：只要"我们手里有、房主快照里没有"的成员，就重新基线化 | 开局前踢人 / 有人掉线，不再让整个房间崩掉 |
+| 10 | `load-join-order` | 协议稳健性 | 上游 `RestoreLoadJoinPlayers` 用 `SequenceEqual` **逐位**比较两张表：左边是加入顺序，右边是存档顺序（快照按 `(RealSlotId, PlayerId)` 规范排序）。同集合不同序必判为不一致，于是"读档续玩必须按最初加入顺序进房"——第一个不按顺序的人只有 2 项尚能过，第二个就必然失败。本修复在比较前把已连接列表按存档下标重排 | 不必再按原顺序加入 |
+| 11 | `room-card-pill` | 功能 | 大厅房间卡片标注「极速」「恐惧」（从 `extra-game-modes` 拆出的独立项，纯装饰、可单独失败而不牵连其它修复） | 房间列表里看得出模式 |
+| 12 | `new-protocol-only` | 功能 | 建房时只保留「新协议」，隐藏「兼容旧版 Mod」入口，见下节 | 不用再在两种协议之间做选择 |
+| 13 | `unlock-extra-modes` | 功能 | 装补丁即可使用这两个模式，见下节 | 不必先打完时间线 |
 
 ### 功能详解
 
@@ -99,17 +98,6 @@
   → `OnDisable()` → `Visible = false`）。
 - **任何拒绝都会说明原因**：本局尚未结束 / 游戏尚未就绪 / 队友都没装补丁，各自弹窗给出一句人话，
   不再静默失败。
-
-#### 局中「重开本层」（`mid-run-restart`）
-
-接管房间管理里的「重开一局」：局**未结束**时，把整房退回**当前楼层开头**继续打，不需要逐人确认，
-不重建房间、不重新加入。
-
-- 存档本来就是"本层开头"的状态（游戏在进房间前写 `current_run_mp.save`），所以本功能**只读存档**，
-  不删存档、不删房间绑定。
-- 游戏自己的「有队友未归队」确认框保留：缺人开局会让那个角色无人控制。
-- **v1.5 起有前置探针**：拆局前（房主）与发 `LoadJoinRequest` 前（客户端）各检查一次 tail_v1 绑定，
-  没绑定就立刻报错 + 弹窗，不再空等 2000ms / 15s 才失败。
 
 #### 极速 / 恐惧模式建房（`extra-game-modes`）
 
@@ -183,19 +171,18 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 [lobby-enhance] applied: tail-error-paths
 [lobby-enhance] applied: abandon-run
 [lobby-enhance] applied: new-run-button
-[lobby-enhance] applied: mid-run-restart
 [lobby-enhance] applied: extra-game-modes
 [lobby-enhance] applied: room-card-pill
 [lobby-enhance] applied: unlock-extra-modes
-[lobby-enhance] summary: applied=14[join-flow,join-screen-modes,host-wire,tail-error-paths,
+[lobby-enhance] summary: applied=13[join-flow,join-screen-modes,host-wire,tail-error-paths,
           roster-rebaseline,load-join-order,abandon-run,new-run-button,new-run-save-binding,
-          mid-run-restart,extra-game-modes,new-protocol-only,room-card-pill,unlock-extra-modes]
+          extra-game-modes,new-protocol-only,room-card-pill,unlock-extra-modes]
           skipped=0[] failed=0
 ```
 
 判定标准：
 
-- `applied=14 ... failed=0` → 14 项修复全部装上。
+- `applied=13 ... failed=0` → 13 项修复全部装上。
 - `skipped=<n>` → 有 n 项判断为「这个构建不需要」，每一项都会单独打印原因
   （形如 `skipped: <id>: missing: <具体锚点>`）。
 - 出现 `no repair reported itself as needed` → 这个构建不需要任何修复，什么都没装（正常状态）。
@@ -210,7 +197,7 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 # 1) 只校验 6 个元数据断点的判定结果（不安装任何补丁）
 dotnet run --project tools/probe-check -c Release
 
-# 2) 跑 Entry.RunSilently()，确认 14 项修复真的挂上了
+# 2) 跑 Entry.RunSilently()，确认 13 项修复真的挂上了
 dotnet run --project tools/smoke-test -c Release
 
 # 3) 补丁依赖的每一个上游反射成员（30 条契约）
@@ -245,8 +232,8 @@ dotnet test tests
 5. **发布工作区**：`packaging/` 结构符合官方上传器要求，`image.png` 是 <1 MiB 的正方形 PNG，
    `content/` 只有 4 个文件、绝不含官方模组的任何文件，且其中的 DLL 与当前构建逐字节一致。
 6. **修复清单**：`FixRegistryTests`（4 个用例）断言 `Entry.cs` 里 `CompatFixes.Build()` 产出的 id
-   **集合与顺序**就是那 14 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
-   `join-screen-modes` 的分派、`unlock-extra-modes` 的两个 epoch 与「不写盘」、`mid-run-restart` 的反射锚点。
+   **集合与顺序**就是那 13 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
+   `join-screen-modes` 的分派、`unlock-extra-modes` 的两个 epoch 与「不写盘」。
 7. **反假绿闸门**：`GameDependentCoverageTests`（1 个用例）检查「依赖游戏 DLL 的那些用例真的跑过了」——
    22 个用例在缺输入时会静默跳过，这条断言让「全绿但其实没跑」变成红色（可用
    `STS2_ALLOW_MISSING_GAME_INPUTS=1` 显式降级为跳过）。
@@ -264,7 +251,7 @@ dotnet test tests
   缺一个只跳过它自己，并在日志里打印 `skipped: <id>: missing: <具体锚点>`。
   所以将来游戏改了某个签名，**受影响的那几项会明确跳过，其余照常工作**：不会整模组失活，也不会出现
   「日志说 applied、功能其实没有」。
-- **每项失败只回滚自己那一组。** 九个 Harmony id（`sts2_lobby_enhance.<组名>`）互相独立，
+- **每项失败只回滚自己那一组。** 十个 Harmony id（`sts2_lobby_enhance.<组名>`）互相独立，
   `UnpatchAll` 只作用于出问题的那一组。
 - **依赖官方模组 ≥ 0.6.3。** 未安装时补丁静默不生效（只留一条警告日志）。
 - **联机双方都要安装本补丁。** 房主校验加入方上报的解锁状态；只装一边会在加入或新开一局时失败。
@@ -282,7 +269,7 @@ dotnet test tests
   `OnHostedControlEnvelope` 的 catch 过滤器只接 `InvalidDataException` / `LanConnectProtocolException`
   （部署版 `LanConnectLobbyRuntime.cs:2324`），而「协议未就绪」抛的是 `InvalidOperationException`，
   会逃逸成未观察的 Task 异常。不影响联机，但会干扰排障。
-- **tail_v1 绑定在异常路径上仍可能超时**（正常联机不受影响；局中重开已加前置探针，不会再空等）。
+- **tail_v1 绑定在异常路径上仍可能超时**（正常联机不受影响）。
 - **平台范围**：已在 Windows 桌面版与 Android 移动端（第三方启动器）双机联机验证；其它平台或移植层
   未测试。
 - **联机行为需要人工验证。** 自动化测试只覆盖静态元数据、进程内的补丁安装与 UI 几何；两人以上的
@@ -295,10 +282,9 @@ dotnet test tests
 3. 放弃本局：A 点"备份并放弃本局" → 确认框、备份、进度写入、存档删除全部完成，主菜单按钮恢复。
 4. 房主主动踢人 / 网络中断：不崩溃，只断开对应 peer（这条走 `tail-error-paths`）。
 5. 极速 / 恐惧：A 建房选这两个模式，B 加入 → 不再弹 InternalError，双方进入对应准备页。
-6. 局中重开：打到第二层中途 → 房主点「重开一局」→ 全房回到本层开头，无需逐人确认。
-7. 局终新开一局：打完一局 → 结算页点「新开一局」→ 全房回到对应模式的准备页；
+6. 局终新开一局：打完一局 → 结算页点「新开一局」→ 全房回到对应模式的准备页；
    同时确认客户端结算页显示了提示文案。
-8. 双方日志都没有 `FAILED:`，且都有 `applied=14`。
+7. 双方日志都没有 `FAILED:`，且都有 `applied=13`。
 
 ### 构建与发布
 
@@ -313,7 +299,7 @@ pwsh -File packaging/build-content.ps1
 python packaging/make-image.py
 ```
 
-发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（14 项 applied）+
+发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（13 项 applied）+
 `tools/contract-check`（30 条契约）。
 
 > **官方模组升级后必须重跑 `tools/wire-verify`。** `host-wire` 用 `Priority.First` 覆盖宿主自己的
@@ -346,11 +332,11 @@ GPL-3.0，全文见 [`LICENSE`](../LICENSE)（与上游 `STS2-Game-Lobby` 的 LI
 
 ### What this is
 
-An independent mod, `sts2_lobby_enhance` (**v1.8.0**), that keeps the official mod
+An independent mod, `sts2_lobby_enhance` (**v1.8.1**), that keeps the official mod
 `sts2_lan_connect` 0.6.3 working after Slay the Spire 2 0.113.0, and adds multiplayer support for the
 two game modes 0.113 introduced: Blitz (极速) and Dread (恐惧).
 
-The release package is named `dist/sts2-lobby-enhance-v1.8.0.zip` (packaging steps in
+The release package is named `dist/sts2-lobby-enhance-v1.8.1.zip` (packaging steps in
 [`UPLOAD.md`](UPLOAD.md)). `ReleasePackageTests.LatestReleaseZipShipsTheContentAssembly` asserts that the
 zip in `dist/` matches `packaging/content/` entry by entry. What changed: [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -360,9 +346,9 @@ zip in `dist/` matches `packaging/content/` entry by entry. What changed: [`CHAN
 |------|-------|------------|
 | Compatibility · metadata breaks | **6 breaks / 4 fixes** | 0.113 changed signatures or removed fields the official build references (break #5 needs no fix, see below) |
 | Compatibility · new game modes | **1 fix** | the official mod's post-join screen dispatch cannot handle Blitz / Dread |
-| Convenience features | **4 fixes** | new run from game over, mid-run restart, hosting Blitz / Dread, unlocking those modes |
+| Convenience features | **3 fixes** | new run from game over, hosting Blitz / Dread, unlocking those modes |
 
-Ten fixes in total, each one visible in the startup log (see "Checking that it works").
+Thirteen fixes in total, each one visible in the startup log (see "Checking that it works").
 
 ### The six metadata breaks
 
@@ -393,7 +379,7 @@ to take over a *readable* caller or an async stub.
 exactly these six fail to resolve; `GameApiShapeTests` reads the game's metadata directly and asserts
 each old/new shape.
 
-### The fourteen fixes
+### The thirteen fixes
 
 | # | id | Kind | What it solves | What the player sees |
 |---|----|------|----------------|----------------------|
@@ -404,13 +390,12 @@ each old/new shape.
 | 5 | `abandon-run` | break #6 | The broken call is inside `LanConnectMultiplayerSaveCompatibility.<AbandonCurrentRunAsync>d__14.MoveNext`. The async stub is taken over and the same flow is replayed against the 0.113 signature; the new return value is inspected and a failed write is logged | "Back up and abandon" completes |
 | 6 | `new-run-button` | feature | One click on the game-over screen brings the whole room back to the lobby | No re-hosting, no re-joining |
 | 7 | `new-run-save-binding` | feature | "New run" reuses the same hosted room, but upstream pins the room's save key (`HostedRoomSession.BoundSaveKey`) to the first run. A new run always has a different key (`BuildSaveKey` hashes `StartTime`), so its binding write is refused with `save_key_mismatch` - and the line that would update the key only runs after a successful write, so it never does. The new save ends up with no room binding at all and the next load refuses to verify the protocol. This fix clears the key when the new run actually starts (upstream adopts any key when the expected one is empty) | A run started from the game-over screen can still be resumed later |
-| 8 | `mid-run-restart` | feature | Restart the current floor mid-run | No need to leave and re-create the room |
-| 9 | `extra-game-modes` | feature | Blitz / Dread in the create-room picker, plus a 「极速」/「恐惧」 pill on each room card (the host mod only knows standard / daily / custom) | The lobby can pick them, and the room list shows which mode a room is |
-| 10 | `roster-rebaseline` | protocol robustness | Upstream's tail roster can express `PlayerJoined` but has no notion of a player leaving (0.6.3 has no `PlayerLeft` handling at all). Any departure before the run starts therefore leaves the client's roster stale: the BeginRun snapshot fails the `StateTransition` membership check, a later join fails `MembershipMutation`, and load/rejoin fails the byte-for-byte `CurrentState` check. That client is dead for the session and has to rejoin. This fix notices "we hold a member the host no longer has" and re-baselines | A kick or a drop in the lobby no longer bricks the remaining clients |
-| 11 | `load-join-order` | protocol robustness | Upstream compares the already-connected list with the tail roster using `SequenceEqual`, i.e. positionally, but one side is in join order and the other in save order. Same set in a different order is rejected, which is why a loaded save had to be re-entered in the original order: the first out-of-order player only has two entries and slips through, the second cannot. This fix reorders the list into save order before the comparison | Joining a loaded save in any order |
-| 12 | `room-card-pill` | feature | 「极速」/「恐惧」 pill on each lobby room card (split out of `extra-game-modes` so it can fail alone) | The room list shows the mode |
-| 13 | `new-protocol-only` | feature | Create-room offers 新协议 only; the legacy entry is hidden, not removed (see below) | No protocol choice to get wrong |
-| 14 | `unlock-extra-modes` | feature | Both modes usable as soon as the patch is installed | No need to finish the timeline first |
+| 8 | `extra-game-modes` | feature | Blitz / Dread in the create-room picker, plus a 「极速」/「恐惧」 pill on each room card (the host mod only knows standard / daily / custom) | The lobby can pick them, and the room list shows which mode a room is |
+| 9 | `roster-rebaseline` | protocol robustness | Upstream's tail roster can express `PlayerJoined` but has no notion of a player leaving (0.6.3 has no `PlayerLeft` handling at all). Any departure before the run starts therefore leaves the client's roster stale: the BeginRun snapshot fails the `StateTransition` membership check, a later join fails `MembershipMutation`, and load/rejoin fails the byte-for-byte `CurrentState` check. That client is dead for the session and has to rejoin. This fix notices "we hold a member the host no longer has" and re-baselines | A kick or a drop in the lobby no longer bricks the remaining clients |
+| 10 | `load-join-order` | protocol robustness | Upstream compares the already-connected list with the tail roster using `SequenceEqual`, i.e. positionally, but one side is in join order and the other in save order. Same set in a different order is rejected, which is why a loaded save had to be re-entered in the original order: the first out-of-order player only has two entries and slips through, the second cannot. This fix reorders the list into save order before the comparison | Joining a loaded save in any order |
+| 11 | `room-card-pill` | feature | 「极速」/「恐惧」 pill on each lobby room card (split out of `extra-game-modes` so it can fail alone) | The room list shows the mode |
+| 12 | `new-protocol-only` | feature | Create-room offers 新协议 only; the legacy entry is hidden, not removed (see below) | No protocol choice to get wrong |
+| 13 | `unlock-extra-modes` | feature | Both modes usable as soon as the patch is installed | No need to finish the timeline first |
 
 ### Feature details
 
@@ -430,19 +415,6 @@ re-hosts or re-joins.
   withdrawn immediately (`NClickableControl.Disable()` → `OnDisable()` → `Visible = false`).
 - **Every refusal explains itself** with a popup: run not finished, game not ready, or no teammate has
   the patch.
-
-#### Mid-run restart of the current floor (`mid-run-restart`)
-
-Takes over the room-management "restart" action: while the run is still going, the whole room goes back
-to the **start of the current floor**, with no per-player confirmation and no re-hosting.
-
-- The save already means "start of this floor" (the game writes `current_run_mp.save` before entering a
-  room), so this feature only **reads** the save — it deletes neither the save nor the room binding.
-- The game's own "players are missing" confirmation is kept on purpose: starting without a player
-  leaves their character uncontrolled.
-- **v1.5 adds a pre-flight probe**: before tearing the run down (host) and before sending
-  `LoadJoinRequest` (client) the patch checks the tail_v1 binding and fails immediately with a popup
-  instead of waiting out 2000 ms / 15 s.
 
 #### Hosting Blitz / Dread (`extra-game-modes`)
 
@@ -500,13 +472,13 @@ be installed (workshop, or `<game>\mods\sts2_lan_connect\`).
 Search the game log for `[lobby-enhance]`. On 0.113 the expected summary line is:
 
 ```
-[lobby-enhance] summary: applied=14[join-flow,join-screen-modes,host-wire,tail-error-paths,
+[lobby-enhance] summary: applied=13[join-flow,join-screen-modes,host-wire,tail-error-paths,
           roster-rebaseline,load-join-order,abandon-run,new-run-button,new-run-save-binding,
-          mid-run-restart,extra-game-modes,new-protocol-only,room-card-pill,unlock-extra-modes]
+          extra-game-modes,new-protocol-only,room-card-pill,unlock-extra-modes]
           skipped=0[] failed=0
 ```
 
-- `applied=14 ... failed=0` — all fourteen fixes installed.
+- `applied=13 ... failed=0` — all thirteen fixes installed.
 - `skipped=<n>` — n repairs decided this build does not need them; each prints its own reason
   (`skipped: <id>: missing: <anchor>`).
 - `no repair reported itself as needed` — this build needs no repair at all; nothing was installed (normal).
@@ -562,7 +534,7 @@ covering seven kinds of fact:
 6. **The repair inventory** — `FixRegistryTests` (4 cases) pins the id **set and order** produced by
    `CompatFixes.Build()` in `Entry.cs` to those ten, so a repair cannot be added, removed, renamed or
    reordered without editing an expectation; it also covers `join-screen-modes` dispatch, the two
-   `unlock-extra-modes` epochs and its "never writes to disk", and the `mid-run-restart` anchors.
+   `unlock-extra-modes` epochs and its "never writes to disk".
 7. **The anti-false-green gate** — `GameDependentCoverageTests` (1 case) checks that the game-dependent
    cases really ran. 22 of them skip silently when an input is missing, so without this gate "all green"
    can mean "never executed"; set `STS2_ALLOW_MISSING_GAME_INPUTS=1` to downgrade that to an explicit skip.
@@ -602,8 +574,7 @@ but `GameDependentCoverageTests` then fails on purpose: "green" must not mean "n
   `OnHostedControlEnvelope` catch filter only takes `InvalidDataException` / `LanConnectProtocolException`
   (deployed `LanConnectLobbyRuntime.cs:2324`), while "protocol not ready" throws `InvalidOperationException`,
   which escapes as an unobserved task exception. Harmless for gameplay, misleading when reading logs.
-- **tail_v1 binding can still time out on error paths** (normal play is unaffected; mid-run restart now
-  probes first instead of waiting).
+- **tail_v1 binding can still time out on error paths** (normal play is unaffected).
 - **Platforms**: verified on the Windows desktop build and on an Android device through a third-party
   launcher; other platforms or ports are untested.
 - **Multiplayer behaviour needs manual verification.** The automated suite covers static metadata,
@@ -617,11 +588,9 @@ but `GameDependentCoverageTests` then fails on purpose: "green" must not mean "n
    the main-menu button refresh all complete.
 4. Host kicks a client / the network drops: no crash, only that peer disconnects.
 5. Blitz / Dread: A hosts one of them, B joins — no InternalError, both reach the matching lobby.
-6. Mid-run restart: in the middle of floor 2, the host restarts — the whole room returns to the start of
-   that floor with no per-player confirmation.
-7. New run: finish a run, press "new run" on the game-over screen — the room returns to the lobby for
+6. New run: finish a run, press "new run" on the game-over screen — the room returns to the lobby for
    the same mode, and the client-side hint is visible.
-8. Neither log contains `FAILED:`, and both contain `applied=14`.
+7. Neither log contains `FAILED:`, and both contain `applied=13`.
 
 ### Build and test
 

@@ -1473,8 +1473,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // The slot is a single field that is also the de-duplication key, so after a reconnect it points at the new
         // session while the previous session's handlers are still registered on the previous session: a message
         // arriving there used to be answered on the *new* session. Capturing the instance removes the shared mutable
-        // state — the handler can only ever answer on the session that received the message. Same shape as
-        // MidRunRestartFix's own <c>HandshakeSucceededPostfix</c>, which was fixed for exactly this defect.
+        // state — the handler can only ever answer on the session that received the message. Same rule as this
+        // fix's own <c>HandshakeSucceededPostfix</c>: it receives <c>__instance</c> as a parameter and passes that
+        // instance to <c>RegisterClientHandlers</c>, never the static slot.
         INetGameService session = service;
         service.RegisterMessageHandler<InitialGameInfoMessage>(
             (message, sender) => OnInitialGameInfoMessage(session, message, sender));
@@ -1926,9 +1927,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// can reject an inbound frame on this very service and disconnect with <c>ModMismatch</c>
     /// (LanConnectTailMessageRuntime.cs:1428). Swallowing that one leaves the session half torn down: the Tail binding
     /// is still registered, ENet is still up, and nothing ever reports the rejection. Only the teardown's own
-    /// <c>Quit</c> may be dropped. <see cref="MidRunRestartFix"/> already applies exactly this rule
-    /// (its <c>HostDisconnectPrefix</c> / <c>ShouldKeepSession</c> pair); field log 2026-11-13 566639 → 566660/566679 is
-    /// the sequence that taught it.
+    /// <c>Quit</c> may be dropped. Field log 2026-11-13 566639 → 566660/566679 is the sequence that taught it.
     ///
     /// Both prefixes therefore take the reason: the game's signature is
     /// <c>Disconnect(NetError reason, bool now = false)</c>, and <see cref="Apply"/> binds it by exact parameter types.

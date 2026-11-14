@@ -20,7 +20,7 @@
       3. Every one of the four files must be byte-identical to the file it was generated from:
            content/sts2_lobby_enhance.dll  <- src/.../bin/Release/net9.0/....dll
            content/sts2_lobby_enhance.json <- src/.../sts2_lobby_enhance.json
-           content/LICENSE                        <- docs/LICENSE
+           content/LICENSE                        <- LICENSE (repository root)
            content/THIRD_PARTY_NOTICES            <- docs/THIRD_PARTY_NOTICES
          The DLL comparison is the one that matters: it makes "content is the current build" true
          before the zip exists, so a stale zip cannot be produced even by accident.
@@ -82,7 +82,7 @@ $zipRoot = 'sts2_lobby_enhance'
 $sources = [ordered]@{
     'sts2_lobby_enhance.dll'  = $builtDll
     'sts2_lobby_enhance.json' = $sourceManifest
-    'LICENSE'                        = (Join-Path $docsDir 'LICENSE')
+    'LICENSE'                        = (Join-Path $companion 'LICENSE')
     'THIRD_PARTY_NOTICES'            = (Join-Path $docsDir 'THIRD_PARTY_NOTICES')
 }
 

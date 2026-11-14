@@ -18,8 +18,6 @@ internal enum FixGroup
 
     Gameplay,
 
-    Restart,
-
     NewRun,
 
     Modes,
