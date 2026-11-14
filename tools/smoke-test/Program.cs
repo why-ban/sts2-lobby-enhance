@@ -353,6 +353,76 @@ foreach ((int id, int expected, string label) in cases)
     Console.WriteLine($"  id={id} -> {actual} (expected {expected}) {(ok ? "OK" : "MISMATCH")}   [{label}]");
 }
 
+// ---- availability 判断：必须"回得来" ----
+// 2026-11-14 现场事故：extra-game-modes 对 IsCreateGameModeAvailable 的 transpiler 用 `new Label()`
+// 当前缀跳转目标，那是一个 id=0 的默认标签，和宿主方法体里 Harmony 已定义的 0 号标签撞号，
+// Brfalse 跳进 switch 中间形成回边 —— 方法永远不返回。表现不是异常，而是点「创建房间」整个游戏卡死，
+// 日志一行都没有。下面的看门狗就是为这一类故障写的：smoke-test 以前只验接缝"在不在"，
+// 从不调用这个方法，所以它照样报 OK。
+Console.WriteLine();
+Console.WriteLine("---- extra-game-modes availability gate returns ----");
+
+MethodInfo isCreateModeAvailable = overlay!
+    .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+    .First(m => m.Name == "IsCreateGameModeAvailable"
+                && m.GetParameters() is { Length: 2 } ps
+                && ps[0].ParameterType == typeof(GameMode));
+
+Type availabilityType = host.GetType("Sts2LanConnect.Scripts.LanConnectLanHostModeAvailability", throwOnError: false)!;
+object availability = Activator.CreateInstance(availabilityType, new object[] { true, true, true })!;
+
+bool availabilityOk = true;
+foreach (int mode in new[] { 1, 2, 3, 4, 5 })
+{
+    object argument = Enum.ToObject(typeof(GameMode), mode);
+    object? result = null;
+    Exception? thrown = null;
+
+    var probe = new System.Threading.Thread(() =>
+    {
+        try
+        {
+            result = isCreateModeAvailable.Invoke(null, new[] { argument, availability });
+        }
+        catch (TargetInvocationException exception)
+        {
+            thrown = exception.InnerException ?? exception;
+        }
+        catch (Exception exception)
+        {
+            thrown = exception;
+        }
+    })
+    { IsBackground = true, Name = "availability-" + mode };
+
+    probe.Start();
+
+    if (!probe.Join(8000))
+    {
+        Console.WriteLine($"  mode={mode} -> NEVER RETURNED within 8000 ms   <<< infinite loop, the game would freeze");
+        availabilityOk = false;
+        continue;
+    }
+
+    if (thrown != null)
+    {
+        Console.WriteLine($"  mode={mode} -> THREW {thrown.GetType().Name}: {thrown.Message}");
+        availabilityOk = false;
+        continue;
+    }
+
+    bool ok = result is true;
+    availabilityOk &= ok;
+    Console.WriteLine($"  mode={mode} -> {result} (expected True) {(ok ? "OK" : "MISMATCH")}");
+}
+
+if (!availabilityOk)
+{
+    Console.WriteLine();
+    Console.WriteLine("FAIL: the availability gate is wrong or never returns. Modes 1/2/3 loop = the create-room freeze.");
+    return 6;
+}
+
 Type binding = host.GetType("Sts2LanConnect.Scripts.LanConnectMultiplayerSaveRoomBinding", throwOnError: false)!;
 MethodInfo? getLobbyGameMode = binding?.GetMethod(
     "GetLobbyGameMode",

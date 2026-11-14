@@ -206,7 +206,9 @@ internal sealed class ExtraGameModesFix : ICompatFix
     /// leaving only 极速/恐惧 selectable — a far worse failure than the feature being absent. Branching
     /// into the original body means we never have to know that record's shape at all.
     /// </summary>
-    private static IEnumerable<CodeInstruction> AvailabilityTranspiler(IEnumerable<CodeInstruction> instructions)
+    private static IEnumerable<CodeInstruction> AvailabilityTranspiler(
+        IEnumerable<CodeInstruction> instructions,
+        ILGenerator generator)
     {
         List<CodeInstruction> original = instructions.ToList();
         if (original.Count == 0 || _isExtraMode == null)
@@ -219,8 +221,13 @@ internal sealed class ExtraGameModesFix : ICompatFix
             yield break;
         }
 
+        // The label MUST come from the generator. `new Label()` is the default struct, i.e. id 0, and
+        // Harmony has already defined label 0 for the first branch target of the original body — the two
+        // collide, Brfalse jumps into the middle of the switch below, and the method loops forever.
+        // Verified offline: with `new Label()` modes 1/2/3 never returned (tools/availability-probe).
+        //
         // Fully qualified: "using Godot" also brings a Godot.Label into scope.
-        System.Reflection.Emit.Label runOriginal = new System.Reflection.Emit.Label();
+        System.Reflection.Emit.Label runOriginal = generator.DefineLabel();
 
         yield return new CodeInstruction(OpCodes.Ldarg_0);
         yield return new CodeInstruction(OpCodes.Call, _isExtraMode);
