@@ -39,6 +39,7 @@ string[] expectedFixIds =
     "load-join-order",
     "abandon-run",
     "new-run-button",
+    "new-run-save-binding",
     "mid-run-restart",
     "extra-game-modes",
     "new-protocol-only",
@@ -62,6 +63,7 @@ string[] expectedFixIds =
     ("load-join-order",    "LanConnectTailMessageRuntime",     "RestoreLoadJoin"),
     ("abandon-run",        "LanConnectMultiplayerSaveCompatibility", "AbandonCurrentRunAsync"),
     ("new-run-button",     "NGameOverScreen",                  "_Ready"),
+    ("new-run-save-binding", "RunManager",                       "SetUpNewMultiplayer"),
     ("mid-run-restart",    "LanConnectLobbyRuntime",           "StartHostedRunRestartAsync"),
     ("extra-game-modes",   "LanConnectLobbyOverlay",           "GameModeFromCreateId"),
     // The room-card mode pill is a separate Harmony postfix on a private static method of the same

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>savebinding-probe</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Sts2DataDir Condition="'$(Sts2DataDir)' == ''">D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</Sts2DataDir>
+    <HostModDll Condition="'$(HostModDll)' == ''">D:\zhuanban\sts2m\work\lobby\STS2-Game-Lobby\releases\sts2_lan_connect\sts2_lan_connect.dll</HostModDll>
+  </PropertyGroup>
+
+  <!--
+    Program.cs only: the host mod is loaded from disk at run time, never referenced. The tool asserts what
+    LanConnectCurrentSaveBindingWriter.Persist does with and without a stale ExpectedSaveKey — the mechanism the
+    new-run-save-binding repair relies on — so it must exercise the shipped binary, not a copy of its logic.
+  -->
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+
+  <!-- The wiring half of this tool installs the repair through a real Harmony instance. -->
+  <ItemGroup>
+    <Reference Include="0Harmony">
+      <HintPath>$(Sts2DataDir)\0Harmony.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

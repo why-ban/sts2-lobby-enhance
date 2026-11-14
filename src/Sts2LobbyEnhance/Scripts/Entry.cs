@@ -441,6 +441,7 @@ internal static class CompatFixes
         yield return new LoadJoinOrderFix();
         yield return new AbandonRunFix();
         yield return new NewRunFromGameOverFix();
+        yield return new NewRunSaveBindingFix();
         yield return new MidRunRestartFix();
         yield return new ExtraGameModesFix();
         yield return new NewProtocolOnlyFix();

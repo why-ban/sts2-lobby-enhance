@@ -46,6 +46,17 @@
   「房主 + 前 k-1 人」，第 1 个不按顺序的人只有 2 项尚能通过，第 2 个就必然失败。
   本修复在比较前把已连接列表按存档下标重排。
 
+- **`new-run-save-binding`：「新开一局」之后的存档完全没法续玩。**
+  上游把房间的存档键钉在会话上（`HostedRoomSession.BoundSaveKey`，`LanConnectLobbyRuntime.cs:2150`）；
+  而「新开一局」复用同一个房间，新局的存档键必然不同（`BuildSaveKey` 把 `StartTime` 算进哈希）。
+  于是新存档的绑定写入被 `LanConnectCurrentSaveBindingWriter.cs:55-59` 以 `save_key_mismatch` 拒绝，
+  而唯一能更新那个键的代码（`:2152`）只在**写入成功之后**才执行 —— 死锁。
+  结果：新开一局打出来的存档没有任何房间绑定，下次「读档多人游戏」直接报
+  「无法确认这个多人存档原先使用的联机协议」。
+  本修复在新一局真正开始时（`RunManager.SetUpNewMultiplayer` 的 prefix）清空该键；
+  上游对空键会直接采纳新 key（同一个 writer 的 keyless 分支）。
+  只在「会话的 NetService 就是本局用的那个」时才动手，客户端开局、单人局、别的房间一概不碰。
+
 ### 修复（探测本身的三处假阴性）
 
 探测过严会把**能用的功能判成不可用**，和原来的问题一样糟。smoke-test 现在会打印每项的跳过原因，

@@ -41,6 +41,7 @@ public sealed class FixRegistryTests
         "load-join-order",
         "abandon-run",
         "new-run-button",
+        "new-run-save-binding",
         "mid-run-restart",
         "extra-game-modes",
         "new-protocol-only",
