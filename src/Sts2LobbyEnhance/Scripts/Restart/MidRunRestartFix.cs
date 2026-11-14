@@ -1932,6 +1932,11 @@ internal sealed class MidRunRestartFix : ICompatFix
         Property(problems, hostService, "ConnectedPeers");
         InstanceMethod(problems, hostService, "GetVersionInfoForPeer", "System.UInt64");
 
+        // ProbeTailBinding reads LanConnectTailMessageRuntime.Shared before every restart. A rename there would not
+        // throw at install time — the restart would fail its own pre-check and tell the player to "leave and host
+        // again", which is a wrong instruction for a patch-anchor mismatch.
+        StaticProperty(problems, tailType, "Shared");
+
         Type? clientService = GameType(NetClientGameServiceTypeName, problems);
         MethodInfo? clientDisconnect = InstanceMethod(
             problems,
@@ -2183,6 +2188,26 @@ internal sealed class MidRunRestartFix : ICompatFix
         if (property == null)
         {
             problems.Add($"{owner.FullName}.{name}");
+        }
+
+        return property;
+    }
+
+    /// <summary>
+    /// Same as <see cref="Property"/> but for a static member — <c>LanConnectTailMessageRuntime.Shared</c> is a
+    /// static property, and the instance-only lookup above would never find it.
+    /// </summary>
+    private static PropertyInfo? StaticProperty(List<string> problems, Type? owner, string name)
+    {
+        if (owner == null)
+        {
+            return null;
+        }
+
+        PropertyInfo? property = owner.GetProperty(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        if (property == null)
+        {
+            problems.Add($"{owner.FullName}.{name} (static)");
         }
 
         return property;

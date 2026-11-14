@@ -240,14 +240,72 @@ internal sealed class AbandonRunFix : ICompatFix
         }
 
         // 0.6.3 source 342-347.
-        string saveKey = shape.BuildSaveKey(run);
-        bool removedBinding = shape.RemoveSaveRoomBinding(saveKey);
+        //
+        // Everything from here on runs AFTER the save was physically deleted, so none of it may be allowed to
+        // throw: an escaping exception would leave the player with a deleted save, a stale room binding, an
+        // un-refreshed menu and no message at all — "nothing happened", except it did. Each step degrades on its
+        // own and the final message always states where the backup is.
+        string saveKey;
+        try
+        {
+            saveKey = shape.BuildSaveKey(run);
+        }
+        catch (Exception exception)
+        {
+            Entry.Warn(
+                "abandon-run: the save was deleted but its room-binding key could not be computed (" +
+                Describe(exception) + "); the stale binding will be cleared on the next launch.");
+            SafeShowInfo(shape, "多人存档已放弃。删除前备份保存在：\n" + backupPath);
+            return;
+        }
+
+        bool removedBinding;
+        try
+        {
+            removedBinding = shape.RemoveSaveRoomBinding(saveKey);
+        }
+        catch (Exception exception)
+        {
+            Entry.Warn("abandon-run: the save was deleted but its room binding was not removed (" + Describe(exception) + ").");
+            removedBinding = false;
+        }
+
         Entry.Info(
             $"sts2_lan_connect save_compat: abandon completed removedBinding={removedBinding}, " +
             $"saveKey={saveKey}, backupPath={backupPath}");
 
-        shape.RefreshButtons(submenu);
-        shape.ShowInfo($"多人存档已放弃。删除前备份保存在：\n{backupPath}");
+        try
+        {
+            shape.RefreshButtons(submenu);
+        }
+        catch (Exception exception)
+        {
+            Entry.Warn("abandon-run: the save was deleted but the menu could not be refreshed (" + Describe(exception) + ").");
+        }
+
+        SafeShowInfo(shape, "多人存档已放弃。删除前备份保存在：\n" + backupPath);
+    }
+
+    /// <summary>Splits <see cref="TargetInvocationException"/> so the log names the real cause.</summary>
+    private static string Describe(Exception exception) =>
+        exception is TargetInvocationException { InnerException: { } inner }
+            ? inner.GetType().Name + ": " + inner.Message
+            : exception.GetType().Name + ": " + exception.Message;
+
+    /// <summary>
+    /// Tells the player the outcome. Failing to display it must never take the flow down with it: by the time
+    /// this runs the save is already gone, so the message is the only thing left to get right.
+    /// </summary>
+    private static void SafeShowInfo(Shape shape, string message)
+    {
+        try
+        {
+            shape.ShowInfo(message);
+        }
+        catch (Exception exception)
+        {
+            Entry.Error("abandon-run: could not show the result popup (" + Describe(exception) + "). Message was: " + message);
+        }
     }
 
     /// <summary>

@@ -50,7 +50,10 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     private const string StringTypeName = "System.String";
 
     private static int _reported;
-    private static int _warned;
+    /// <summary>Reasons already reported, so each failure kind logs exactly once.</summary>
+    private static readonly HashSet<string> Reported = new(StringComparer.Ordinal);
+
+    private static readonly object ReportedGate = new();
     private static Shape? _shape;
 
     public string Id => "unlock-extra-modes";
@@ -156,7 +159,7 @@ internal sealed class UnlockExtraModesFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("could not add the extra modes to the reported unlock state: " + exception);
+            WarnOnce("inject-failed", "could not add the extra modes to the reported unlock state: " + exception);
         }
     }
 
@@ -204,11 +207,22 @@ internal sealed class UnlockExtraModesFix : ICompatFix
         }
     }
 
-    private static void WarnOnce(string message)
+    /// <summary>
+    /// Logs one message per distinct <paramref name="reason"/>.
+    ///
+    /// A single process-wide flag used to back this, shared by three unrelated failure modes (epoch id lookup,
+    /// epoch id validation, injection into the reported state). Whichever fired first consumed it, so the failure
+    /// that actually matters — "the injection did not happen" — could never be logged afterwards. Keyed by reason,
+    /// each kind reports once and none can silence another.
+    /// </summary>
+    private static void WarnOnce(string reason, string message)
     {
-        if (Interlocked.Exchange(ref _warned, 1) != 0)
+        lock (ReportedGate)
         {
-            return;
+            if (!Reported.Add(reason))
+            {
+                return;
+            }
         }
 
         try
@@ -256,13 +270,13 @@ internal sealed class UnlockExtraModesFix : ICompatFix
             }
             catch (Exception exception)
             {
-                WarnOnce($"cannot resolve the {epochName} id ({exception.GetType().Name}: {exception.Message}); that mode stays locked.");
+                WarnOnce("resolve-" + epochName, $"cannot resolve the {epochName} id ({exception.GetType().Name}: {exception.Message}); that mode stays locked.");
                 return;
             }
 
             if (!EpochModel.IsValid(id))
             {
-                WarnOnce($"'{id}' ({epochName}) is not a valid epoch in this build; that mode stays locked.");
+                WarnOnce("invalid-" + epochName, $"'{id}' ({epochName}) is not a valid epoch in this build; that mode stays locked.");
                 return;
             }
 

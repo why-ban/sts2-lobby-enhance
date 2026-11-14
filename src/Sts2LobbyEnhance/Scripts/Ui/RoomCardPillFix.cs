@@ -191,10 +191,16 @@ internal sealed class RoomCardPillFix : ICompatFix
             return new Shape(pill, success, danger, surfaceMuted);
         }
 
+        // All three element types are checked, not just the first: the postfix binds
+        // "ref (string, Color, Color) __result", so a tuple whose other two elements are not Color would be
+        // accepted here and then fail at bind time. Color is a Godot type we already reference, so naming it is
+        // not a version-dependent game type.
         private static bool ReturnsStringColorColor(Type returnType) =>
             returnType.IsGenericType
             && returnType.GetGenericArguments().Length == 3
-            && returnType.GetGenericArguments()[0] == typeof(string);
+            && returnType.GetGenericArguments()[0] == typeof(string)
+            && returnType.GetGenericArguments()[1] == typeof(Color)
+            && returnType.GetGenericArguments()[2] == typeof(Color);
 
         private static PropertyInfo? StaticColorProperty(Type overlay, string name, List<string> missing)
         {

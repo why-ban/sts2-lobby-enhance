@@ -216,28 +216,27 @@ internal sealed class TailErrorPathFix : ICompatFix
 
         foreach (var plan in plans)
         {
+            int before = _rewrittenCallInstructions;
+
             harmony.Patch(
                 plan.Caller,
                 transpiler: new HarmonyMethod(typeof(TailErrorPathFix), nameof(RedirectTranspiler))
                 {
                     priority = Priority.First
                 });
-        }
 
-        int expectedRewrites = 0;
-        foreach (var plan in plans)
-        {
-            expectedRewrites += plan.Rewrites;
-        }
-
-        // Harmony reports the patch as installed even when the transpiler matched nothing, so compare what the
-        // dry run predicted with what the real pass produced. A mismatch is reported, not thrown: the redirects
-        // are already installed and throwing here would recreate the partial state A2 removes.
-        if (_rewrittenCallInstructions != expectedRewrites)
-        {
-            Entry.Warn(
-                $"{Id}: the transpiler rewrote {_rewrittenCallInstructions} call instruction(s) but the dry run " +
-                $"predicted {expectedRewrites}. The redirects are installed; verify the call sites.");
+            // Verify per call site, not in total. Two callers can cancel out (one short, one long) and the sum
+            // then hides a method that still calls the broken 0.111 original — the crash would resurface only
+            // when that particular error path runs. A mismatch throws: Entry catches it and unpatchAll's this
+            // whole group, which restores every caller's original IL, so the loud failure is also a clean one.
+            int actual = _rewrittenCallInstructions - before;
+            if (actual != plan.Rewrites)
+            {
+                throw new InvalidOperationException(
+                    $"{Id}: {plan.Caller.DeclaringType?.Name}::{plan.Caller.Name} was expected to call the two " +
+                    $"replaced methods {plan.Rewrites} time(s) but the transpiler rewrote {actual}. Another " +
+                    "transpiler probably changed this method first; the redirect cannot be trusted.");
+            }
         }
 
         Entry.Info(
@@ -336,6 +335,15 @@ internal sealed class TailErrorPathFix : ICompatFix
         shape.WriterBindings = FieldOf(runtimeType, "_writerBindings", missing)!;
         shape.OutgoingRejections = FieldOf(runtimeType, "_outgoingRejections", missing)!;
         shape.ClearPendingOutgoing = MethodOf(runtimeType, "ClearPendingOutgoing", 1, missing)!;
+
+        // [_ThreadStatic] private static: GetOrCreateRejectionStack reads it with GetValue(null). If upstream ever
+        // makes it an instance field that call throws TargetException, and nothing above it in the rejection path
+        // catches — every inbound failure would rethrow out of the message pump. Cheap to assert, so assert it
+        // here instead of relying on a Debug-only check that Release builds compile away.
+        if (shape.OutgoingRejections != null && !shape.OutgoingRejections.IsStatic)
+        {
+            missing.Add($"{RuntimeTypeName}._outgoingRejections (static, found an instance field)");
+        }
 
         if (shape.OutgoingRejections != null)
         {
@@ -513,8 +521,7 @@ internal sealed class TailErrorPathFix : ICompatFix
         int count = 0;
         foreach (CodeInstruction instruction in instructions)
         {
-            if (instruction.operand is MethodInfo called
-                && (SameMethod(called, abort) || SameMethod(called, reject)))
+            if (Classify(instruction, abort, reject) != Redirect.None)
             {
                 count++;
             }
@@ -525,6 +532,41 @@ internal sealed class TailErrorPathFix : ICompatFix
 
     private static bool SameMethod(MethodInfo left, MethodInfo right) =>
         left.MetadataToken == right.MetadataToken && left.Module == right.Module;
+
+    private enum Redirect
+    {
+        None,
+        Abort,
+        Reject
+    }
+
+    /// <summary>
+    /// The one predicate the dry run and the real pass both use, so they can never disagree about what counts.
+    ///
+    /// It checks the opcode, not just the operand: `ldftn` also carries a MethodInfo, and replacing a function
+    /// pointer with `call` changes the stack shape (call consumes the receiver and arguments and pushes nothing,
+    /// ldftn pushes a pointer and consumes nothing) — the method would throw InvalidProgramException on every
+    /// execution. `callvirt` is kept as `callvirt` for the same reason (null-check semantics).
+    /// </summary>
+    private static Redirect Classify(CodeInstruction instruction, MethodInfo abort, MethodInfo reject)
+    {
+        if (instruction.opcode != OpCodes.Call && instruction.opcode != OpCodes.Callvirt)
+        {
+            return Redirect.None;
+        }
+
+        if (instruction.operand is not MethodInfo called)
+        {
+            return Redirect.None;
+        }
+
+        if (SameMethod(called, abort))
+        {
+            return Redirect.Abort;
+        }
+
+        return SameMethod(called, reject) ? Redirect.Reject : Redirect.None;
+    }
 
     /// <summary>
     /// Swaps the call target while leaving the argument stack untouched: the replacements take the same
@@ -539,32 +581,30 @@ internal sealed class TailErrorPathFix : ICompatFix
             ?? throw new InvalidOperationException(
                 "RejectAndDisconnect call target is not set; the transpiler ran outside Apply.");
 
+        MethodInfo abortReplacement = typeof(TailErrorPathFix).GetMethod(nameof(AbortActiveBinding))!;
+        MethodInfo rejectReplacement = typeof(TailErrorPathFix).GetMethod(nameof(RejectAndDisconnect))!;
+
         foreach (CodeInstruction instruction in instructions)
         {
-            if (instruction.operand is MethodInfo called)
+            Redirect redirect = Classify(instruction, abort, reject);
+            if (redirect == Redirect.None)
             {
-                // Identity, not name: the same predicate CountRedirectable() used to decide this caller needs
-                // the patch, so nothing but the two upstream methods is ever rewritten.
-                if (SameMethod(called, abort))
-                {
-                    _rewrittenCallInstructions++;
-                    yield return new CodeInstruction(
-                        OpCodes.Call,
-                        typeof(TailErrorPathFix).GetMethod(nameof(AbortActiveBinding))!);
-                    continue;
-                }
-
-                if (SameMethod(called, reject))
-                {
-                    _rewrittenCallInstructions++;
-                    yield return new CodeInstruction(
-                        OpCodes.Call,
-                        typeof(TailErrorPathFix).GetMethod(nameof(RejectAndDisconnect))!);
-                    continue;
-                }
+                yield return instruction;
+                continue;
             }
 
-            yield return instruction;
+            _rewrittenCallInstructions++;
+
+            // Keep the original opcode (call stays call, callvirt stays callvirt) and carry the original
+            // instruction's labels and exception-block boundaries across. `new CodeInstruction(opcode, operand)`
+            // starts with empty label/block lists, so dropping them would leave any branch target that lands on
+            // this instruction unmarked — Harmony then fails the emit, or worse, produces an illegal branch.
+            var replacement = new CodeInstruction(
+                instruction.opcode,
+                redirect == Redirect.Abort ? abortReplacement : rejectReplacement);
+            replacement.labels.AddRange(instruction.labels);
+            replacement.blocks.AddRange(instruction.blocks);
+            yield return replacement;
         }
     }
 
@@ -643,13 +683,19 @@ internal sealed class TailErrorPathFix : ICompatFix
             // Upstream pushes a failure onto a per-runtime Stack before sending, so that the send path can
             // recognise its own rejection message. Stack<T> is not an IList, so drive it through reflection
             // and never replace an existing stack — doing so would drop pending rejections.
-            object rejections = GetOrCreateRejectionStack(runtime);
-            MethodInfo push = rejections.GetType().GetMethod("Push")
-                ?? throw new MissingMethodException(rejections.GetType().FullName, "Push");
-            MethodInfo pop = rejections.GetType().GetMethod("Pop")
-                ?? throw new MissingMethodException(rejections.GetType().FullName, "Pop");
+            object? rejections = GetOrCreateRejectionStack(runtime);
+            MethodInfo? push = rejections?.GetType().GetMethod("Push");
+            MethodInfo? pop = rejections?.GetType().GetMethod("Pop");
 
-            push.Invoke(rejections, new[] { failure });
+            // A null stack means the probe found _outgoingRejections to be non-static. Degrade to "send the
+            // rejection without the call-context marker": upstream's send path then cannot recognise its own
+            // message, but the peer is still disconnected, which is the part that matters.
+            bool useContext = rejections != null && push != null && pop != null;
+            if (useContext)
+            {
+                push!.Invoke(rejections, new[] { failure });
+            }
+
             try
             {
                 host.SendMessage(
@@ -661,10 +707,13 @@ internal sealed class TailErrorPathFix : ICompatFix
             }
             finally
             {
-                object? popped = pop.Invoke(rejections, null);
-                if (!ReferenceEquals(popped, failure))
+                if (useContext)
                 {
-                    throw new InvalidOperationException("Tail rejection call context was corrupted.");
+                    object? popped = pop!.Invoke(rejections, null);
+                    if (!ReferenceEquals(popped, failure))
+                    {
+                        throw new InvalidOperationException("Tail rejection call context was corrupted.");
+                    }
                 }
 
                 host.DisconnectClient(senderPeerId, NetError.ModMismatch);
@@ -683,7 +732,7 @@ internal sealed class TailErrorPathFix : ICompatFix
         disconnect.Invoke(service, arguments);
     }
 
-    private static object GetOrCreateRejectionStack(object runtime)
+    private static object? GetOrCreateRejectionStack(object runtime)
     {
         Shape shape = _shape
             ?? throw new InvalidOperationException("tail-error-paths: the shape was not captured.");
@@ -691,9 +740,21 @@ internal sealed class TailErrorPathFix : ICompatFix
         FieldInfo field = shape.OutgoingRejections;
 
         // Upstream declares it "[ThreadStatic] private static Stack<LanConnectProtocolFailure>?" and the probe
-        // verified Push/Pop exist. GetValue/SetValue ignore the instance argument for static fields, so pass
-        // null: an instance argument would suggest a per-binding field and hide that the stack is per-thread.
-        Debug.Assert(field.IsStatic);
+        // verified Push/Pop exist and that it is static. GetValue/SetValue ignore the instance argument for static
+        // fields, so pass null: an instance argument would suggest a per-binding field and hide that the stack is
+        // per-thread.
+        //
+        // A real check, not Debug.Assert: Debug.Assert is [Conditional("DEBUG")] and this ships as Release, so the
+        // assertion produced no code at all and an instance field would have thrown TargetException right here.
+        if (!field.IsStatic)
+        {
+            Entry.Warn(
+                "tail-error-paths: _outgoingRejections is no longer static; the per-thread rejection stack " +
+                "cannot be used. " +
+                "Tail rejections will lose their detail, the session stays usable.");
+            return null;
+        }
+
         if (field.GetValue(null) is { } existing)
         {
             return existing;

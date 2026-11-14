@@ -2136,11 +2136,15 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // These are the ones no "install-time" check would otherwise catch: they appear in handler bodies, so a rename
         // surfaces as a TypeLoadException inside the game's own method the first time the handler runs, where a
         // try/catch inside the handler cannot help (parameter types are resolved when the method is JITted).
-        GameType(CharacterSelectScreenTypeName, problems);
-        GameType(DailyRunScreenTypeName, problems);
-        GameType(CustomRunScreenTypeName, problems);
-        GameType(BlitzScreenTypeName, problems);
-        GameType(DreadScreenTypeName, problems);
+        // FindLobby reads the private _lobby field off whichever screen the host is on. A rename there would not
+        // throw — FindLobby returns null, the repair throws "did not create a lobby", and the failure path tears
+        // the whole room down. That is a far worse outcome than the feature being absent, so the field is part of
+        // the shape: if it is gone we simply do not install.
+        RequireLobbyField(GameType(CharacterSelectScreenTypeName, problems), problems);
+        RequireLobbyField(GameType(DailyRunScreenTypeName, problems), problems);
+        RequireLobbyField(GameType(CustomRunScreenTypeName, problems), problems);
+        RequireLobbyField(GameType(BlitzScreenTypeName, problems), problems);
+        RequireLobbyField(GameType(DreadScreenTypeName, problems), problems);
         GameType(MegaLabelTypeName, problems);
         GameType(NSubmenuTypeName, problems);
         GameType(NMainMenuTypeName, problems);
@@ -2259,6 +2263,24 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         }
 
         return type;
+    }
+
+    /// <summary>
+    /// Verifies a lobby screen still declares the private <c>_lobby</c> field <see cref="FindLobby"/> reads.
+    /// A renamed field is silent at read time (FindLobby returns null), and the failure path for a missing lobby
+    /// tears the whole room down — so the field is part of the shape, not an implementation detail.
+    /// </summary>
+    private static void RequireLobbyField(Type? screen, List<string> problems)
+    {
+        if (screen == null)
+        {
+            return;
+        }
+
+        if (screen.GetField("_lobby", BindingFlags.Instance | BindingFlags.NonPublic) == null)
+        {
+            problems.Add($"{(screen.FullName ?? screen.Name)}._lobby (StartRunLobby field)");
+        }
     }
 
     /// <summary>

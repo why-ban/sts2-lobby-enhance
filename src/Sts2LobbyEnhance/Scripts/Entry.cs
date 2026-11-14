@@ -99,11 +99,32 @@ public static class Entry
         _suppressLogging = silent;
         try
         {
-            // Give the probes a way to say "I could not answer this" without Core depending on Entry.
-            CompatProbe.Logger ??= Info;
+            // CompatProbe.Capture() guards each probe internally, but it cannot guard its OWN type initialiser:
+            // a static field initialiser that throws surfaces as TypeInitializationException at the first static
+            // member access, which is this line and is outside Capture()'s try. Losing one snapshot is acceptable;
+            // losing the whole startup report is not.
+            CompatSnapshot snapshot = default;
+            string? captureFailure = null;
+            try
+            {
+                // Give the probes a way to say "I could not answer this" without Core depending on Entry.
+                CompatProbe.Logger ??= Info;
+                snapshot = CompatProbe.Capture();
+            }
+            catch (Exception exception)
+            {
+                // Keep going with an all-false snapshot instead of aborting: the repairs that do not depend on a
+                // flag still install, and the ones that do will skip with a "missing: ..." reason. Aborting here
+                // would be the old global-switch behaviour in disguise.
+                captureFailure = "CompatProbe.Capture(): " + exception.GetType().Name + ": " + exception.Message +
+                                 " (repairs that read a flag will skip; those that do not still install)";
+            }
 
-            CompatSnapshot snapshot = CompatProbe.Capture();
             var report = new StartupReport(snapshot);
+            if (captureFailure != null)
+            {
+                report.Failed.Add(captureFailure);
+            }
 
             Assembly? host = Reflect.FindAssembly(HostModAssemblyName);
             if (host == null)
@@ -112,7 +133,25 @@ public static class Entry
                 return report;
             }
 
-            foreach (ICompatFix fix in CompatFixes.Build())
+            // BUILDING the repair list is itself fallible and is not a per-repair concern: Build() is an
+            // iterator, so "new JoinTakeoverFix()" runs during MoveNext(), i.e. here and not inside Install()'s
+            // try. An exception from a constructor (or from a static initialiser that it triggers) would escape
+            // past this method, discard the report, and leave the groups installed so far live with no summary
+            // line. That is the same "part of it silently disappeared" outcome this redesign exists to remove,
+            // so it gets its own catch instead of being allowed to abort the run.
+            List<ICompatFix> fixes;
+            try
+            {
+                fixes = CompatFixes.Build().ToList();
+            }
+            catch (Exception exception)
+            {
+                report.Failed.Add("CompatFixes.Build(): " + exception.GetType().Name + ": " + exception.Message);
+                report.Inert = report.Applied.Count == 0 && report.Failed.Count == 0;
+                return report;
+            }
+
+            foreach (ICompatFix fix in fixes)
             {
                 Install(fix, snapshot, report);
             }

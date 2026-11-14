@@ -77,6 +77,14 @@ internal sealed class ExtraGameModesFix : ICompatFix
     private const string HostGameServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetHostGameService";
     private const string IntTypeName = "System.Int32";
 
+    // Return types are part of the contract for the seams we replace wholesale: the emitted IL assumes a
+    // specific stack shape at "ret" (bool = int32, void = nothing, string = an object reference). Binding to
+    // a method whose parameters match but whose return type does not yields legal-looking IL that only fails
+    // at the first JIT — the same class of failure as the 1.8.0 create-room freeze.
+    private const string BooleanTypeName = "System.Boolean";
+    private const string VoidTypeName = "System.Void";
+    private const string StringTypeName = "System.String";
+
     /// <summary>The game assembly, looked up by name so no probe needs a <c>typeof</c>.</summary>
     private const string GameAssemblyName = "sts2";
 
@@ -253,9 +261,14 @@ internal sealed class ExtraGameModesFix : ICompatFix
                     priority = Priority.First
                 });
 
+            // "Installed", not "works". harmony.Patch only proves the IL was accepted; a transpiler that
+            // emits legal-but-wrong IL fails at first JIT (InvalidProgramException, or an endless loop with
+            // no exception at all — that is exactly what shipped in 1.8.0 and froze the game on create-room).
+            // The behavioural proof lives in tools/smoke-test, which calls this method for modes 1-5 on a
+            // watchdog thread; do not restate it as fact here.
             Entry.Info(
-                "extra-game-modes: availability check short-circuits modes 4/5 and runs upstream's own " +
-                "body for standard/daily/custom.");
+                "extra-game-modes: availability gate installed (modes 4/5 answer without running upstream's " +
+                "body; 1/2/3 fall through to it). Behaviour is verified by smoke-test, not by this line.");
             return;
         }
         catch (Exception exception)
@@ -769,7 +782,8 @@ internal sealed class ExtraGameModesFix : ICompatFix
                     missing.Add(OverlayShort + ".IsCreateGameModeAvailable (instance, expected static)");
                     isAvailable = null;
                 }
-                else if (!ParametersMatch(isAvailable, GameModeTypeName, availability?.FullName ?? AvailabilityTypeName))
+                else if (!ParametersMatch(isAvailable, GameModeTypeName, availability?.FullName ?? AvailabilityTypeName)
+                         || isAvailable.ReturnType.FullName != BooleanTypeName)
                 {
                     missing.Add(OverlayShort + ".IsCreateGameModeAvailable(GameMode, " + AvailabilityShort +
                                 ") -> bool (found: " + Describe(isAvailable) + ")");
@@ -786,7 +800,8 @@ internal sealed class ExtraGameModesFix : ICompatFix
                     pushHostScreen = null;
                 }
                 else if (!ParametersMatch(
-                             pushHostScreen, GameModeTypeName, SubmenuStackTypeName, HostGameServiceTypeName, IntTypeName))
+                             pushHostScreen, GameModeTypeName, SubmenuStackTypeName, HostGameServiceTypeName, IntTypeName)
+                         || pushHostScreen.ReturnType.FullName != VoidTypeName)
                 {
                     // The replacement switches on GameMode numbers (Standard=1/Daily=2/Custom=3) and pushes
                     // a screen per case. Binding it to any other first parameter would silently push the
@@ -807,7 +822,8 @@ internal sealed class ExtraGameModesFix : ICompatFix
                     .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
                     .FirstOrDefault(method => string.Equals(method.Name, "GetLobbyGameMode", StringComparison.Ordinal)
                                               && method.GetParameters() is { Length: 1 } parameters
-                                              && string.Equals(parameters[0].ParameterType.FullName, GameModeTypeName, StringComparison.Ordinal));
+                                              && string.Equals(parameters[0].ParameterType.FullName, GameModeTypeName, StringComparison.Ordinal)
+                                              && string.Equals(method.ReturnType.FullName, StringTypeName, StringComparison.Ordinal));
             if (lobbyGameMode == null)
             {
                 missing.Add(BindingShort + ".GetLobbyGameMode(" + GameModeTypeName + ")");
