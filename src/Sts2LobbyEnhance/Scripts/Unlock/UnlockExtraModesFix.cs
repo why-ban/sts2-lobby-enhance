@@ -7,37 +7,32 @@ using MegaCrit.Sts2.Core.Unlocks;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Feature (not a 0.113 compatibility break): make Blitz (极速模式) and Dread (恐惧模式) usable as soon
-/// as this patch is installed.
-///
-/// The game gates both modes on two timeline epochs — <c>BLITZ_EPOCH</c> and <c>DREAD_EPOCH</c> — in two
-/// independent places, so this needs two read-only seams:
-///
-/// <list type="number">
-/// <item><b>Reported unlock state.</b> <c>StartRunLobby.HandleClientLobbyJoinRequestMessage</c> (host
-/// side) disconnects a joining client with <c>BlitzNotUnlocked</c>/<c>DreadNotUnlocked</c> unless the
-/// client's own <c>SerializableUnlockState.UnlockedEpochs</c> contains the matching id. That state comes
-/// from <see cref="SaveManager.GenerateUnlockStateFromProgress"/> (<c>JoinFlow.AttemptJoin</c>), so a
-/// postfix there adds the two ids to what we report.</item>
-/// <item><b>UI gates.</b> The game's own menus never call <c>GenerateUnlockStateFromProgress</c>: both
-/// <c>NSingleplayerSubmenu.RefreshButtons</c> and <c>NMultiplayerHostSubmenu.RefreshButtons</c> ask
-/// <c>SaveManager.IsEpochRevealed&lt;BlitzEpoch&gt;()</c>, which forwards to
-/// <c>ProgressState.IsEpochRevealed(string)</c>. A postfix there makes the two buttons (and Dread's
-/// visibility) behave as unlocked. This is why one seam is not enough for the user-visible request.</item>
-/// </list>
-///
-/// Both seams are pure queries. Nothing here writes to the save file: we never touch
-/// <c>ProgressState.Epochs</c>, we only change what a read returns and what we report over the wire.
-/// The timeline still shows the two epochs as not obtained, and <c>ProgressState.TotalUnlocks</c> is
-/// unaffected because it counts <c>IsEpochObtained</c>, which we do not patch.
-///
-/// Both seams are resolved up front by <see cref="Shape.TryCapture"/>; a missing anchor means this feature
-/// stays out and says why, instead of an exception that used to disable every other repair. The two epoch
-/// *types* are looked up by name (never <c>typeof</c>) so that a build which drops Blitz or Dread is
-/// reported in the startup log instead of failing at the first menu refresh — and the runtime path already
-/// degrades to "that mode stays locked" on its own (<see cref="ExtraModes"/>).
-/// </summary>
+    /// <summary>
+    /// Feature, not a 0.113 compatibility break: make Blitz (极速模式) and Dread (恐惧模式) usable as soon as this
+    /// patch is installed
+    ///
+    /// The game gates both modes on two timeline epochs, <c>BLITZ_EPOCH</c> and <c>DREAD_EPOCH</c>, in two
+    /// independent places, so this needs two read-only seams:
+    ///
+    /// <list type="number">
+    /// <item><b>Reported unlock state.</b> <c>StartRunLobby.HandleClientLobbyJoinRequestMessage</c> disconnects a
+    /// joining client with <c>BlitzNotUnlocked</c>/<c>DreadNotUnlocked</c> unless the client's own
+    /// <c>SerializableUnlockState.UnlockedEpochs</c> holds the matching id. That state comes from
+    /// <see cref="SaveManager.GenerateUnlockStateFromProgress"/>, so a postfix there adds the two ids.</item>
+    /// <item><b>UI gates.</b> The menus never call it: <c>NSingleplayerSubmenu.RefreshButtons</c> and
+    /// <c>NMultiplayerHostSubmenu.RefreshButtons</c> ask <c>SaveManager.IsEpochRevealed&lt;BlitzEpoch&gt;()</c>,
+    /// which forwards to <c>ProgressState.IsEpochRevealed(string)</c>, so a postfix there unblocks the buttons.
+    /// One seam is not enough for the user-visible request.</item>
+    /// </list>
+    ///
+    /// Both seams are pure queries and nothing here writes to the save file: we change what a read returns and
+    /// what we report over the wire. The timeline still shows both epochs as not obtained, and
+    /// <c>ProgressState.TotalUnlocks</c> is unaffected because it counts <c>IsEpochObtained</c>, which is unpatched
+    ///
+    /// Both seams are resolved up front by <see cref="Shape.TryCapture"/>, and the two epoch types by name (never
+    /// <c>typeof</c>), so a build that drops Blitz or Dread is reported in the startup log while the runtime path
+    /// degrades to "that mode stays locked" on its own (<see cref="ExtraModes"/>)
+    /// </summary>
 internal sealed class UnlockExtraModesFix : ICompatFix
 {
     private const string GameAssemblyName = "sts2";
@@ -50,7 +45,6 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     private const string StringTypeName = "System.String";
 
     private static int _reported;
-    /// <summary>Reasons already reported, so each failure kind logs exactly once.</summary>
     private static readonly HashSet<string> Reported = new(StringComparer.Ordinal);
 
     private static readonly object ReportedGate = new();
@@ -61,16 +55,13 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     public FixGroup Group => FixGroup.Unlock;
 
     /// <summary>
-    /// Applicable when the two game seams resolve and at least one of the two epochs exists. Both epoch
-    /// types missing means the repair would install and then do nothing, which is exactly the "log says
-    /// applied, feature is not there" outcome this redesign removes — so that case answers <c>false</c>.
+    /// Applicable when the two game seams resolve and at least one epoch type exists. Both missing means the
+    /// repair would install and do nothing, the "log says applied, feature is not there" outcome, so that
+    /// answers <c>false</c>
     ///
-    /// <see cref="CompatSnapshot"/> is not read: no wire or signature breakpoint decides whether the local
-    /// client may report an epoch as unlocked. The anchors are the whole question.
-    ///
-    /// The host mod is deliberately NOT checked: this repair only touches game APIs, so claiming a dependency
-    /// on LAN Connect would be a fake one. Entry already refuses to install anything when the host is absent
-    /// (Entry.cs, the single remaining whole-mod gate), so nothing is lost by keeping this honest.
+    /// <see cref="CompatSnapshot"/> is not read: no wire or signature breakpoint decides whether the local client
+    /// may report an epoch as unlocked. The host mod is deliberately not checked either, because this repair
+    /// touches only game APIs and a claimed dependency would be fake
     /// </summary>
     public bool Applies(in CompatSnapshot snapshot, out string reason)
     {
@@ -106,9 +97,8 @@ internal sealed class UnlockExtraModesFix : ICompatFix
 
         if (shape.MissingEpochTypes.Count > 0)
         {
-            // Not a failure: the runtime path already leaves an unresolvable epoch locked. Say it here so the
-            // startup log explains why one of the two modes will not appear, instead of leaving the user to
-            // guess after they open the menu.
+    // Not a failure: the runtime path already leaves an unresolvable epoch locked, and saying so here explains
+    // in the startup log why one of the two modes will not appear
             Entry.Warn(
                 "unlock-extra-modes: this build has no " + string.Join(", ", shape.MissingEpochTypes) +
                 " type; that mode stays locked (the other seam still runs).");
@@ -120,10 +110,9 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     }
 
     /// <summary>
-    /// Adds the two epoch ids to the unlock state the client reports to a host. Rebuilds the state instead
-    /// of mutating it: <see cref="UnlockState"/> keeps a private <c>HashSet</c>, while
-    /// <see cref="UnlockState.ToSerializable"/> already exposes everything the public constructor needs, so
-    /// the round trip preserves the encounter set and the run count exactly.
+    /// Rebuilds the state rather than mutating it: <see cref="UnlockState"/> keeps a private <c>HashSet</c>, while
+    /// <see cref="UnlockState.ToSerializable"/> exposes everything the public constructor needs, so the round trip
+    /// preserves the encounter set and the run count
     /// </summary>
     private static void GenerateUnlockStatePostfix(ref UnlockState __result)
     {
@@ -164,8 +153,7 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     }
 
     /// <summary>
-    /// Answers the menu gates. Only ever turns <c>false</c> into <c>true</c>, and only for the two epoch
-    /// ids this feature owns, so every other unlock query keeps its real answer.
+    /// Only ever turns <c>false</c> into <c>true</c>, and only for the two epoch ids this feature owns
     /// </summary>
     // ReSharper disable once UnusedParameter.Local — Harmony binds by position.
     private static void IsEpochRevealedPostfix(string __0, ref bool __result)
@@ -208,12 +196,9 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     }
 
     /// <summary>
-    /// Logs one message per distinct <paramref name="reason"/>.
-    ///
-    /// A single process-wide flag used to back this, shared by three unrelated failure modes (epoch id lookup,
-    /// epoch id validation, injection into the reported state). Whichever fired first consumed it, so the failure
-    /// that actually matters — "the injection did not happen" — could never be logged afterwards. Keyed by reason,
-    /// each kind reports once and none can silence another.
+    /// Logs one message per distinct <paramref name="reason"/>. A single process-wide flag here let whichever
+    /// failure fired first silence the one that matters, so keying by reason keeps each kind reporting once and
+    /// none able to silence another
     /// </summary>
     private static void WarnOnce(string reason, string message)
     {
@@ -236,8 +221,8 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     }
 
     /// <summary>
-    /// The two epoch ids, resolved once from the game's own id table so they can never drift from the
-    /// host-side check in <c>StartRunLobby</c> (which calls the very same <see cref="EpochModel.GetId{T}"/>).
+    /// Resolved from the game's own id table so they can never drift from the host-side check in
+    /// <c>StartRunLobby</c>, which calls the same <see cref="EpochModel.GetId{T}"/>
     /// </summary>
     private static class ExtraModes
     {
@@ -288,8 +273,7 @@ internal sealed class UnlockExtraModesFix : ICompatFix
     }
 
     /// <summary>
-    /// The two seams, resolved before anything is patched. Everything here is metadata only: no
-    /// <c>typeof</c> on a version-specific type, no <c>Invoke</c>, no Godot, no file access.
+    /// Resolved before anything is patched, metadata only: no <c>typeof</c>, no <c>Invoke</c>, no Godot
     /// </summary>
     private sealed class Shape
     {

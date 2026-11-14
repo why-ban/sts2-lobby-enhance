@@ -5,39 +5,25 @@ using MegaCrit.Sts2.Core.Modding;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Mod entry point.
-///
-/// Startup contract (per-group isolation; the old "all or nothing" rollback is gone):
-///   1. Probe the game build (<see cref="CompatProbe.Capture"/>). Probing never throws: each of the six
-///      observations degrades to <c>false</c> on its own and says so once in the log. There is no
-///      "all six at once" gate any more, so a game hotfix that reshapes one member costs the repairs that
-///      read that flag, not the whole mod.
-///   2. Locate the host mod (sts2_lan_connect). If it is absent there is nothing to patch: log, set
-///      <see cref="StartupReport.HostMissing"/> and stop. This is the only condition that disables
-///      everything, and it is not a compatibility judgement — the assembly is simply not loaded.
-///   3. Ask every repair whether it applies. A repair whose <c>Applies</c> throws is a failed repair, not
-///      a failed startup.
-///   4. Install each repair into the Harmony instance of its own <see cref="FixGroup"/>
-///      (<c>"sts2_lobby_enhance." + group name</c>, see <see cref="HarmonyIdFor"/>). If a repair fails,
-///      only that group is unpatched — <see cref="Harmony.UnpatchAll(string)"/> takes an id, so the other
-///      groups keep their patches. A host-mod update or a game patch therefore costs the affected feature
-///      instead of the mod.
-///   5. Report per group, then one summary line in the format the release tooling parses.
-///
-/// Removing a group's patches is not the same as undoing them: Harmony hooks disappear, but state a
-/// repair already wrote into this process survives until restart. See <see cref="Announce"/>.
-/// </summary>
+    /// <summary>
+    /// Mod entry point
+    ///
+    /// A missing host mod is the only condition that disables everything; it is not a compatibility judgement,
+    /// the assembly is simply not loaded. Everything else fails per group, because each group patches under its
+    /// own Harmony id and <c>UnpatchAll</c> takes an id rather than a patch set, so a rollback cannot reach
+    /// another group's patches
+    ///
+    /// Removing a group's patches is not the same as undoing them: Harmony hooks disappear, but state a repair
+    /// already wrote into this process survives until restart
+    /// </summary>
 [ModInitializer(nameof(Init))]
 public static class Entry
 {
     internal const string HostModAssemblyName = "sts2_lan_connect";
 
     /// <summary>
-    /// Prefix of every Harmony id this mod uses. The ids actually installed are one per
-    /// <see cref="FixGroup"/>: <c>"sts2_lobby_enhance." + group name, lower case</c> — for example
-    /// <c>sts2_lobby_enhance.join</c>. Per-group ids are what make a rollback scoped, because
-    /// <c>UnpatchAll</c> takes an id rather than a patch set.
+    /// Prefix of the per-group Harmony ids (<c>"sts2_lobby_enhance." + group name, lower case</c>). Per-group
+    /// ids are what make a rollback scoped, because <c>UnpatchAll</c> takes an id rather than a patch set
     /// </summary>
     internal const string HarmonyId = "sts2_lobby_enhance";
 
@@ -45,22 +31,19 @@ public static class Entry
     private static bool _initialized;
 
     /// <summary>
-    /// Set while <see cref="Execute"/> runs under an out-of-process harness.
-    ///
-    /// MegaCrit's logger resolves <c>Godot.OS</c> in its own static constructor, which reaches native
-    /// interop. Outside a real Godot process that is not a managed exception but an access violation
-    /// (0xC0000005), so it cannot be caught — the only safe option is to never touch the logger at all.
+    /// Set while <see cref="Execute"/> runs under an out-of-process harness. MegaCrit's logger resolves
+    /// <c>Godot.OS</c> in its own static constructor, which outside a real Godot process is an access violation
+    /// (0xC0000005) rather than a managed exception, so it cannot be caught and the only safe option is never to
+    /// touch the logger
     /// </summary>
     private static bool _suppressLogging;
 
-    /// <summary>Harmony id for one group, e.g. <c>sts2_lobby_enhance.join</c>.</summary>
     internal static string HarmonyIdFor(FixGroup group) =>
         HarmonyId + "." + group.ToString().ToLowerInvariant();
 
     /// <summary>
-    /// Every Harmony id this mod can install patches under. Harnesses that enumerate installed patches
-    /// need all of them: <c>Harmony.GetPatchedMethods()</c> only reports the id of the instance it is
-    /// called on.
+    /// Every Harmony id this mod can install under. <c>Harmony.GetPatchedMethods()</c> only reports the id of the
+    /// instance it is called on, so a harness enumerating installed patches needs all of them
     /// </summary>
     internal static IEnumerable<string> AllHarmonyIds() =>
         Enum.GetValues<FixGroup>().Select(HarmonyIdFor);
@@ -88,10 +71,6 @@ public static class Entry
         }
     }
 
-    /// <summary>
-    /// Runs the real startup sequence with logging disabled, so a harness can exercise the reflection
-    /// and patching paths without a Godot runtime. Returns the outcome instead of reporting it.
-    /// </summary>
     internal static StartupReport RunSilently() => Execute(silent: true);
 
     private static StartupReport Execute(bool silent)
@@ -99,23 +78,20 @@ public static class Entry
         _suppressLogging = silent;
         try
         {
-            // CompatProbe.Capture() guards each probe internally, but it cannot guard its OWN type initialiser:
-            // a static field initialiser that throws surfaces as TypeInitializationException at the first static
-            // member access, which is this line and is outside Capture()'s try. Losing one snapshot is acceptable;
-            // losing the whole startup report is not.
+    // Capture() guards each probe internally, but not its OWN type initialiser: a throwing static initialiser
+    // surfaces as TypeInitializationException at the first static member access, which is this line and outside
+    // Capture()'s try. Losing one snapshot is acceptable, losing the whole startup report is not
             CompatSnapshot snapshot = default;
             string? captureFailure = null;
             try
             {
-                // Give the probes a way to say "I could not answer this" without Core depending on Entry.
                 CompatProbe.Logger ??= Info;
                 snapshot = CompatProbe.Capture();
             }
             catch (Exception exception)
             {
-                // Keep going with an all-false snapshot instead of aborting: the repairs that do not depend on a
-                // flag still install, and the ones that do will skip with a "missing: ..." reason. Aborting here
-                // would be the old global-switch behaviour in disguise.
+    // Keep going with an all-false snapshot: repairs that do not depend on a flag still install, and the ones
+    // that do skip with a "missing: ..." reason. Aborting here would be the old global switch in disguise
                 captureFailure = "CompatProbe.Capture(): " + exception.GetType().Name + ": " + exception.Message +
                                  " (repairs that read a flag will skip; those that do not still install)";
             }
@@ -133,12 +109,10 @@ public static class Entry
                 return report;
             }
 
-            // BUILDING the repair list is itself fallible and is not a per-repair concern: Build() is an
-            // iterator, so "new JoinTakeoverFix()" runs during MoveNext(), i.e. here and not inside Install()'s
-            // try. An exception from a constructor (or from a static initialiser that it triggers) would escape
-            // past this method, discard the report, and leave the groups installed so far live with no summary
-            // line. That is the same "part of it silently disappeared" outcome this redesign exists to remove,
-            // so it gets its own catch instead of being allowed to abort the run.
+    // BUILDING the list is itself fallible and is not a per-repair concern: Build() is an iterator, so
+    // "new JoinTakeoverFix()" runs during MoveNext(), here and not inside Install()'s try, and a throwing
+    // constructor (or static initialiser) would escape with the groups installed so far left live and no
+    // summary line
             List<ICompatFix> fixes;
             try
             {
@@ -156,8 +130,6 @@ public static class Entry
                 Install(fix, snapshot, report);
             }
 
-            // "Inert" now only describes the run: nothing was installed because nothing was needed.
-            // It gates nothing — there is no build-wide "needs patch" decision any more.
             report.Inert = report.Applied.Count == 0 && report.Failed.Count == 0;
             return report;
         }
@@ -168,8 +140,8 @@ public static class Entry
     }
 
     /// <summary>
-    /// Runs one repair: ask, then patch, then record. Never lets an exception escape, because one repair
-    /// is not allowed to decide whether the other repairs run.
+    /// Ask, then patch, then record. Never lets an exception escape, because one repair is not allowed to decide
+    /// whether the other repairs run
     /// </summary>
     private static void Install(ICompatFix fix, CompatSnapshot snapshot, StartupReport report)
     {
@@ -219,17 +191,12 @@ public static class Entry
         $"{exception.GetType().Name}: {exception.Message}";
 
     /// <summary>
-    /// Removes this group's patches — and only this group's.
+    /// Removes this group's patches and only this group's. 0Harmony 2.4.2 exposes exactly one
+    /// unpatch-everything entry point, <c>void HarmonyLib.Harmony.UnpatchAll(string harmonyID)</c>, with no
+    /// parameterless overload, and the id argument is what scopes the removal
     ///
-    /// 0Harmony 2.4.2 exposes exactly one unpatch-everything entry point,
-    /// <c>void HarmonyLib.Harmony.UnpatchAll(string harmonyID)</c> (instance method; there is no
-    /// parameterless overload in that assembly), and the id argument is what scopes the removal. Because
-    /// every group patches under its own id, this cannot touch another group's patches, let alone another
-    /// mod's.
-    ///
-    /// If the removal itself fails the group's patches are still live, so its ids stay in
-    /// <see cref="StartupReport.Applied"/> — the report must describe what is running, not what was
-    /// attempted.
+    /// A failed removal leaves the patches live, so its ids stay in <see cref="StartupReport.Applied"/>: the
+    /// report must describe what is running, not what was attempted
     /// </summary>
     private static void RollBackGroup(GroupReport group, StartupReport report)
     {
@@ -375,13 +342,11 @@ public static class Entry
     }
 }
 
-/// <summary>
-/// Outcome of one startup.
-///
-/// The first five properties are read by out-of-process harnesses — <c>tools/smoke-test</c> reflects over
-/// them by name and <c>tools/wire-verify</c> compiles against them — so their names and types are part of
-/// the contract. <see cref="Groups"/> is the per-group detail the log is built from.
-/// </summary>
+    /// <summary>
+    /// Outcome of one startup. The first five properties are read by out-of-process harnesses,
+    /// <c>tools/smoke-test</c> by reflection over their names and <c>tools/wire-verify</c> by compiling against
+    /// them, so their names and types are part of the contract
+    /// </summary>
 internal sealed class StartupReport
 {
     private readonly List<GroupReport> _groups = new();
@@ -394,32 +359,26 @@ internal sealed class StartupReport
     internal CompatSnapshot Snapshot { get; }
 
     /// <summary>
-    /// True when this startup installed nothing and nothing failed, i.e. no repair reported itself as
-    /// needed. It describes the run; it gates nothing.
+    /// True when this startup installed nothing and nothing failed. It describes the run, it gates nothing
     /// </summary>
     internal bool Inert { get; set; }
 
     internal bool HostMissing { get; set; }
 
-    /// <summary>Repair ids whose patches are live when <see cref="Entry.Execute"/> returns.</summary>
     internal List<string> Applied { get; } = new();
 
-    /// <summary>Repair ids that reported themselves as not needed for this build.</summary>
     internal List<string> Skipped { get; } = new();
 
     /// <summary>
-    /// Repairs that failed to install, plus repairs that were removed by their group's rollback. A group
-    /// whose removal failed keeps its ids in <see cref="Applied"/>, because they are still patched.
+    /// Repairs that failed to install plus repairs removed by their group's rollback. A group whose removal
+    /// failed keeps its ids in <see cref="Applied"/>, because they are still patched
     /// </summary>
     internal List<string> Failed { get; } = new();
 
-    /// <summary>Per-group detail, in the order the groups were first reached.</summary>
     internal IReadOnlyList<GroupReport> Groups => _groups;
 
-    /// <summary>True when at least one group was unpatched after a failure. Aggregate of the groups.</summary>
     internal bool RolledBack { get; set; }
 
-    /// <summary>Why a group rollback failed, or <c>null</c>. Aggregate of the groups.</summary>
     internal string? RollbackFailure { get; set; }
 
     internal GroupReport GroupFor(FixGroup group)
@@ -438,9 +397,7 @@ internal sealed class StartupReport
     }
 }
 
-/// <summary>
-/// One <see cref="FixGroup"/>: its own Harmony instance, its own patch set, its own rollback.
-/// </summary>
+    /// <summary>One <see cref="FixGroup"/>: its own Harmony instance, patch set and rollback</summary>
 internal sealed class GroupReport
 {
     internal GroupReport(FixGroup group)
@@ -452,28 +409,23 @@ internal sealed class GroupReport
 
     internal FixGroup Group { get; }
 
-    /// <summary>The Harmony id every patch of this group is installed under.</summary>
     internal string HarmonyId { get; }
 
     /// <summary>
-    /// Shared by every repair in the group, so one <c>UnpatchAll(HarmonyId)</c> covers all of them and
-    /// nothing outside the group.
+    /// Shared by every repair in the group, so one <c>UnpatchAll(HarmonyId)</c> covers all of them and nothing
+    /// outside the group
     /// </summary>
     internal Harmony Harmony { get; }
 
     /// <summary>Repairs of this group that installed their patches. History: kept after a rollback.</summary>
     internal List<string> Applied { get; } = new();
 
-    /// <summary>Repairs of this group that answered "not needed", each with its reason.</summary>
     internal List<string> Skipped { get; } = new();
 
-    /// <summary>Repairs of this group that failed, each with the exception.</summary>
     internal List<string> Failed { get; } = new();
 
-    /// <summary>True when this group's patches were removed after a failure.</summary>
     internal bool RolledBack { get; set; }
 
-    /// <summary>Why <c>UnpatchAll</c> failed, or <c>null</c> when it succeeded or was not needed.</summary>
     internal string? RollbackFailure { get; set; }
 }
 

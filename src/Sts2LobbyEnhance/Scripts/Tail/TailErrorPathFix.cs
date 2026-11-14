@@ -9,25 +9,18 @@ using MegaCrit.Sts2.Core.Multiplayer.Serialization;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Repairs #3 and #4: the tail_v1 error paths.
-///
-/// <c>LanConnectTailMessageRuntime.AbortActiveBinding</c> and <c>RejectAndDisconnect</c> are the only
-/// two methods in the host mod that reference the 0.113-changed
-/// <c>NetHostGameService.ConnectedPeers</c> (List to IReadOnlyList) and
-/// <c>NetHostGameService.DisconnectClient</c> (three parameters to four). Like the join flow they cannot
-/// be patched at all — Harmony cannot even read their IL — but unlike the join flow they have no async
-/// stub to intercept.
-///
-/// They do, however, have readable callers. So we redirect every call to them at the IL level and run a
-/// faithful reimplementation written against the 0.113 signatures. The bodies below are line-for-line
-/// ports of the upstream originals; the only deliberate difference is that the host API calls use the
-/// new signatures.
-///
-/// These paths only run when something has already gone wrong (protocol rejection, transport failure),
-/// which is exactly when a crash is least acceptable: it would take the whole session down instead of
-/// disconnecting one peer.
-/// </summary>
+    /// <summary>
+    /// The tail_v1 error paths
+    ///
+    /// <c>LanConnectTailMessageRuntime.AbortActiveBinding</c> and <c>RejectAndDisconnect</c> are the only two methods in
+    /// the host mod that reference the 0.113-changed <c>NetHostGameService.ConnectedPeers</c> (List to IReadOnlyList)
+    /// and <c>DisconnectClient</c> (three parameters to four). Like the join flow they cannot be patched at all, Harmony
+    /// cannot even read their IL, but unlike it they have no async stub to intercept. They do have readable callers, so
+    /// every call to them is redirected at the IL level into a line-for-line port against the 0.113 signatures
+    ///
+    /// These paths only run when something has already gone wrong, which is exactly when a crash is least acceptable:
+    /// it would take the whole session down instead of disconnecting one peer
+    /// </summary>
 internal sealed class TailErrorPathFix : ICompatFix
 {
     private const string RuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectTailMessageRuntime";
@@ -37,19 +30,16 @@ internal sealed class TailErrorPathFix : ICompatFix
     private const string LobbyRuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyRuntime";
     private const string KickTargetTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyKickTarget";
 
-    /// <summary>Same member filter as <see cref="Reflect"/> uses, for the reflective lookups below.</summary>
     private const BindingFlags AnyMember =
         BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
     /// <summary>
-    /// Every anchor this repair needs, resolved once in <see cref="Apply"/> before anything is patched.
+    /// Every anchor this repair needs, resolved once in <see cref="Apply"/> before anything is patched
     ///
-    /// The two patched methods are matched by *parameter types*, not by arity: <see cref="Reflect"/>'s
-    /// <c>RequireMethodByName</c> only compares parameter counts (Core/Reflect.cs:60-76), and a same-arity rename
-    /// upstream would otherwise bind the redirect to the wrong method and silently rewrite its call sites.
-    ///
-    /// The kick anchors are optional: they repair a different upstream feature (the 1.5 s delayed disconnect on
-    /// kick), so losing them must not cost the tail error paths. Their absence is a note, not a skip.
+    /// The two patched methods are matched by *parameter types*, not arity: <c>RequireMethodByName</c> only compares
+    /// parameter counts, and a same-arity rename would bind the redirect to the wrong method and silently rewrite its
+    /// call sites. The kick anchors are optional because they repair a different upstream feature, so losing them must
+    /// not cost the tail error paths
     /// </summary>
     internal sealed class Shape
     {
@@ -95,33 +85,30 @@ internal sealed class TailErrorPathFix : ICompatFix
     internal static Shape? _shape;
 
     /// <summary>
-    /// The two host methods <see cref="RedirectTranspiler"/> rewrites calls to. Harmony binds a transpiler
-    /// through <c>HarmonyMethod(Type, string)</c>, which only accepts a static method, so the targets are
-    /// handed over through these fields instead of a closure. They are written once in <see cref="Apply"/>
-    /// and only read while Harmony runs the transpiler (synchronously, inside <c>harmony.Patch</c>).
+    /// The two host methods <see cref="RedirectTranspiler"/> rewrites calls to. <c>HarmonyMethod(Type, string)</c> only
+    /// accepts a static method, so the targets are handed over through these fields instead of a closure. They are
+    /// written in <see cref="Apply"/> and read only while Harmony runs the transpiler, synchronously inside
+    /// <c>harmony.Patch</c>
     /// </summary>
     private static MethodInfo? _abortTarget;
 
     private static MethodInfo? _rejectTarget;
 
     /// <summary>
-    /// How many call instructions <see cref="RedirectTranspiler"/> has rewritten. A patched caller that
-    /// contributes zero here means Harmony attached the patch but the rewrite did not take effect — the one
-    /// outcome that must never be reported as success.
+    /// How many call instructions <see cref="RedirectTranspiler"/> has rewritten. A patched caller contributing zero
+    /// means Harmony attached the patch but the rewrite did not take effect, which must never be reported as success
     /// </summary>
     private static int _rewrittenCallInstructions;
 
     /// <summary>
     /// The last protocol failure the tail runtime rejected a frame with, as "<c>code: detail</c>", or null when
-    /// nothing has been rejected in this process. Timeout paths quote it so a hang is never reported without the
-    /// reason that caused it.
+    /// nothing has been rejected in this process. Timeout paths quote it so a hang is never reported without its reason
     /// </summary>
     public static string? LastRejection { get; private set; }
 
     /// <summary>
     /// One line for a timeout report. "none" is itself informative: it means the tail runtime never rejected
-    /// anything, so the frame either never arrived or was dropped before validation — a different bug from a
-    /// rejection, and previously indistinguishable in the log.
+    /// anything, so the frame either never arrived or was dropped before validation, a different bug
     /// </summary>
     public static string DescribeLastRejection() =>
         LastRejection == null
@@ -133,10 +120,10 @@ internal sealed class TailErrorPathFix : ICompatFix
     public FixGroup Group => FixGroup.Tail;
 
     /// <summary>
-    /// Needed when the two members the redirected bodies use have changed: <c>DisconnectClient</c>'s fourth
-    /// parameter and <c>ConnectedPeers</c> no longer being a <c>List&lt;NetClientData&gt;</c>. Those two flags are
-    /// this repair's own precondition, not a global "is this 0.113" gate: if a future build restores either
-    /// signature, the host mod's own methods JIT again and the redirect becomes dead weight.
+    /// Needed when the two members the redirected bodies use have changed: <c>DisconnectClient</c>'s fourth parameter
+    /// and <c>ConnectedPeers</c> no longer being a <c>List&lt;NetClientData&gt;</c>. Those flags are this repair's own
+    /// precondition, not a global "is this 0.113" gate: if a future build restores either signature, the host mod's
+    /// methods JIT again and the redirect becomes dead weight
     /// </summary>
     public bool Applies(in CompatSnapshot snapshot, out string reason)
     {
@@ -249,10 +236,8 @@ internal sealed class TailErrorPathFix : ICompatFix
 
     /// <summary>
     /// Resolves every anchor before anything is patched. Never throws, never invokes, never touches Godot: pure
-    /// metadata over the already-loaded host assembly. All misses are collected into one reason string.
-    ///
-    /// The two patched methods are matched by parameter type, not by arity: Core/Reflect.cs:60-76 only compares
-    /// parameter counts, and a same-arity rename upstream would otherwise bind the redirect to the wrong method.
+    /// metadata over the loaded host assembly, with all misses collected into one reason string. The two patched
+    /// methods are matched by parameter type because <c>RequireMethodByName</c> only compares counts
     /// </summary>
     private static bool TryCapture(Assembly host, out Shape shape, out string reason)
     {
@@ -373,8 +358,8 @@ internal sealed class TailErrorPathFix : ICompatFix
     }
 
     /// <summary>
-    /// The kick anchors repair a different upstream feature, so they are optional: losing them must not cost the
-    /// tail error paths. A miss is recorded on <see cref="Shape.OptionalNote"/> and logged by <see cref="Apply"/>.
+    /// The kick anchors repair a different upstream feature, so they are optional: a miss is recorded on
+    /// <see cref="Shape.OptionalNote"/> and logged, never a reason to skip the tail error paths
     /// </summary>
     private static void CaptureOptionalKickAnchors(Assembly host, Shape shape)
     {
@@ -472,8 +457,8 @@ internal sealed class TailErrorPathFix : ICompatFix
     }
 
     /// <summary>
-    /// Counts the call instructions <see cref="RedirectTranspiler"/> would rewrite. This is the dry run: it lets
-    /// <see cref="Apply"/> prove a caller is worth patching before any patch is installed (A2).
+    /// Counts the call instructions <see cref="RedirectTranspiler"/> would rewrite, the dry run that lets
+    /// <see cref="Apply"/> prove a caller is worth patching before any patch is installed
     /// </summary>
     private static int CountRedirectable(IEnumerable<CodeInstruction> instructions, MethodInfo abort, MethodInfo reject)
     {
@@ -500,12 +485,11 @@ internal sealed class TailErrorPathFix : ICompatFix
     }
 
     /// <summary>
-    /// The one predicate the dry run and the real pass both use, so they can never disagree about what counts.
+    /// The one predicate the dry run and the real pass both use, so they cannot disagree about what counts
     ///
-    /// It checks the opcode, not just the operand: `ldftn` also carries a MethodInfo, and replacing a function
-    /// pointer with `call` changes the stack shape (call consumes the receiver and arguments and pushes nothing,
-    /// ldftn pushes a pointer and consumes nothing) — the method would throw InvalidProgramException on every
-    /// execution. `callvirt` is kept as `callvirt` for the same reason (null-check semantics).
+    /// It checks the opcode, not just the operand: `ldftn` also carries a MethodInfo, and replacing a function pointer
+    /// with `call` changes the stack shape, so the method would throw InvalidProgramException on every execution.
+    /// `callvirt` stays `callvirt` for the same reason
     /// </summary>
     private static Redirect Classify(CodeInstruction instruction, MethodInfo abort, MethodInfo reject)
     {
@@ -528,8 +512,8 @@ internal sealed class TailErrorPathFix : ICompatFix
     }
 
     /// <summary>
-    /// Swaps the call target while leaving the argument stack untouched: the replacements take the same
-    /// number of stack slots in the same order, only the receiver is widened to <see cref="object"/>.
+    /// Swaps the call target while leaving the argument stack untouched: the replacements take the same number of
+    /// stack slots in the same order, only the receiver is widened to <see cref="object"/>
     /// </summary>
     private static IEnumerable<CodeInstruction> RedirectTranspiler(IEnumerable<CodeInstruction> instructions)
     {
@@ -567,12 +551,9 @@ internal sealed class TailErrorPathFix : ICompatFix
         }
     }
 
-    // ------------------------------------------------------------------ replacements
-
     /// <summary>
-    /// Reads a string member off the host mod's <c>LanConnectProtocolFailure</c> without taking a compile-time
-    /// dependency on it. Returns a placeholder instead of throwing: this runs inside an error path, and losing the
-    /// reason because the shape moved would put us back to a silent hang.
+    /// Reads a string member off the host mod's <c>LanConnectProtocolFailure</c> without a compile-time dependency.
+    /// Returns a placeholder instead of throwing: losing the reason because the shape moved would be a silent hang
     /// </summary>
     private static string DescribeFailureMember(object failure, string member)
     {
@@ -580,11 +561,10 @@ internal sealed class TailErrorPathFix : ICompatFix
         {
             Type type = failure.GetType();
 
-            // Property first, but only when it exists. Reflect.GetPropertyValue throws MissingMemberException
-            // for an absent member (Reflect.cs:38-40), so the old "??"-fallback never reached the field
-            // lookup; worse, a property that exists and holds null (LanConnectProtocolFailure.Detail is
-            // declared with a null default, LanConnectProtocolFailure.cs:6) fell through to GetField and
-            // was reported as "<unreadable Detail: MissingMemberException>" instead of "<none>".
+    // Property first, but only when it exists. Reflect.GetPropertyValue throws MissingMemberException for an absent
+    // member, so the fallback never reached the field lookup; worse, a property that exists and holds null
+    // (LanConnectProtocolFailure.Detail is declared with a null default, LanConnectProtocolFailure.cs:6) fell through
+    // to GetField and was reported as "<unreadable Detail: MissingMemberException>"
             PropertyInfo? property = type.GetProperty(member, AnyMember);
             if (property != null)
             {
@@ -624,11 +604,10 @@ internal sealed class TailErrorPathFix : ICompatFix
 
         object? service = shape.BindingService.GetValue(binding);
 
-        // Upstream's rejection is completely silent: it sends a rejection message and disconnects, and nothing in
-        // the log says which validation refused the frame. That made a 2026-11-13 field report (client receives
-        // ClientLoadJoinResponseMessage + its extension frame, then hangs for 15 s with no explanation) impossible
-        // to diagnose from logs alone. Record and log the code/detail so the reason is always visible, and keep it
-        // in LastRejection so a caller that times out can quote it instead of only reporting the timeout.
+    // Upstream's rejection is silent: it sends a rejection and disconnects, and nothing says which validation refused
+    // the frame, which made a 2026-11-13 field report (client receives ClientLoadJoinResponseMessage + its extension
+    // frame, then hangs for 15 s) impossible to diagnose from logs. Record the code/detail and keep it in
+    // LastRejection so a caller that times out can quote it
         string rejectionCode = DescribeFailureMember(failure, "Code");
         string rejectionDetail = DescribeFailureMember(failure, "Detail");
         LastRejection = $"{rejectionCode}: {rejectionDetail}";
@@ -698,13 +677,12 @@ internal sealed class TailErrorPathFix : ICompatFix
 
         FieldInfo field = shape.OutgoingRejections;
 
-        // Upstream declares it "[ThreadStatic] private static Stack<LanConnectProtocolFailure>?" and the probe
-        // verified Push/Pop exist and that it is static. GetValue/SetValue ignore the instance argument for static
-        // fields, so pass null: an instance argument would suggest a per-binding field and hide that the stack is
-        // per-thread.
-        //
-        // A real check, not Debug.Assert: Debug.Assert is [Conditional("DEBUG")] and this ships as Release, so the
-        // assertion produced no code at all and an instance field would have thrown TargetException right here.
+    // Upstream declares it "[ThreadStatic] private static Stack<LanConnectProtocolFailure>?". GetValue/SetValue
+    // ignore the instance argument for static fields, so pass null: an instance argument would suggest a per-binding
+    // field and hide that the stack is per-thread.
+    //
+    // A real check, not Debug.Assert: Debug.Assert is [Conditional("DEBUG")] and this ships as Release, so the
+    // assertion produced no code at all and an instance field would have thrown TargetException right here
         if (!field.IsStatic)
         {
             Entry.Warn(
@@ -833,11 +811,10 @@ internal sealed class TailErrorPathFix : ICompatFix
     }
 
     /// <summary>
-    /// The host's kick flow waits 1.5s on a Godot timer and then disconnects the peer from the timer
-    /// callback. That callback is a closure whose IL references the removed three-parameter
-    /// <c>DisconnectClient</c>, so it can never be JITted: kicking a player would throw instead of
-    /// disconnecting them, and the ENet peer would stay connected. The scheduling method itself is
-    /// readable, so we replace it with the same logic written against the 0.113 signature.
+    /// The host's kick flow waits 1.5s on a Godot timer and then disconnects the peer from the timer callback. That
+    /// callback is a closure whose IL references the removed three-parameter <c>DisconnectClient</c>, so it can never
+    /// be JITted: kicking a player would throw instead of disconnecting them and the ENet peer would stay connected.
+    /// The scheduling method itself is readable, so it is replaced with the same logic against the 0.113 signature
     /// </summary>
     private static void InstallKickDisconnectRedirect(Harmony harmony, Shape shape)
     {
@@ -921,9 +898,8 @@ internal sealed class TailErrorPathFix : ICompatFix
 
     /// <summary>
     /// Mirrors upstream's <c>target.BindingId ?? "&lt;legacy&gt;"</c> (dec-official
-    /// LanConnectRemoteLobbyPlayerPatches.cs:286). Read reflectively because this patch has no compile-time
-    /// reference to the host assembly; a missing property degrades to the same "&lt;legacy&gt;" upstream prints
-    /// for a null binding id, never to an exception in a timer callback.
+    /// LanConnectRemoteLobbyPlayerPatches.cs:286). Read reflectively, no compile-time reference to the host assembly;
+    /// a missing property degrades to the same "&lt;legacy&gt;" upstream prints, never to an exception in a callback
     /// </summary>
     private static string DescribeKickBindingId(object target) =>
         target.GetType().GetProperty("BindingId", AnyMember)?.GetValue(target) as string ?? "<legacy>";

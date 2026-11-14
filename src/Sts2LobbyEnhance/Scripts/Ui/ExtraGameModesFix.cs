@@ -85,7 +85,6 @@ internal sealed class ExtraGameModesFix : ICompatFix
     private const string VoidTypeName = "System.Void";
     private const string StringTypeName = "System.String";
 
-    /// <summary>The game assembly, looked up by name so no probe needs a <c>typeof</c>.</summary>
     private const string GameAssemblyName = "sts2";
 
     /// <summary>Dropdown id and mode value for Blitz; matches the game's own <c>GameMode.Blitz</c>.</summary>
@@ -299,7 +298,7 @@ internal sealed class ExtraGameModesFix : ICompatFix
     /// skipped, with both the expected and the actual type name in the log.
     ///
     /// This is the same guard every other seam in this file has; it is not about any particular upstream
-    /// release. <c>Reflect.RequireMethodByName</c> matches on arity only (<c>Reflect.cs:60-76</c>), so an
+    /// release. <c>Reflect.RequireMethodByName</c> matches on arity only, so an arity-only bind can never be
     /// arity-only bind can never be trusted on its own.
     /// </summary>
     private static void InstallLobbyGameMode(Harmony harmony, Shape shape, MethodInfo mapGameModeString)
@@ -478,7 +477,6 @@ internal sealed class ExtraGameModesFix : ICompatFix
 
     // ------------------------------------------------------------------ pure helpers used from IL
 
-    /// <summary>Dropdown id to the mode value the rest of the host mod understands.</summary>
     public static int MapCreateId(int id) => id switch
     {
         1 => (int)GameMode.Daily,
@@ -488,10 +486,8 @@ internal sealed class ExtraGameModesFix : ICompatFix
         _ => (int)GameMode.Standard
     };
 
-    /// <summary>True for the two modes this fix introduces.</summary>
     public static bool IsExtraMode(int mode) => mode is BlitzValue or DreadSentinel;
 
-    /// <summary>Maps a mode value to the string the lobby service stores and shows.</summary>
     public static string MapGameModeString(int mode) => mode switch
     {
         BlitzValue => "blitz",
@@ -874,7 +870,6 @@ internal sealed class ExtraGameModesFix : ICompatFix
             return shape;
         }
 
-        /// <summary>Exact parameter-type match, by full name, so no <c>typeof</c> is needed.</summary>
         private static bool ParametersMatch(MethodInfo method, params string[] expectedTypeNames)
         {
             ParameterInfo[] parameters = method.GetParameters();
@@ -894,7 +889,6 @@ internal sealed class ExtraGameModesFix : ICompatFix
             return true;
         }
 
-        /// <summary>Compact signature, for the "we did not bind" reason line.</summary>
         private static string Describe(MethodInfo method) =>
             "(" + string.Join(", ", method.GetParameters().Select(parameter => Short(parameter.ParameterType.FullName))) +
             ") -> " + Short(method.ReturnType.FullName);

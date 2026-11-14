@@ -4,28 +4,19 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Leaves only 「新协议」 in the create-room dialog and preselects it. The legacy option is hidden, not removed:
-/// the upstream button, its description, its protocol id and every code path that handles 兼容旧版 Mod stay
-/// untouched, and joining a room that was created with the legacy protocol is unaffected — that path reads the
-/// room's advertised profile, not this dialog.
-///
-/// Why: RitsuLib is a dependency of many mods, and upstream refuses to host it on the legacy profile at all
-/// (LanConnectCreateRoomIntent.cs:17-19 throws RitsuLibNotAllowedInCompat). So a host who picks 兼容旧版 Mod
-/// while RitsuLib is installed gets an error, and a host who does not have RitsuLib installed silently creates a
-/// room that cannot carry it. The two profiles are otherwise identical in play, so presenting both is a trap
-/// with no upside.
-///
-/// Upstream's own reason for keeping the option is "players on older mod versions could not join otherwise".
-/// Hiding the entry does not change what those players can join: they still see and enter legacy rooms created
-/// elsewhere, and Workshop subscriptions update the mod automatically, so the population still on 0.3–0.5 keeps
-/// shrinking. If upstream ever ships a reason to keep the entry, this fix steps aside on its own — see the
-/// self-healing rule below.
-///
-/// Self-healing by construction: the postfix does nothing unless upstream still offers BOTH protocol buttons and
-/// considers 新协议 selectable. Any other shape (one button, renamed field, new protocol id, tail runtime
-/// unavailable) leaves the dialog exactly as upstream built it.
-/// </summary>
+    /// <summary>
+    /// Leaves only 「新协议」 in the create-room dialog and preselects it. The legacy option is hidden, not removed:
+    /// the upstream button, its description, its protocol id and every path handling 兼容旧版 Mod stay untouched,
+    /// and joining a legacy room is unaffected because that path reads the room's advertised profile
+    ///
+    /// RitsuLib is a dependency of many mods, and upstream refuses to host it on the legacy profile at all
+    /// (LanConnectCreateRoomIntent.cs:17-19 throws RitsuLibNotAllowedInCompat), so a host who picks 兼容旧版 Mod
+    /// with RitsuLib installed gets an error and one without RitsuLib silently creates a room that cannot carry
+    /// it, while the two profiles are otherwise identical in play
+    ///
+    /// The postfix does nothing unless upstream still offers both protocol buttons and considers 新协议
+    /// selectable, so any other shape leaves the dialog exactly as upstream built it
+    /// </summary>
 internal sealed class NewProtocolOnlyFix : ICompatFix
 {
     private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyOverlay";
@@ -46,14 +37,14 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
     public string Id => "new-protocol-only";
 
     /// <summary>
-    /// Same group as <see cref="ExtraGameModesFix"/>: both edit the same create-room dialog, so a shape change
-    /// that breaks one almost always breaks the other, and they should be rolled back together.
+    /// Same group as <see cref="ExtraGameModesFix"/>: both edit the create-room dialog, so a shape change that
+    /// breaks one almost always breaks the other and they roll back together
     /// </summary>
     public FixGroup Group => FixGroup.Modes;
 
     /// <summary>
-    /// Applicable when the dialog's protocol controls resolve. <see cref="CompatSnapshot"/> is not read — no
-    /// game-version breakpoint has anything to say about which protocol buttons exist.
+    /// <see cref="CompatSnapshot"/> is not read: no game-version breakpoint has anything to say about which
+    /// protocol buttons exist
     /// </summary>
     public bool Applies(in CompatSnapshot snapshot, out string reason)
     {
@@ -136,8 +127,7 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
     }
 
     /// <summary>
-    /// Asks upstream whether 新协议 is selectable right now, using upstream's own predicate so this fix can never
-    /// disagree with the button's disabled state.
+    /// Uses upstream's own predicate so this fix cannot disagree with the button's disabled state
     /// </summary>
     private static bool IsTailSelectable(Shape shape)
     {
@@ -165,7 +155,7 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
 
     /// <summary>
     /// Every member this fix touches, resolved once in <see cref="Applies"/> and never again. Metadata only: no
-    /// <c>typeof</c> on a host type, nothing invoked while probing.
+    /// <c>typeof</c> on a host type, nothing invoked while probing
     /// </summary>
     internal sealed class Shape
     {

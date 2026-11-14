@@ -3,30 +3,11 @@ using System.Reflection;
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Anchor lookups that REPORT rather than throw.
+/// Anchor lookups that report every miss instead of throwing on the first one.
 ///
-/// <see cref="Reflect"/> has two families: <c>Require*</c> throws on the first miss, <c>Try*</c> returns
-/// null. Neither fits the install-time probes in the repairs: a probe has to name every anchor a game
-/// build no longer has, in one pass, because the operator reads that list from the log and cannot be asked
-/// to relaunch the game to discover the next missing name. These lookups therefore take the caller's
-/// <c>List&lt;string&gt;</c>, append a human-readable description of each miss, and return null.
-///
-/// Nothing here throws for a missing member, and nothing here guesses: an ambiguous name (more than one
-/// matching overload) is reported as a miss, never bound to an arbitrary candidate. That rule is the whole
-/// point — a repair that binds to the wrong overload degrades behaviour instead of failing loudly.
-///
-/// The message text is an operator-facing contract (docs and log lines quote it), which is why lookups
-/// with genuinely different messages stay separate instead of sharing one parameterised helper:
-///   * <see cref="Field"/>/<see cref="Property"/> are instance-only and name the member as
-///     <c>DeclaringType.FullName.Name</c>; the <c>Static*</c> twins add a <c>(static)</c> suffix, because
-///     "no such field" and "no such *static* field" are different repairs for a reader.
-///   * <see cref="FieldOf"/>/<see cref="PropertyOf"/>/<see cref="MethodOf"/> accept instance and static
-///     members alike (upstream mixes the two freely) and describe a method by name plus parameter count.
-///   * <see cref="UniqueMethod"/> is the same lookup with the short type name, for the overlay probes
-///     whose reason lines are already scoped by the surrounding <c>missing:</c> prefix.
-///   * <see cref="Exact"/> is the only one that compares *type names*, which is what a Harmony target
-///     needs: arity alone cannot tell <c>Disconnect(NetError, bool)</c> from
-///     <c>Disconnect(NetErrorInfo, bool)</c>.
+/// Ambiguity counts as a miss and is never bound to an arbitrary candidate: a repair bound to the wrong
+/// overload degrades behaviour instead of failing. The message text is quoted in docs and log lines, so
+/// lookups with different messages stay separate rather than sharing one parameterised helper.
 /// </summary>
 internal static class ReflectScope
 {
@@ -60,8 +41,7 @@ internal static class ReflectScope
     }
 
     /// <summary>
-    /// Finds a type by full name across the loaded assemblies. No <c>typeof</c>, so a game build that renamed the type
-    /// costs this anchor, not the whole probe.
+    /// No <c>typeof</c>, so a renamed type costs this anchor instead of the whole probe
     /// </summary>
     internal static Type? FindType(string fullName)
     {
@@ -85,12 +65,8 @@ internal static class ReflectScope
     }
 
     /// <summary>
-    /// Finds one instance method by name and *exact* parameter types.
-    ///
-    /// Arity alone is not enough to bind a patch: <c>Disconnect(NetError, bool)</c> and
-    /// <c>Disconnect(NetError, bool, string)</c> differ in count, but <c>Disconnect(NetError, bool)</c> and
-    /// <c>Disconnect(NetErrorInfo, bool)</c> do not — and patching the wrong one would silently hook an unrelated
-    /// path. Every call site below therefore spells out the parameter types it expects.
+    /// Arity alone cannot bind a patch: overloads can share a parameter count and differ in types, and
+    /// hooking the wrong one is silent
     /// </summary>
     internal static MethodInfo? InstanceMethod(
         List<string> problems,
@@ -167,11 +143,8 @@ internal static class ReflectScope
     }
 
     /// <summary>
-    /// Verifies the parameter *names* of a method we patch.
-    ///
-    /// Harmony binds a prefix/postfix argument to the target parameter with the same name, so a rename
-    /// (<c>reason</c> to <c>error</c>) silently breaks the binding: the patch either fails to apply or, worse, binds
-    /// nothing and the guard stops guarding. Parameter types are checked separately; this is the name half.
+    /// Harmony binds a prefix/postfix argument to the target parameter by name, so a rename silently
+    /// breaks the binding and the guard stops guarding
     /// </summary>
     internal static void RequireParameterNames(List<string> problems, MethodInfo? method, params string[] names)
     {
@@ -240,10 +213,6 @@ internal static class ReflectScope
         return property;
     }
 
-    /// <summary>
-    /// Same as <see cref="Property"/> but for a static member — <c>LanConnectTailMessageRuntime.Shared</c> is a
-    /// static property, and the instance-only lookup above would never find it.
-    /// </summary>
     internal static PropertyInfo? StaticProperty(List<string> problems, Type? owner, string name)
     {
         if (owner == null)
@@ -339,8 +308,7 @@ internal static class ReflectScope
     }
 
     /// <summary>
-    /// Finds one method by name, static-ness and exact parameter/return type names. Names are compared as
-    /// strings so the probe never has to <c>typeof</c> a type that a future build might have dropped.
+    /// Compares type names as strings so the probe never has to <c>typeof</c> a type a future build might drop
     /// </summary>
     internal static MethodInfo? Exact(
         Type? type,
@@ -378,11 +346,6 @@ internal static class ReflectScope
         return null;
     }
 
-    /// <summary>
-    /// Last segment of a type name, keeping the by-ref marker. The reason line is read by a person
-    /// looking at a log, and <c>SerializableRun&amp;</c> says the same thing as
-    /// <c>MegaCrit.Sts2.Core.Runs.SerializableRun&amp;</c> in a tenth of the width.
-    /// </summary>
     private static string Short(string typeName)
     {
         bool byRef = typeName.EndsWith("&", StringComparison.Ordinal);

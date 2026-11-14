@@ -71,7 +71,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     private const string CaptionNodeName = "LobbyEnhanceNewRunCaption";
     private const string HintNodeName = "LobbyEnhanceReassembleHint";
 
-    /// <summary>Label of the injected button; the button itself is a duplicate of the game's own "主菜单".</summary>
     private const string NewRunLabel = "新开一局";
 
     /// <summary>
@@ -85,13 +84,10 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     private const int MainMenuWaitFrames = 180;
 
-    /// <summary>How long the one-shot daily admission filter may stay armed before it gives up.</summary>
     private const int DailyAdmitFilterWindowMs = 60000;
 
-    /// <summary>Set by <see cref="Applies"/>, consumed by <see cref="Apply"/>. Non-null once <see cref="Applies"/> said yes.</summary>
     private static Shape? _shape;
 
-    /// <summary>Patched methods, resolved by <see cref="Applies"/> together with <see cref="_shape"/>.</summary>
     private static PatchTargets _targets;
 
     // ---- injected UI (host side) ------------------------------------------------------------------------
@@ -104,7 +100,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     private static Label? _injectedHint;
     private static INetGameService? _watchedService;
 
-    /// <summary>Shown instead of the button's caption once the session is gone.</summary>
     private const string DisconnectedCaption = "联机会话已断开，无法新开一局";
 
     private const string DisconnectedMessage = "联机会话已断开，无法新开一局。请点「主菜单」返回主菜单后重新建房。";
@@ -116,7 +111,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     // ---- client side ------------------------------------------------------------------------------------
 
-    /// <summary>Set while a finished multiplayer run's game-over screen is on screen. The guard for #1.</summary>
     private static bool _gameOverScreenVisible;
 
     /// <summary>
@@ -1191,7 +1185,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         }
     }
 
-    /// <summary>Reads the private <c>_lobby</c> field every lobby screen declares.</summary>
     private static StartRunLobby? FindLobby(NSubmenu screen)
     {
         FieldInfo? field = screen.GetType().GetField("_lobby", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -2233,7 +2226,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         return true;
     }
 
-    /// <summary>Methods this repair patches. Separated from <see cref="Shape"/> because they are install-time only.</summary>
+    /// <summary>Methods this repair patches, install-time only</summary>
     private readonly record struct PatchTargets(
         MethodInfo GameOverReady,
         MethodInfo OpenSummary,
@@ -2328,13 +2321,10 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
         internal FieldInfo RunStateField { get; }
 
-        /// <summary>The screen's full-screen UI root (<c>%Ui</c>); the fade-in anchor for the injected nodes.</summary>
         internal FieldInfo UiNode { get; }
 
-        /// <summary><c>NReturnToMainMenuButton._showPosition</c>: the target of the button's animate-in tween.</summary>
         internal FieldInfo ShowPosition { get; }
 
-        /// <summary><c>NReturnToMainMenuButton._hsv</c>: the hover shader the button drives.</summary>
         internal FieldInfo ShaderMaterial { get; }
 
         internal MethodInfo AdmitPeer { get; }
@@ -2345,7 +2335,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
         internal MethodInfo RemoveSaveRoomBinding { get; }
 
-        /// <summary><c>NButton.UnregisterHotkeys()</c>; drops the hotkey a duplicated button re-registered.</summary>
+    /// <summary><c>NButton.UnregisterHotkeys()</c>; drops the hotkey a duplicated button re-registered</summary>
         internal MethodInfo UnregisterHotkeys { get; }
 
         // Resolution lives in TryCapture: it collects every missing anchor instead of throwing on the first one, and

@@ -5,66 +5,49 @@ using MegaCrit.Sts2.Core.Multiplayer.Game;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Drops the accepted Tail roster epoch of one live session, so the next roster-bearing message from the
-/// host is validated as a bootstrap instead of as a "current state" repeat.
-///
-/// Why this is a shared component: two repairs keep the <c>NetService</c> alive across a room rebuild and
-/// then re-handshake on that very same session — the mid-run restart (<see cref="MidRunRestartFix"/>) and
-/// the game-over "new run" button (<see cref="NewRunFromGameOverFix"/>). Both walk into the same trap, so
-/// the reflection lives here once instead of twice.
-///
-/// The trap, quoted from the shipped 0.6.3 binary (the one that is actually loaded, see
-/// <c>work/lobby/dec-official</c>): <c>LanConnectTailMessageRuntime.AcceptRoster</c> chooses the snapshot
-/// use with <c>authority.Current == null ? firstUse : CurrentState</c>
-/// (LanConnectTailMessageRuntime.cs:1350-1354), so the <c>Bootstrap</c> hint that
-/// <c>RestoreStartRunResponse</c> passes at :1169 is *ignored* once the authority already holds a snapshot.
-/// <c>CurrentState</c> then demands that the snapshot repeat the accepted revision byte for byte
-/// (LanConnectRosterAuthorityState.cs:83-88) and throws at :86.
-///
-/// The official flows never hit that branch: a join always arrives on a brand-new binding whose roster
-/// authority is still empty. A repair that keeps the session alive keeps the binding alive too, so the
-/// client still holds the <c>StartRunLobbyPlayer</c> epoch from the room it just left while the host is
-/// about to publish a <c>LoadRunLobbyPlayer</c> epoch — a different carrier type, hence a different length,
-/// hence a guaranteed failure at the length check before any field is compared. The field log says exactly
-/// that: <c>lan_protocol_version_mismatch: Current-state snapshots must repeat the accepted revision
-/// byte-for-byte</c>.
-///
-/// Resetting only the client is deliberate: the host keeps publishing monotonically increasing revisions,
-/// which is what an unpatched client expects, so a mixed room degrades to the unpatched behaviour instead
-/// of to a new failure mode ("Roster revision moved backwards", LanConnectRosterAuthorityState.cs:77).
-///
-/// Failure policy: every step is best effort. A missing anchor or a throwing target logs one warning and
-/// returns <c>false</c>; nothing is ever thrown at the caller, because both call sites are inside a
-/// handshake that must not die for a diagnostic.
-/// </summary>
+    /// <summary>
+    /// Drops the accepted Tail roster epoch of one live session, so the next roster-bearing message from the
+    /// host is validated as a bootstrap instead of as a "current state" repeat
+    ///
+    /// Shared by <see cref="MidRunRestartFix"/> and <see cref="NewRunFromGameOverFix"/> because both keep the
+    /// <c>NetService</c> alive across a room rebuild and re-handshake on that same session
+    ///
+    /// The trap, from the shipped 0.6.3 binary under <c>work/lobby/dec-official</c>:
+    /// <c>LanConnectTailMessageRuntime.AcceptRoster</c> picks the snapshot use with
+    /// <c>authority.Current == null ? firstUse : CurrentState</c> (LanConnectTailMessageRuntime.cs:1350-1354),
+    /// so the <c>Bootstrap</c> hint <c>RestoreStartRunResponse</c> passes at :1169 is ignored once the authority
+    /// holds a snapshot. <c>CurrentState</c> then demands the snapshot repeat the accepted revision byte for
+    /// byte (LanConnectRosterAuthorityState.cs:83-88) and throws at :86. Official joins never reach that branch
+    /// because they arrive on a fresh binding with an empty roster authority, but a kept-alive session still
+    /// holds the <c>StartRunLobbyPlayer</c> epoch from the room it left while the host publishes a
+    /// <c>LoadRunLobbyPlayer</c> epoch, and the length check fails before any field is compared
+    ///
+    /// Resetting only the client is deliberate: the host keeps publishing monotonically increasing revisions,
+    /// which is what an unpatched client expects, so a mixed room degrades to unpatched behaviour instead of
+    /// "Roster revision moved backwards" (LanConnectRosterAuthorityState.cs:77)
+    ///
+    /// Best effort throughout: a missing anchor or a throwing target logs one warning and returns <c>false</c>,
+    /// because both call sites sit inside a handshake that must not die for a diagnostic
+    /// </summary>
 internal static class TailRoster
 {
     private const string TailRuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectTailMessageRuntime";
     private const string RosterStateTypeName = "Sts2LanConnect.Scripts.LanConnectRosterAuthorityState";
 
-    /// <summary>Log prefix. The caller adds its own success line, so this tag only marks shared failures.</summary>
     private const string Tag = "tail-roster: ";
 
     private static readonly object Gate = new();
 
-    /// <summary>Resolved anchors. Written once, on the first successful resolution, then never re-resolved.</summary>
     private static Anchors? _anchors;
 
-    /// <summary>Last resolution failure, only so a repeated failure does not flood the log every handshake.</summary>
     private static string? _lastResolutionFailure;
 
     /// <summary>
-    /// Forgets the accepted roster epoch of <paramref name="service"/>'s Tail binding.
+    /// Forgets the accepted roster epoch of <paramref name="service"/>'s Tail binding
+    ///
+    /// <c>true</c> only when an epoch was really dropped, so a caller must not claim success on <c>false</c>.
+    /// <paramref name="when"/> names the call site and only reaches the log
     /// </summary>
-    /// <param name="service">The session that is about to re-handshake. Must be the live one.</param>
-    /// <param name="when">
-    /// Short clause naming the call site, e.g. <c>before the reload join request</c>. Only used in logs.
-    /// </param>
-    /// <returns>
-    /// <c>true</c> only when an accepted epoch was really dropped. <c>false</c> means "nothing was reset"
-    /// (no binding, no anchor, or a throwing target) and the caller must not claim success in its own log.
-    /// </returns>
     internal static bool Reset(INetGameService service, string when)
     {
         // "Never throws" is literal: even a caller bug must come back as false plus a warning, because both
@@ -121,9 +104,7 @@ internal static class TailRoster
     }
 
     /// <summary>
-    /// Resolves the reflection anchors once and caches them. A failed resolution is deliberately *not*
-    /// cached as a permanent verdict — the host assembly or the tail runtime could still be settling — but
-    /// the identical failure is logged only once so a retry on every handshake stays quiet.
+    /// A failed resolution is deliberately not cached as a permanent verdict, only its log line is deduplicated
     /// </summary>
     private static Anchors? Resolve()
     {
@@ -167,9 +148,9 @@ internal static class TailRoster
 
     /// <summary>
     /// Every anchor the reset needs, captured once. Each one is shape-checked, because a silently wrong
-    /// binding would be worse than a loud failure: the reset would "succeed" and change nothing.
+    /// binding would be worse than a loud failure: the reset would "succeed" and change nothing
     ///
-    /// Anchors (shipped 0.6.3 binary, <c>work/lobby/dec-official/Sts2LanConnect.Scripts/</c>):
+    /// Shipped 0.6.3 binary, <c>work/lobby/dec-official/Sts2LanConnect.Scripts/</c>:
     /// <list type="bullet">
     /// <item><c>LanConnectTailMessageRuntime.Shared</c> — LanConnectTailMessageRuntime.cs:459</item>
     /// <item><c>LanConnectTailMessageRuntime.GetMessageBus(INetGameService)</c> — :1670</item>
@@ -194,19 +175,14 @@ internal static class TailRoster
             RosterReset = rosterReset;
         }
 
-        /// <summary><c>LanConnectTailMessageRuntime.Shared</c>.</summary>
         internal PropertyInfo Shared { get; }
 
-        /// <summary><c>LanConnectTailMessageRuntime.GetMessageBus(INetGameService)</c>.</summary>
         internal MethodInfo GetMessageBus { get; }
 
-        /// <summary><c>LanConnectTailMessageRuntime._bindings</c> (bus to session binding).</summary>
         internal FieldInfo Bindings { get; }
 
-        /// <summary><c>Binding.RequireRoster()</c>.</summary>
         internal MethodInfo RequireRoster { get; }
 
-        /// <summary><c>LanConnectRosterAuthorityState.Reset()</c>.</summary>
         internal MethodInfo RosterReset { get; }
 
         internal static Anchors Capture()
@@ -242,7 +218,7 @@ internal static class TailRoster
             FieldInfo bindings = Reflect.RequireField(tailRuntime, "_bindings");
 
             // _bindings is Dictionary<NetMessageBus, Binding> and Binding is a nested private type, so the
-            // only stable way to reach it is through the field's own generic arguments.
+        // only stable way to reach it is through the field's own generic arguments.
             Type[] bindingArguments = bindings.FieldType.GetGenericArguments();
             if (bindingArguments.Length != 2 || bindingArguments[0] != typeof(NetMessageBus))
             {

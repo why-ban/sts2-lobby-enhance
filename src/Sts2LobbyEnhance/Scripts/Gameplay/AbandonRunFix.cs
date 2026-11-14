@@ -11,36 +11,25 @@ using MegaCrit.Sts2.Core.Saves;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Repair #6: LAN Connect's "back up and abandon the multiplayer save" flow.
-///
-/// The broken call is inside the async state machine
-/// <c>LanConnectMultiplayerSaveCompatibility.&lt;AbandonCurrentRunAsync&gt;d__14.MoveNext</c>:
-/// <c>SaveManager.Instance.UpdateProgressWithRunData(run, victory: false)</c> was compiled against a
-/// <c>void</c> return, and 0.113 changed it to <c>PostRunProgressUpdateResult</c>. The return type is part of the
-/// member reference signature, so the token no longer resolves — <c>Module.ResolveMember</c> throws
-/// <c>MissingMethodException</c>, which means the state machine cannot be JITted and Harmony cannot read (let alone
-/// patch) its body.
-///
-/// The seam is the async stub: <c>AbandonCurrentRunAsync</c> itself is plain IL with no removed members, so it can
-/// be patched. Returning <c>false</c> from a prefix keeps <c>AsyncTaskMethodBuilder.Start</c> from ever running, so
-/// the broken state machine is never compiled, and we hand back a faithful re-implementation of the same flow
-/// instead. Nothing is skipped: the confirmation dialog, the safe save read, the backup, the progress write, the run
-/// history entry, the daily score upload, the save deletion, the room-binding cleanup, the button refresh and both
-/// popups all still happen, in the same order, with the same failure branches — every helper is the host mod's own,
-/// reached by reflection, so the semantics stay the host mod's rather than being re-derived here.
-///
-/// The only functional difference is the new <c>PostRunProgressUpdateResult</c> return value: 0.6.3 had nothing to
-/// inspect, so the result is still discarded (the flow continues and deletes the save exactly as before), but a
-/// failed progress write is now logged instead of being invisible.
-///
-/// One diagnostic difference on top of that: when the save is simply gone (<c>no_multiplayer_run_save</c>, the state
-/// a successful abandon leaves behind) the refusal is still upstream's, but it is reported at <c>Warn</c> instead of
-/// <c>Error</c> — under this patch an <c>Error</c> claims the patch failed, which is not what happened.
-///
-/// Everything the flow touches is resolved up front by <see cref="Shape.TryCapture"/>; a missing anchor now means
-/// "this repair stays out and says why" instead of an exception that used to take every other repair with it.
-/// </summary>
+    /// <summary>
+    /// LAN Connect's "back up and abandon the multiplayer save" flow
+    ///
+    /// The broken call is inside the async state machine
+    /// <c>LanConnectMultiplayerSaveCompatibility.&lt;AbandonCurrentRunAsync&gt;d__14.MoveNext</c>:
+    /// <c>UpdateProgressWithRunData(run, victory: false)</c> was compiled against a <c>void</c> return and 0.113
+    /// changed it to <c>PostRunProgressUpdateResult</c>. The return type is part of the member reference signature,
+    /// so the token no longer resolves and the state machine cannot be JITted, which means Harmony cannot read its
+    /// body either
+    ///
+    /// The seam is the async stub: <c>AbandonCurrentRunAsync</c> is plain IL with no removed members, and returning
+    /// <c>false</c> from a prefix keeps <c>AsyncTaskMethodBuilder.Start</c> from ever running, so the broken state
+    /// machine is never compiled. <see cref="AbandonAsync"/> re-implements the same flow in the same order through
+    /// the host mod's own helpers, reached by reflection, so the semantics stay the host mod's
+    ///
+    /// The one behavioural difference is that a failed progress write is now logged instead of invisible. The
+    /// <c>no_multiplayer_run_save</c> refusal is upstream's but is reported at <c>Warn</c> instead of <c>Error</c>,
+    /// because under this patch an <c>Error</c> claims the patch failed
+    /// </summary>
 internal sealed class AbandonRunFix : ICompatFix
 {
     private const string SaveCompatibilityTypeName = "Sts2LanConnect.Scripts.LanConnectMultiplayerSaveCompatibility";
@@ -52,7 +41,6 @@ internal sealed class AbandonRunFix : ICompatFix
     private const string StubMethodName = "AbandonCurrentRunAsync";
     private const string SaveFileName = "current_run_mp.save";
 
-    // ---------------------------------------------------------------- game-side type names (string only)
     private const string GameAssemblyName = "sts2";
     private const string SaveManagerTypeName = "MegaCrit.Sts2.Core.Saves.SaveManager";
     private const string SubmenuTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.MainMenu.NMultiplayerSubmenu";
@@ -68,9 +56,9 @@ internal sealed class AbandonRunFix : ICompatFix
     private const string DateTimeOffsetTypeName = "System.DateTimeOffset";
 
     /// <summary>
-    /// <c>TryLoadSafeCurrentRun</c>'s reason for "there is no multiplayer save to load" — i.e.
-    /// <c>ReadSaveStatus.FileNotFound</c>, which is the state a *successful* abandon leaves behind
-    /// (<c>dec-official/LanConnectMultiplayerSaveRoomBinding.cs:34</c>; <c>ReadSaveStatus.cs:11-19</c>).
+    /// <c>TryLoadSafeCurrentRun</c>'s reason for "no multiplayer save to load", i.e. <c>ReadSaveStatus.FileNotFound</c>,
+    /// which is the state a <em>successful</em> abandon leaves behind
+    /// (<c>dec-official/LanConnectMultiplayerSaveRoomBinding.cs:34</c>; <c>ReadSaveStatus.cs:11-19</c>)
     /// </summary>
     private const string NoMultiplayerSaveReason = "no_multiplayer_run_save";
 
@@ -81,15 +69,11 @@ internal sealed class AbandonRunFix : ICompatFix
     public FixGroup Group => FixGroup.Gameplay;
 
     /// <summary>
-    /// Applicable when the host mod is present and every anchor the flow needs resolves — including the
-    /// one that actually decides this repair: <c>SaveManager.UpdateProgressWithRunData</c> returning
-    /// <em>exactly</em> <c>PostRunProgressUpdateResult</c>.
+    /// Applicable when every anchor the flow needs resolves, including the one that decides this repair:
+    /// <c>SaveManager.UpdateProgressWithRunData</c> returning <em>exactly</em> <c>PostRunProgressUpdateResult</c>
     ///
-    /// <see cref="CompatSnapshot.UpdateProgressGainedReturnValue"/> is deliberately not read here. It only
-    /// answers "returns something that is not void", which is also true for <c>ValueTask</c> or
-    /// <c>Task&lt;T&gt;</c>; patching on that answer installs a repair whose body then cannot assign the
-    /// result. The exact return type is the only correct prerequisite, and it is checked in
-    /// <see cref="Shape.TryCapture"/>.
+    /// <see cref="CompatSnapshot.UpdateProgressGainedReturnValue"/> is deliberately not read: it only answers
+    /// "returns something that is not void", which <c>ValueTask</c> and <c>Task&lt;T&gt;</c> also satisfy
     /// </summary>
     public bool Applies(in CompatSnapshot snapshot, out string reason)
     {
@@ -137,8 +121,8 @@ internal sealed class AbandonRunFix : ICompatFix
     }
 
     /// <summary>
-    /// Transliteration of 0.6.3's <c>AbandonCurrentRunAsync</c> body. Comments mark the source line each block
-    /// reproduces so a future reader can diff it against the upstream file without re-deriving the intent.
+    /// Transliteration of 0.6.3's <c>AbandonCurrentRunAsync</c> body. The source-line comments mark which upstream
+    /// block each piece reproduces, so a reader can diff it without re-deriving the intent
     /// </summary>
     private static async Task AbandonAsync(Shape shape, NMultiplayerSubmenu submenu)
     {
@@ -154,10 +138,9 @@ internal sealed class AbandonRunFix : ICompatFix
         {
             if (string.Equals(failureReason, NoMultiplayerSaveReason, StringComparison.Ordinal))
             {
-                // The benign case, and by far the common one: an earlier abandon in this same session already
-                // deleted current_run_mp.save, so there is simply nothing left to abandon (PC godot.log:994-996).
-                // Upstream logs this at Error level, but once this flow runs under [lobby-enhance] an ERROR reads as
-                // "the patch broke", which is exactly what it is not. Warn keeps it visible without that claim.
+    // The benign case and by far the common one: an earlier abandon in this session already deleted
+    // current_run_mp.save, so there is nothing left to abandon (PC godot.log:994-996). Upstream logs it at
+    // Error, which under [lobby-enhance] reads as "the patch broke", so it is reported at Warn
                 Entry.Warn(
                     "abandon-run: nothing to abandon — the multiplayer save was already deleted by an earlier " +
                     "abandon in this session (or never existed). The host mod refuses in this case too; that is " +
@@ -208,8 +191,7 @@ internal sealed class AbandonRunFix : ICompatFix
             PostRunProgressUpdateResult progress = SaveManager.Instance.UpdateProgressWithRunData(run, victory: false);
             if (!progress.success)
             {
-                // 0.6.3 could not observe this at all (the method returned void). The flow still continues, exactly
-                // as before; only the diagnosis is new.
+    // 0.6.3 could not observe this (the method returned void), so only the diagnosis is new
                 Entry.Warn(
                     "abandon-run: UpdateProgressWithRunData reported success=false; " +
                     "run history will still be written and the save will still be deleted.");
@@ -239,12 +221,11 @@ internal sealed class AbandonRunFix : ICompatFix
             return;
         }
 
-        // 0.6.3 source 342-347.
-        //
-        // Everything from here on runs AFTER the save was physically deleted, so none of it may be allowed to
-        // throw: an escaping exception would leave the player with a deleted save, a stale room binding, an
-        // un-refreshed menu and no message at all — "nothing happened", except it did. Each step degrades on its
-        // own and the final message always states where the backup is.
+    // 0.6.3 source 342-347.
+    //
+    // Everything from here on runs after the save was physically deleted, so none of it may throw: an escaping
+    // exception would leave a deleted save, a stale room binding, an un-refreshed menu and no message. Each step
+    // degrades on its own and the final message always states where the backup is
         string saveKey;
         try
         {
@@ -286,15 +267,13 @@ internal sealed class AbandonRunFix : ICompatFix
         SafeShowInfo(shape, "多人存档已放弃。删除前备份保存在：\n" + backupPath);
     }
 
-    /// <summary>Splits <see cref="TargetInvocationException"/> so the log names the real cause.</summary>
     private static string Describe(Exception exception) =>
         exception is TargetInvocationException { InnerException: { } inner }
             ? inner.GetType().Name + ": " + inner.Message
             : exception.GetType().Name + ": " + exception.Message;
 
     /// <summary>
-    /// Tells the player the outcome. Failing to display it must never take the flow down with it: by the time
-    /// this runs the save is already gone, so the message is the only thing left to get right.
+    /// By the time this runs the save is already gone, so the message is the only thing left to get right
     /// </summary>
     private static void SafeShowInfo(Shape shape, string message)
     {
@@ -310,11 +289,8 @@ internal sealed class AbandonRunFix : ICompatFix
 
     /// <summary>
     /// Every host-mod helper and game-side member the abandon flow touches, resolved once during
-    /// <see cref="Apply"/> and never again.
-    ///
-    /// <see cref="TryCapture"/> collects *all* the missing anchors instead of throwing on the first one, so a
-    /// host or game update produces one actionable log line rather than a stack trace — and, because a throw
-    /// here used to roll back every other repair, a missing anchor no longer disables the mod.
+    /// <see cref="Apply"/> and never again. <see cref="TryCapture"/> collects all the missing anchors instead of
+    /// throwing on the first one, so an update produces one actionable log line
     /// </summary>
     private sealed class Shape
     {
@@ -407,10 +383,10 @@ internal sealed class AbandonRunFix : ICompatFix
 
         internal void ShowInfo(string body) => ShowInfoMethod.Invoke(null, new object?[] { body });
 
-        /// <summary>
-        /// 0.6.3 called <c>submenu.Call(NMultiplayerSubmenu.MethodName.UpdateButtons)</c>. Going through the private
-        /// method directly reaches the same body without touching the generated <c>StringName</c> cache.
-        /// </summary>
+    /// <summary>
+    /// 0.6.3 called <c>submenu.Call(NMultiplayerSubmenu.MethodName.UpdateButtons)</c>; the private method reaches
+    /// the same body without touching the generated <c>StringName</c> cache
+    /// </summary>
         internal void RefreshButtons(NMultiplayerSubmenu submenu) =>
             UpdateButtonsMethod.Invoke(submenu, null);
 
@@ -441,7 +417,6 @@ internal sealed class AbandonRunFix : ICompatFix
             if (saveManager == null) missing.Add(SaveManagerTypeName);
             if (submenu == null) missing.Add(SubmenuTypeName);
 
-            // The stub: static, one NMultiplayerSubmenu parameter, returns Task.
             MethodInfo? stub = ReflectScope.Exact(
                 compatibility,
                 StubMethodName,

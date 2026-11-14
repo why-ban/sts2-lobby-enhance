@@ -156,18 +156,14 @@ Type? wirePatches = RequireType("Sts2LanConnect.Scripts.LanConnectCompatWirePatc
 RequireMethod(wirePatches, "GetLobbyListBitWidth", "host-wire");
 
 // ---------------------------------------------------------------- treasure-vote：已移除，刻意不留契约
-// treasure-vote 修复项已删除（2026-11-13 的「0.113 原生已支持跳过票」结论；那份一次性审计报告已不在
-// 仓库里，结论落在 docs/CHANGELOG.md 与 docs/README.md）。这里原本有 3 条契约
-// （TreasurePatches 类型、OnPickedPrefix 3 参、ResolveAllVotes），它们只是那次「给官方 prefix 装
-// 守卫」的反射锚点；补丁源码里已没有任何一处再引用 TreasurePatches，继续断言等于替上游内部成员
-// 背书 —— 上游一改名就红，而我们根本不用它。
+// treasure-vote 修复项已删除（0.113 原生已支持跳过票），原本的 3 条契约（TreasurePatches 类型、
+// OnPickedPrefix 3 参、ResolveAllVotes）只是「给官方 prefix 装守卫」的反射锚点；补丁源码里已没有
+// 任何一处引用 TreasurePatches，继续断言等于替上游内部成员背书 —— 上游一改名就红，而我们根本不用它。
 //
-// 不改成「断言 TreasurePatches 不存在」：该类型在官方 0.6.3 里真实存在，只是它在 0.113 上自己跳过
-// 了 OnPicked 补丁（dec-official/TreasurePatches.cs:122-127、137-140、163-167），断言它不存在是假契约。
-// 也不改成「断言我们自己的 fix 列表里没有 treasure-vote」：本工具只加载官方 DLL，看不到补丁程序集；
-// 为它去 LoadFrom 构建产物的话，产物没构建时只能 SKIP，于是打印的契约总数会随构建状态变化 ——
-// 那正是「说检查了其实没检查」。这条回归防线放在能无条件断言的地方：Entry.cs 的 fix 列表已无该行，
-// tools/smoke-test 打印的 applied 列表也直接可见（验收清单按 9 项逐条核对）。
+// 也不要改成「断言 TreasurePatches 不存在」：该类型在官方 0.6.3 里真实存在
+//（dec-official/TreasurePatches.cs:122-127、137-140、163-167），断言它不存在是假契约。更不要断言
+// 「我们的 fix 列表里没有 treasure-vote」：本工具只加载官方 DLL，看不到补丁程序集，为它去 LoadFrom
+// 构建产物在未构建时只能 SKIP，打印的契约总数就会随构建状态变化 —— 那正是「说检查了其实没检查」。
 
 // ---------------------------------------------------------------- TailErrorPathFix
 Console.WriteLine("[tail-error-paths]");
@@ -263,7 +259,6 @@ if (failures.Count == 0)
 }
 
 return 2;
-
 
 
 

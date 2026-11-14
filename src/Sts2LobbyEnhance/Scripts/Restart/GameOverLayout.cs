@@ -1,15 +1,12 @@
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// A rectangle in the coordinate space of the game-over screen, expressed with plain floats.
-///
-/// This type exists so the layout below can be verified without a running game. The regression suite
-/// (<c>tests/Sts2LobbyEnhance.Tests</c>) compiles this file directly instead of referencing the mod
-/// assembly, which needs Godot and the game DLLs to build — so nothing in this file may touch a Godot type.
-/// </summary>
+    /// <summary>
+    /// A rectangle in the coordinate space of the game-over screen, in plain floats so the layout can be tested
+    /// without a running game. The regression suite compiles this file directly, so nothing here may touch a
+    /// Godot type
+    /// </summary>
 internal readonly record struct LayoutRect(float X, float Y, float Width, float Height)
 {
-    /// <summary>Marker for "this node is not part of this layout". Never intersects anything.</summary>
     internal static LayoutRect Empty { get; } = new(0f, 0f, 0f, 0f);
 
     internal float Right => X + Width;
@@ -19,8 +16,7 @@ internal readonly record struct LayoutRect(float X, float Y, float Width, float 
     internal bool IsEmpty => Width <= 0f || Height <= 0f;
 
     /// <summary>
-    /// Strict overlap test: two rectangles that merely touch (or are separated by a gap) do not intersect,
-    /// and an empty rectangle never intersects anything.
+    /// Strict overlap test: rectangles that merely touch do not intersect, and an empty one never does
     /// </summary>
     internal bool Intersects(in LayoutRect other) =>
         !IsEmpty
@@ -31,8 +27,7 @@ internal readonly record struct LayoutRect(float X, float Y, float Width, float 
         && other.Y < Bottom;
 
     /// <summary>
-    /// True when this rectangle lies completely inside <paramref name="bounds"/>. An empty rectangle is
-    /// vacuously inside, which keeps "nothing is off screen" a single unconditional assertion.
+    /// An empty rectangle is vacuously inside, which keeps "nothing is off screen" one unconditional assertion
     /// </summary>
     internal bool IsInside(in LayoutRect bounds) =>
         IsEmpty
@@ -42,24 +37,15 @@ internal readonly record struct LayoutRect(float X, float Y, float Width, float 
             && Bottom <= bounds.Bottom);
 }
 
-/// <summary>
-/// The rectangles the game-over injection needs, in the anchor's coordinate space.
-///
-/// <see cref="Menu"/> is the main-menu button after normalisation (clamped into the viewport). It is returned
-/// so the runtime can log the exact numbers it laid out against and so the tests can assert against the rect
-/// that was actually used instead of the raw input.
-///
-/// Only one of the two "shapes" is ever populated, because the host and the client screen are mutually
-/// exclusive:
-/// <list type="bullet">
-/// <item><c>withRestartButton: true</c> (host) — <see cref="Button"/> and <see cref="Caption"/> are set,
-/// <see cref="Hint"/> is <see cref="LayoutRect.Empty"/>;</item>
-/// <item><c>withRestartButton: false</c> (client, and the host screen when the button is not offered) —
-/// <see cref="Hint"/> is set, <see cref="Button"/> and <see cref="Caption"/> are empty.</item>
-/// </list>
-/// The empty rectangles are what makes the "nothing overlaps anything" assertions total: they hold for both
-/// shapes without the tests having to special-case which one is in play.
-/// </summary>
+    /// <summary>
+    /// The rectangles the game-over injection needs, in the anchor's coordinate space
+    ///
+    /// Only one shape is ever populated, because the host and client screens are mutually exclusive: with the
+    /// restart button offered, <see cref="Button"/> and <see cref="Caption"/> are set and <see cref="Hint"/> is
+    /// <see cref="LayoutRect.Empty"/>; otherwise <see cref="Hint"/> is set and both are empty. The empty
+    /// rectangles keep the "nothing overlaps anything" assertions total for both shapes. <see cref="Menu"/> is
+    /// the main-menu rect after clamping, returned so callers log and assert the rect actually used
+    /// </summary>
 internal readonly record struct GameOverSlots(
     LayoutRect Menu,
     LayoutRect Button,
@@ -72,66 +58,34 @@ internal readonly record struct GameOverSlots(
     internal bool HasButton => !Button.IsEmpty;
 }
 
-/// <summary>
-/// Pure geometry for the nodes this fix injects into <c>NGameOverScreen</c>.
-///
-/// Why this is a separate, dependency-free function (2026-11-13, second attempt):
-/// the first implementation placed the duplicated button at <c>mainMenu.Position + (0, step)</c> *before*
-/// adding it to the tree, and logged "injected". The button really was injected — and it was invisible,
-/// because <c>Node.Duplicate()</c> keeps the source node's position, so the copy sat exactly on top of
-/// "主菜单" and was covered by it. "Injected successfully" is not the same thing as "the player can see it",
-/// so the geometry is now something a test can assert on instead of something a log line claims.
-///
-/// The rules the function guarantees, for every input:
-/// <list type="bullet">
-/// <item>the new button never overlaps the main-menu button, and the visual gap is at least
-/// <see cref="MinGap"/> (16px, which also makes the centre-to-centre step larger than the button height);</item>
-/// <item>the caption never overlaps either button, and the hint never overlaps anything;</item>
-/// <item>every non-empty rectangle lies completely inside the viewport (no negative coordinates, no
-/// off-screen edges);</item>
-/// <item>the stack goes below the main-menu button when it fits and above it when it does not, so a
-/// bottom-anchored button on a phone still gets a visible neighbour;</item>
-/// <item>the font size follows the viewport height (<c>height / 45</c>, clamped to 24..30), so the text is
-/// readable at 1920x1080 and does not become a wall of glyphs at 1080x2340.</item>
-/// </list>
-/// </summary>
+    /// <summary>
+    /// Pure geometry for the nodes this fix injects into <c>NGameOverScreen</c>, as a dependency-free function a
+    /// test can assert on instead of a log line that claims success
+    ///
+    /// <c>Node.Duplicate()</c> keeps the source node's position, so a copy placed at
+    /// <c>mainMenu.Position + (0, step)</c> before being added to the tree sits exactly on top of "主菜单" and
+    /// is invisible while the log still says "injected"
+    /// </summary>
 internal static class GameOverLayout
 {
-    /// <summary>Smallest font the info text may use. 15 (the old value) was unreadable at 1920x1080.</summary>
+    /// <summary>Below this the info text is unreadable at 1920x1080</summary>
     internal const int MinFontSize = 24;
 
-    /// <summary>Largest font the info text may use, so a tall phone viewport cannot produce giant text.</summary>
     internal const int MaxFontSize = 30;
 
-    /// <summary>
-    /// Smallest visual gap between the main-menu button and the injected button. The task asked for
-    /// "button height + 16px"; that is the centre-to-centre step, which this gap guarantees because the step
-    /// is <c>height + Gap</c>. The regression suite asserts the stricter 16px, not the looser 8px floor.
-    /// </summary>
+    /// <summary>Visual gap; the centre-to-centre step is height + Gap, and the suite asserts the 16px gap</summary>
     internal const float MinGap = 16f;
 
     /// <summary>Line height as a multiple of the font size. Matches Godot's default label metrics closely.</summary>
     internal const float LineHeightFactor = 1.45f;
 
-    /// <summary>
-    /// How many wrapped lines the info box reserves. Two is enough for the longest caption
-    /// ("N 名队友将一起返回准备页，M 人未安装补丁需手动重连") and for the longest client hint.
-    /// </summary>
+    /// <summary>Two lines cover the longest caption and the longest client hint</summary>
     internal const int InfoLineCount = 2;
 
     /// <summary>
-    /// Computes the layout for the injected nodes.
+    /// <paramref name="mainMenuRect"/> is measured at runtime, never hard-coded, because its size and position
+    /// differ per aspect ratio
     /// </summary>
-    /// <param name="mainMenuRect">
-    /// The screen's own "主菜单" button, in the same coordinate space as the viewport. Measured at runtime —
-    /// never hard-coded, because its size and position differ per aspect ratio.
-    /// </param>
-    /// <param name="viewportWidth">Width of the coordinate space the rect lives in.</param>
-    /// <param name="viewportHeight">Height of the coordinate space the rect lives in.</param>
-    /// <param name="withRestartButton">
-    /// <c>true</c> when the "新开一局" button is offered (host with at least one patched peer), <c>false</c>
-    /// when only the info line is shown.
-    /// </param>
     internal static GameOverSlots ComputeLayout(
         LayoutRect mainMenuRect,
         float viewportWidth,
@@ -162,7 +116,6 @@ internal static class GameOverLayout
         float gap = MathF.Max(MinGap, MathF.Round(menuH * 0.25f));
         float labelGap = MathF.Max(8f, MathF.Round(fontSize * 0.5f));
 
-        // Wide enough for the longest caption on one line, but never wider than the viewport allows.
         float infoWidth = MathF.Min(maxMenuW, MathF.Max(menuW * 2f, 420f));
         float infoX = Math.Clamp(
             menuX + menuW * 0.5f - infoWidth * 0.5f,
@@ -171,7 +124,6 @@ internal static class GameOverLayout
 
         float buttonX = Math.Clamp(menuX, margin, MathF.Max(margin, viewportW - margin - menuW));
 
-        // How much room the whole stack needs on one side of the main-menu button.
         float stack = withRestartButton
             ? gap + menuH + labelGap + infoHeight
             : gap + infoHeight;
@@ -179,8 +131,7 @@ internal static class GameOverLayout
         bool fitsBelow = menuY + menuH + stack <= viewportH - margin;
         bool fitsAbove = menuY - stack >= margin;
 
-        // Below is the natural reading order (the new action sits under the existing one). It is only
-        // abandoned when it does not fit *and* there is room above.
+    // Below is the natural reading order, abandoned only when it does not fit and there is room above
         bool placedBelow = fitsBelow || !fitsAbove;
 
         LayoutRect button = LayoutRect.Empty;
@@ -211,14 +162,12 @@ internal static class GameOverLayout
             placedBelow);
     }
 
-    /// <summary>Width of the viewport as a rectangle, for callers that want the bounds object.</summary>
     internal static LayoutRect Viewport(float width, float height) => new(0f, 0f, width, height);
 
     private static bool IsUsable(float value) => float.IsFinite(value) && value >= 1f;
 
     private static float Safe(float value) => float.IsFinite(value) ? value : 0f;
 
-    /// <summary>Clamps a start coordinate so that a <paramref name="length"/>-long span stays inside the viewport.</summary>
     private static float ClampAxis(float start, float length, float viewportLength, float margin) =>
         Math.Clamp(start, margin, MathF.Max(margin, viewportLength - margin - length));
 }

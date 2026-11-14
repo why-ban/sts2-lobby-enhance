@@ -13,52 +13,41 @@ using MegaCrit.Sts2.Core.Saves;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Repairs #1 and #2: LAN Connect's managed join flow.
-///
-/// The broken code lives in the async state machine
-/// <c>LanConnectLobbyManagedJoinFlow.&lt;BeginAsync&gt;d__23.MoveNext</c>, which reads the removed field
-/// <c>InitialGameInfoMessage.gameMode</c> and, one step later, writes the removed field
-/// <c>ClientLobbyJoinRequestMessage.maxAscensionUnlocked</c>.
-///
-/// A method that references a member which no longer exists cannot be JITted, and Harmony cannot patch
-/// it either: building a patch requires reading the IL, and resolving the metadata token throws before
-/// any prefix, postfix or transpiler exists. So we do not touch the body.
-///
-/// Instead we patch the *async stub* — ordinary IL with no removed members — and return false, which
-/// stops <c>AsyncTaskMethodBuilder.Start</c> from ever running, so the state machine is never compiled.
-/// In its place we run the game's own <see cref="JoinFlow"/>, which already speaks the 0.113 handshake
-/// and builds <c>JoinResult</c> from the response messages. That is precisely what the upstream port
-/// does, minus the field that no longer exists.
-///
-/// What we deliberately keep from the host mod, because the rest of LAN Connect depends on it:
-/// <list type="bullet">
-/// <item>the net service comes from <c>LanConnectNetGameServiceFactory</c>, so the same constructor
-/// strategy (versioned or parameterless) is used as everywhere else in the mod;</item>
-/// <item>tail_v1 sessions get the extension frame bound, otherwise a tail_v1 host stalls waiting for it;</item>
-/// <item>the mod's <c>CancelToken</c> still aborts the join.</item>
-/// </list>
-///
-/// Everything after <c>BeginAsync</c> returns — attaching the joined client to the runtime, pushing the
-/// follow-up screen, reporting connection events — stays in the original caller and is untouched.
-///
-/// Three upstream behaviours that the first version of this takeover dropped, restored here:
-/// <list type="bullet">
-/// <item><b>Cancel-aware disconnect reason.</b> Upstream disconnects a failed join with
-/// <c>CancelledJoin</c> when its own cancel gesture fired and <c>InternalError</c> otherwise
-/// (source <c>LanConnectLobbyManagedJoinFlow.cs:174</c>, shipped DLL
-/// <c>dec-official/LanConnectLobbyManagedJoinFlow.cs:148</c>:
-/// <c>NetError reason = (NetError)(CancelToken.IsCancellationRequested ? 6 : 202);</c>).</item>
-/// <item><b>tail_v1 rejection reporting.</b> A tail_v1 host can reject a frame and disconnect with a
-/// generic <c>ModMismatch</c>; the real code (<c>lan_extension_missing</c>, …) is parked on the tail
-/// runtime and has to be taken off the disconnect event (source <c>:568-641</c>, shipped DLL
-/// <c>:524-604</c>). Without this the user only ever sees "Unexpectedly disconnected from host while
-/// joining. Reason: ModMismatch".</item>
-/// <item><b>Log levels.</b> Upstream raises Network/Actions/GameSync for the duration of a join and
-/// restores them in its own <c>finally</c> (source <c>:67-69</c>/<c>:187-189</c>, shipped DLL
-/// <c>:74-76</c>/<c>:159-161</c>).</item>
-/// </list>
-/// </summary>
+    /// <summary>
+    /// LAN Connect's managed join flow
+    ///
+    /// The broken code lives in the async state machine
+    /// <c>LanConnectLobbyManagedJoinFlow.&lt;BeginAsync&gt;d__23.MoveNext</c>, which reads the removed field
+    /// <c>InitialGameInfoMessage.gameMode</c> and, one step later, writes the removed
+    /// <c>ClientLobbyJoinRequestMessage.maxAscensionUnlocked</c>
+    ///
+    /// A method that references a member which no longer exists cannot be JITted, and Harmony cannot patch it either:
+    /// building a patch requires reading the IL, and resolving the metadata token throws before any prefix, postfix or
+    /// transpiler exists. So the body is not touched. Instead the *async stub* is patched, ordinary IL with no removed
+    /// members, and returning false stops <c>AsyncTaskMethodBuilder.Start</c> from running, so the state machine is
+    /// never compiled. In its place the game's own <see cref="JoinFlow"/> runs, which already speaks the 0.113
+    /// handshake and builds <c>JoinResult</c> from the response messages
+    ///
+    /// Kept from the host mod, because the rest of LAN Connect depends on it: the net service comes from
+    /// <c>LanConnectNetGameServiceFactory</c> so the same constructor strategy is used, tail_v1 sessions get the
+    /// extension frame bound or a tail_v1 host stalls waiting for it, and the mod's <c>CancelToken</c> still aborts the
+    /// join. Everything after <c>BeginAsync</c> returns, attaching the joined client to the runtime, pushing the
+    /// follow-up screen and reporting connection events, stays in the original caller and is untouched
+    ///
+    /// Three upstream behaviours restored here after an earlier takeover dropped them:
+    /// <list type="bullet">
+    /// <item><b>Cancel-aware disconnect reason.</b> Upstream uses <c>CancelledJoin</c> when its own cancel gesture
+    /// fired and <c>InternalError</c> otherwise (source <c>LanConnectLobbyManagedJoinFlow.cs:174</c>, shipped DLL
+    /// <c>dec-official/LanConnectLobbyManagedJoinFlow.cs:148</c>:
+    /// <c>NetError reason = (NetError)(CancelToken.IsCancellationRequested ? 6 : 202);</c>).</item>
+    /// <item><b>tail_v1 rejection reporting.</b> A tail_v1 host can reject a frame and disconnect with a generic
+    /// <c>ModMismatch</c>; the real code (<c>lan_extension_missing</c>, …) is parked on the tail runtime and has to be
+    /// taken off the disconnect event (source <c>:568-641</c>, shipped DLL <c>:524-604</c>), otherwise the user only
+    /// ever sees "Unexpectedly disconnected from host while joining. Reason: ModMismatch".</item>
+    /// <item><b>Log levels.</b> Upstream raises Network/Actions/GameSync for the join and restores them in its own
+    /// <c>finally</c> (source <c>:67-69</c>/<c>:187-189</c>, shipped DLL <c>:74-76</c>/<c>:159-161</c>).</item>
+    /// </list>
+    /// </summary>
 internal sealed class JoinTakeoverFix : ICompatFix
 {
     private const string FlowTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyManagedJoinFlow";
@@ -76,20 +65,16 @@ internal sealed class JoinTakeoverFix : ICompatFix
     private const string CancelTokenTypeName = "System.Threading.CancellationTokenSource";
     private const string NetClientServiceTypeName = "MegaCrit.Sts2.Core.Multiplayer.NetClientGameService";
 
-    /// <summary>Same member filter the rest of the file uses for reflective lookups.</summary>
     private const BindingFlags AnyMember =
         BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
     /// <summary>
-    /// Every anchor this repair needs, resolved once in <see cref="Apply"/> before anything is patched.
+    /// Every anchor this repair needs, resolved once in <see cref="Apply"/> before anything is patched: nothing here
+    /// is resolved after <see cref="Apply"/> returns. Resolving lazily inside the join is what once surfaced a rename
+    /// as an exception mid-join while the log already said "applied: join-flow"
     ///
-    /// The first version of this fix resolved fifteen of these lazily *inside* the join, so a renamed member
-    /// surfaced as an exception in the middle of a join while the log already said "applied: join-flow". Nothing
-    /// in here is resolved after <see cref="Apply"/> returns (2026-11-14 gating audit, A1/A2).
-    ///
-    /// <see cref="TakeValidatedRejection"/> and <see cref="ProtocolExceptionCtor"/> stay optional on purpose: they
-    /// only make a tail_v1 disconnect report its real rejection code instead of a generic ModMismatch, so their
-    /// absence is a warning, not a reason to skip. Everything else is required — without it the handshake breaks.
+    /// <see cref="TakeValidatedRejection"/> and <see cref="ProtocolExceptionCtor"/> are optional on purpose: they only
+    /// improve a tail_v1 disconnect message, so their absence is a warning rather than a skip
     /// </summary>
     internal sealed class Shape
     {
@@ -201,13 +186,9 @@ internal sealed class JoinTakeoverFix : ICompatFix
     }
 
     /// <summary>
-    /// Resolves every anchor before a single patch is installed. Never throws, never invokes anything, never
-    /// touches Godot: pure metadata over the already-loaded host assembly. All misses are collected, so one log
-    /// line lists everything that has to be fixed instead of the first thing that blew up.
-    ///
-    /// The game-side types (<c>Godot.SceneTree</c>, <c>CancellationTokenSource</c>, <c>NetClientGameService</c>)
-    /// are compared by name on purpose: a probe that names them with typeof() cannot be JITted once they are
-    /// renamed, which is the exact scenario this probe exists to survive (2026-11-14 gating audit, A1).
+    /// Resolves every anchor before a single patch is installed. Never throws, never invokes, never touches Godot: pure
+    /// metadata over the loaded host assembly, with all misses collected so one log line lists everything to fix. The
+    /// game-side types are compared by name because a probe that named them with typeof() cannot be JITted once renamed
     /// </summary>
     private static bool TryCapture(Assembly host, out Shape shape, out string reason)
     {
@@ -260,7 +241,6 @@ internal sealed class JoinTakeoverFix : ICompatFix
             }
         }
 
-        // ---- the frozen selection's profile: the enum member TailV1 and the Profile property on the selection
         Type? profileType = TypeOf(host, ProfileTypeName, missing);
         if (profileType != null)
         {
@@ -301,7 +281,6 @@ internal sealed class JoinTakeoverFix : ICompatFix
             }
         }
 
-        // ---- net client factory: shape only, never called from here
         Type? factory = TypeOf(host, FactoryTypeName, missing);
         if (factory != null)
         {
@@ -328,7 +307,6 @@ internal sealed class JoinTakeoverFix : ICompatFix
             }
         }
 
-        // ---- nonce length constant
         Type? codec = TypeOf(host, CodecTypeName, missing);
         if (codec != null)
         {
@@ -343,7 +321,6 @@ internal sealed class JoinTakeoverFix : ICompatFix
             }
         }
 
-        // ---- tail runtime
         Type? runtimeType = TypeOf(host, TailRuntimeTypeName, missing);
         if (runtimeType != null)
         {
@@ -456,19 +433,13 @@ internal sealed class JoinTakeoverFix : ICompatFix
         IClientConnectionInitializer initializer,
         SceneTree sceneTree)
     {
-        // Upstream raises the network/action/gamesync log levels for the duration of a join and restores them
-        // in its own finally (source LanConnectLobbyManagedJoinFlow.cs:67-69 and :187-189; the shipped DLL does
-        // the same with raw enum values, dec-official:74-76 and :159-161).
-        //
-        // What this actually adds: the game's own JoinFlow.Begin already raises the same three levels
-        // (JoinFlow.cs:54-59), but it only restores them on the *failure* path (JoinFlow.cs:151-153 inside the
-        // catch) and leaves them raised when the join succeeds. Upstream restores them either way, so a
-        // successful join on an unpatched LAN Connect ends with Network/Actions/GameSync back at Info and ours
-        // did not. The restore below is the part that was missing.
-        //
-        // Fully qualified on purpose: this file also imports Godot (for SceneTree), and Godot.Logger would make
-        // the bare name ambiguous (CS0104). Upstream writes it the same way for the same reason —
-        // source LanConnectLobbyManagedJoinFlow.cs:67-69 spells out MegaCrit.Sts2.Core.Logging.Logger.
+    // Upstream raises the network/action/gamesync log levels for the join and restores them in its own finally
+    // (source LanConnectLobbyManagedJoinFlow.cs:67-69 and :187-189; shipped DLL dec-official:74-76 and :159-161).
+    // JoinFlow.Begin raises the same three (JoinFlow.cs:54-59) but restores them only on the failure path
+    // (JoinFlow.cs:151-153), leaving them raised on success, so the restore below is the missing half.
+    //
+    // Fully qualified on purpose: this file also imports Godot, so Godot.Logger would make the bare name ambiguous
+    // (CS0104). Upstream spells it out for the same reason
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.Network] = LogLevel.Debug;
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.Actions] = LogLevel.VeryDebug;
         MegaCrit.Sts2.Core.Logging.Logger.logLevelTypeMap[LogType.GameSync] = LogLevel.VeryDebug;
@@ -535,13 +506,11 @@ internal sealed class JoinTakeoverFix : ICompatFix
             JoinFlow joinFlow = new(service, initializer);
             LinkCancellation(flow, joinFlow);
 
-            // tail_v1 only: a rejection code travels on the disconnect event, not on the message stream
-            // (upstream source :629-641 / shipped DLL :595-604). Take it here, while the tail binding still
-            // exists — JoinFlow's own handler will turn the same disconnect into a generic
-            // ClientConnectionFailedException, and the take is destructive.
-            // Typed as Exception on purpose: LanConnectProtocolException lives in the host mod assembly, which
-            // this project deliberately does not reference (see Core/Reflect.cs). The runtime type is what the
-            // caller's `catch (LanConnectProtocolException)` branch matches, and `throw` preserves it.
+    // tail_v1 only: a rejection code travels on the disconnect event, not on the message stream (upstream source
+    // :629-641 / shipped DLL :595-604). Taken here while the tail binding still exists, because JoinFlow's own
+    // handler turns the same disconnect into a generic ClientConnectionFailedException and the take is destructive.
+    // Typed as Exception on purpose: LanConnectProtocolException lives in the host assembly, which this project
+    // deliberately does not reference, and `throw` preserves the runtime type the caller's catch branch matches
             Exception? rejection = null;
             void OnDisconnected(NetErrorInfo info) => rejection ??= TryTakeTailRejection(service, tailBound, info);
 
@@ -590,7 +559,6 @@ internal sealed class JoinTakeoverFix : ICompatFix
         }
     }
 
-    /// <summary>The successful half of the takeover, split out so the tail-rejection plumbing stays readable.</summary>
     private static async Task<JoinResult> AwaitJoinAsync(JoinFlow joinFlow, SceneTree sceneTree, bool tailBound)
     {
         JoinResult result = await joinFlow.Begin(sceneTree);
@@ -599,20 +567,17 @@ internal sealed class JoinTakeoverFix : ICompatFix
             $"isCustom={result.isCustom}");
         if (tailBound)
         {
-            // The binding is per-session, not per-handshake: it has to survive the join. The mid-run restart
-            // later reuses this very session and needs the extension frame in both directions (the host holds
-            // its LoadJoinRequest until our frame arrives, and we hold its LoadJoinResponse until its frame
-            // arrives). Releasing it here leaves the session unable to speak tail at all — which is exactly
-            // what the 2026-11-13 field report showed (`prepare skipped ... writerBindings=0` plus an inbound
-            // LanConnectNativeBusMessage with no handler). It is released by the mod's own session Dispose,
-            // i.e. when the room session really ends, which is also what the upstream flow does.
+    // The binding is per-session, not per-handshake: it has to survive the join. The mid-run restart reuses this very
+    // session and needs the extension frame in both directions, the host holds its LoadJoinRequest until our frame
+    // arrives and we hold its LoadJoinResponse until its frame arrives. Releasing it here leaves the session unable to
+    // speak tail at all, which the 2026-11-13 field report showed (`prepare skipped ... writerBindings=0` plus an
+    // inbound LanConnectNativeBusMessage with no handler). The mod's own session Dispose releases it
             Entry.Info("join-flow: tail_v1 extension frame stays bound for the rest of the session.");
         }
 
         return result;
     }
 
-    /// <summary>Uses the host mod's own factory so the same constructor strategy is kept.</summary>
     private static NetClientGameService CreateClientService()
     {
         Shape shape = _shape
@@ -626,10 +591,8 @@ internal sealed class JoinTakeoverFix : ICompatFix
     }
 
     /// <summary>
-    /// tail_v1 carries an extra extension frame. A tail_v1 host holds the lobby-join request until it
-    /// arrives, so a client that skips this binding would stall until the handshake times out. Binding
-    /// is therefore mandatory whenever the frozen selection says tail_v1 — a failure here is fatal, not
-    /// something to log and continue past.
+    /// A tail_v1 host holds the lobby-join request until the extra extension frame arrives, so a client that skips this
+    /// binding stalls until the handshake times out. A failure here is fatal when the frozen selection says tail_v1
     /// </summary>
     private static bool BindTailIfRequired(object flow, NetClientGameService netService)
     {
@@ -691,14 +654,11 @@ internal sealed class JoinTakeoverFix : ICompatFix
         return true;
     }
 
-
     /// <summary>
-    /// The reason upstream disconnects with when a join fails: <c>CancelledJoin</c> (6) when the host mod's own
-    /// cancel gesture fired, <c>InternalError</c> (202) otherwise. Source
-    /// <c>LanConnectLobbyManagedJoinFlow.cs:174</c>, shipped DLL
-    /// <c>dec-official/LanConnectLobbyManagedJoinFlow.cs:148</c>:
-    /// <c>NetError reason = (NetError)(CancelToken.IsCancellationRequested ? 6 : 202);</c>
-    /// (<c>NetError.cs:39</c> and <c>:99</c>).
+    /// The reason upstream disconnects with when a join fails: <c>CancelledJoin</c> (6) when the host mod's cancel
+    /// gesture fired, <c>InternalError</c> (202) otherwise. Source <c>LanConnectLobbyManagedJoinFlow.cs:174</c>, shipped
+    /// DLL <c>dec-official/LanConnectLobbyManagedJoinFlow.cs:148</c>:
+    /// <c>NetError reason = (NetError)(CancelToken.IsCancellationRequested ? 6 : 202);</c> (<c>NetError.cs:39</c>, :99)
     /// </summary>
     private static NetError ModDisconnectReason(object flow)
     {
@@ -720,8 +680,7 @@ internal sealed class JoinTakeoverFix : ICompatFix
 
     /// <summary>
     /// Reads and *removes* the protocol failure the tail runtime parked for this peer, mirroring upstream's
-    /// <c>TryTakeTailRejection</c> (source :629-641, shipped DLL :595-604): tail_v1 only, live net service
-    /// only, and the take is destructive — a second call returns false.
+    /// <c>TryTakeTailRejection</c> (source :629-641, shipped DLL :595-604): the take is destructive
     /// </summary>
     private static Exception? TryTakeTailRejection(
         NetClientGameService netService,

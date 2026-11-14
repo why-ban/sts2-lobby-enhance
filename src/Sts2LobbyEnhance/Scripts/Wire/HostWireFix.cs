@@ -9,49 +9,37 @@ using MegaCrit.Sts2.Core.Saves.Runs;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Repair for the desktop-host join response body.
-///
-/// LAN Connect ships two different serialisation paths for <see cref="ClientLobbyJoinResponseMessage"/>:
-///
-/// <list type="bullet">
-/// <item>the per-message <c>T.Serialize</c> transpiler, which only rewrites the list bit width and is
-/// therefore layout-agnostic — it survives the 0.113 field additions untouched;</item>
-/// <item>a hand-written body (<c>LanConnectSerializationPatches.SerializeJoinResponseBody</c>) that the
-/// message-bus boundary prefix calls on desktop so the host mod owns the entire serialized frame for
-/// this one message (the generic <c>NetMessageBus.SerializeMessage&lt;T&gt;</c> cannot be transpiled on
-/// every runtime — Android's gshared closed-generic wrappers defeat Harmony). That body spells the field
-/// order out by hand and was written against 0.111, so it omits the two fields 0.113 added to this
-/// message: <c>gameMode</c> (3 bits) and <c>isCustom</c> (1 bit).</item>
-/// </list>
-///
-/// Four missing bits shift everything from <c>gameMode</c> onwards: the receiver reads the low four bits
-/// of <c>ascension</c> as <c>gameMode</c> + <c>isCustom</c>, then reads <c>ascension</c> out of the low
-/// four bits of the <c>modifiers</c> list header, then reads the <c>modifiers</c> count four bits past the
-/// end of the body. Whether that ends in <c>IndexOutOfRangeException</c> or in a silently corrupted lobby
-/// depends on the count that comes out of those bits; both were observed.
-///
-/// The hand-written body is plain IL with no references to removed members, so unlike the join flow it
-/// can be patched normally. We skip the original and emit the 0.113 layout ourselves. The list bit width
-/// is still taken from the host mod's own profile logic so compat_4_5_v1 and tail_v1 keep behaving
-/// differently exactly as before.
-/// </summary>
+    /// <summary>
+    /// Repair for the desktop-host join response body
+    ///
+    /// LAN Connect ships two serialisation paths for <see cref="ClientLobbyJoinResponseMessage"/>: the
+    /// per-message <c>T.Serialize</c> transpiler, which only rewrites the list bit width and so survives the
+    /// 0.113 field additions, and a hand-written body
+    /// (<c>LanConnectSerializationPatches.SerializeJoinResponseBody</c>) the message-bus boundary prefix calls on
+    /// desktop so the host mod owns the whole frame. That body spells the field order out by hand, was written
+    /// against 0.111, and omits the two fields 0.113 added: <c>gameMode</c> (3 bits) and <c>isCustom</c> (1 bit).
+    /// Four missing bits shift everything from <c>gameMode</c> onwards, so the receiver reads <c>ascension</c> out
+    /// of the <c>modifiers</c> list header and the count four bits past the end of the body, which ends either in
+    /// <c>IndexOutOfRangeException</c> or in a silently corrupted lobby
+    ///
+    /// The hand-written body is plain IL with no references to removed members, so it can be patched normally:
+    /// the prefix skips the original and emits the 0.113 layout, taking the list bit width from the host mod's
+    /// own profile logic so compat_4_5_v1 and tail_v1 keep behaving differently
+    /// </summary>
 internal sealed class HostWireFix : ICompatFix
 {
     private const string SerializationPatchesTypeName = "Sts2LanConnect.Scripts.LanConnectSerializationPatches";
     private const string BodyMethodName = "SerializeJoinResponseBody";
     private const int AscensionBits = 5;
 
-    // Probe targets. Every one of these is a *string* on purpose: a probe method that contains
-    // typeof(<game type>) cannot be JITted once that type is gone, which is exactly the failure the probe
-    // exists to survive (see Core/Reflect.cs and the 2026-11-14 gating audit).
+    // Every probe target is a *string* on purpose: a probe method containing typeof(<game type>) cannot be
+    // JITted once that type is gone, which is the failure the probe exists to survive
     private const string GameAssemblyName = "sts2";
     private const string GameAssemblyAnchorTypeName = "MegaCrit.Sts2.Core.Multiplayer.Serialization.PacketWriter";
     private const string PacketWriterTypeName = "MegaCrit.Sts2.Core.Multiplayer.Serialization.PacketWriter";
     private const string JoinResponseTypeName = "MegaCrit.Sts2.Core.Multiplayer.Messages.Lobby.ClientLobbyJoinResponseMessage";
     private const string GameModeTypeName = "MegaCrit.Sts2.Core.Runs.GameMode";
 
-    /// <summary>The <see cref="PacketWriter"/> members <see cref="SerializeJoinResponseBodyPrefix"/> calls.</summary>
     private static readonly string[] WriterMembers =
     {
         "WriteList", "WriteBool", "Write", "WriteString", "WriteEnum", "WriteInt"
@@ -60,7 +48,6 @@ internal sealed class HostWireFix : ICompatFix
     /// <summary>Body-only bit count the message-bus boundary adds its 8-bit id and 64-bit sender to.</summary>
     private const int MessageBusHeaderBits = 8 + 64;
 
-    /// <summary>Set once the first real body has been emitted, so the diagnostic costs one line per session.</summary>
     private static int _reported;
 
     public string Id => "host-wire";
@@ -68,11 +55,9 @@ internal sealed class HostWireFix : ICompatFix
     public FixGroup Group => FixGroup.Wire;
 
     /// <summary>
-    /// No snapshot flag on purpose. The precise test is the message's own field set, which <see cref="TryCapture"/>
-    /// checks: <c>gameMode</c> + <c>isCustom</c> present on <c>ClientLobbyJoinResponseMessage</c> and the seven
-    /// fields the body writes. Those are exactly what the shipped 0.111 hand-written body omits, so "fields
-    /// present" is the condition under which this repair is both needed and meaningful — and if a future build
-    /// reshapes the message, the field checks fail and the repair stands down.
+    /// No snapshot flag on purpose: the precise test is the message's own field set, which <see cref="TryCapture"/>
+    /// checks. Those fields are exactly what the 0.111 hand-written body omits, so their presence is also the
+    /// condition under which this repair is meaningful, and a future reshape fails the check and stands down
     /// </summary>
     public bool Applies(in CompatSnapshot snapshot, out string reason)
     {
@@ -97,11 +82,9 @@ internal sealed class HostWireFix : ICompatFix
     }
 
     /// <summary>
-    /// Everything <see cref="Apply"/> and the prefix body need, resolved *before* a single patch is installed.
-    ///
-    /// The seven message fields are stored for detection only — the body reads them through the compiler — so a
-    /// renamed or removed field skips the repair at startup instead of failing the JIT of the prefix on the one
-    /// frame that carries a join response.
+    /// Everything <see cref="Apply"/> and the prefix body need, resolved before a single patch is installed. The
+    /// seven message fields are stored for detection only, so a renamed field skips the repair at startup instead
+    /// of failing the JIT of the prefix on the frame that carries a join response
     /// </summary>
     internal sealed class Shape
     {
@@ -125,9 +108,8 @@ internal sealed class HostWireFix : ICompatFix
     internal static Shape? _shape;
 
     /// <summary>
-    /// Resolves every anchor this repair needs. Never throws, never invokes anything, never touches Godot:
-    /// pure metadata over the already-loaded host assembly and the game assembly. The returned reason lists
-    /// *all* missing items, so one log line says everything that has to be fixed.
+    /// Never throws, never invokes, never touches Godot: pure metadata over the loaded assemblies. The returned
+    /// reason lists *all* missing items, so one log line says everything that has to be fixed
     /// </summary>
     private static bool TryCapture(Assembly host, out Shape shape, out string reason)
     {
@@ -265,14 +247,11 @@ internal sealed class HostWireFix : ICompatFix
                 priority = Priority.First
             });
 
-        // Reachability, stated up front so "applied: host-wire" can never be read as "this session used it".
-        // The patched method has exactly one caller in the host assembly:
-        // dec-official/LanConnectSerializationPatches.cs:411, inside
-        // SerializeJoinResponseAtMessageBusPrefix (:397-415), which returns true *before* that call unless
-        // LanConnectCompatWirePatches.ShouldForceCompatWireAtMessageBusBoundary() is true (:402-405), and
-        // that predicate is true only for Compat4x5V1 (dec-official/LanConnectCompatWirePatches.cs:41-45).
-        // tail_v1 therefore never calls it — and in tail_v1 the message is serialized by the game's own
-        // ClientLobbyJoinResponseMessage.Serialize instead, which is already the correct 0.113 layout.
+    // Reachability, so "applied: host-wire" is never read as "this session used it". The patched method has
+    // exactly one caller, dec-official/LanConnectSerializationPatches.cs:411 inside
+    // SerializeJoinResponseAtMessageBusPrefix (:397-415), which returns before it unless
+    // ShouldForceCompatWireAtMessageBusBoundary() is true (:402-405), and that is true only for Compat4x5V1
+    // (LanConnectCompatWirePatches.cs:41-45). tail_v1 serialises through the game's own Serialize instead
         Entry.Info(
             "host-wire: patched " + (shape.Body.DeclaringType?.Name ?? SerializationPatchesTypeName) +
             "." + BodyMethodName + " to emit the 0.113 field layout (gameMode, isCustom).");
@@ -289,8 +268,8 @@ internal sealed class HostWireFix : ICompatFix
 
     /// <summary>
     /// Replaces the host mod's 0.111 body. Must stay byte-for-byte equivalent to the game's own
-    /// <c>ClientLobbyJoinResponseMessage.Serialize</c> except for the list bit width, which the host mod
-    /// widens to support more than four players.
+    /// <c>ClientLobbyJoinResponseMessage.Serialize</c> except for the list bit width, which the host mod widens
+    /// to support more than four players
     /// </summary>
     // ReSharper disable once UnusedParameter.Local — Harmony binds by position.
     private static bool SerializeJoinResponseBodyPrefix(
@@ -341,10 +320,9 @@ internal sealed class HostWireFix : ICompatFix
     }
 
     /// <summary>
-    /// Emits one line per session with the numbers a field report needs: the lobby list width actually
-    /// used, the body bit count, and the byte count the host mod will log as <c>bodyBytes</c>. Without
-    /// it, a silently unpatched host and a patched one can log the same <c>bodyBytes</c> (the missing
-    /// four bits often stay inside the same final byte), so the size alone proves nothing.
+    /// One line per session with the numbers a field report needs. Without it a silently unpatched host and a
+    /// patched one can log the same <c>bodyBytes</c>, because the missing four bits often stay inside the same
+    /// final byte, so the size alone proves nothing
     /// </summary>
     private static void ReportOnce(ClientLobbyJoinResponseMessage message, int lobbyListBitWidth, int bodyBits)
     {
@@ -364,7 +342,6 @@ internal sealed class HostWireFix : ICompatFix
         }
         catch
         {
-            // Diagnostics must never be able to fail a join.
         }
     }
 }

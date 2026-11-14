@@ -4,24 +4,17 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// The mode pill drawn on every lobby room card (and in the selected-room summary).
-///
-/// This used to live inside <see cref="ExtraGameModesFix"/> and that was a mistake: the pill needs three
-/// private <c>Color</c> properties of the host overlay, and a rename of any one of them made the whole
-/// <c>extra-game-modes</c> repair fail — which, through <c>Entry</c>'s rollback, took every other repair
-/// down with it. A cosmetic label must never be able to disable networking fixes, so it is its own fix
-/// and it is allowed to fail on its own.
-///
-/// Upstream's <c>GetRoomGameModePill</c> maps the mode string to exactly three labels: <c>"daily"</c> →
-/// 挑战, <c>"custom"</c> → 自定义, and everything else → <c>"STD"</c>
-/// (<c>dec-official/LanConnectLobbyOverlay.cs:7943-7950</c>). The two strings this mod feeds into the
-/// lobby (<c>blitz</c>/<c>dread</c>) are "everything else", which is why those rooms showed STD.
-///
-/// Self-healing by construction: the postfix only rewrites a result whose text is still the catch-all
-/// <c>"STD"</c>. If any build returns anything else for these two modes, that value is left untouched and
-/// this fix steps aside — no version check, no probe, no way to overwrite a label it did not produce.
-/// </summary>
+    /// <summary>
+    /// The mode pill drawn on every lobby room card (and in the selected-room summary)
+    ///
+    /// A cosmetic label must not be able to disable networking fixes, so this is its own fix: the three private
+    /// <c>Color</c> properties it needs can be renamed on their own, and a failure here rolls back only here
+    ///
+    /// Upstream's <c>GetRoomGameModePill</c> maps the mode string to <c>"daily"</c> → 挑战, <c>"custom"</c> →
+    /// 自定义, everything else → <c>"STD"</c> (<c>dec-official/LanConnectLobbyOverlay.cs:7943-7950</c>), and the
+    /// <c>blitz</c>/<c>dread</c> strings this mod feeds in fall into that catch-all. The postfix only rewrites a
+    /// result whose text is still <c>"STD"</c>, so a build that returns anything else is left untouched
+    /// </summary>
 internal sealed class RoomCardPillFix : ICompatFix
 {
     private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyOverlay";
@@ -38,11 +31,8 @@ internal sealed class RoomCardPillFix : ICompatFix
     public FixGroup Group => FixGroup.Cosmetic;
 
     /// <summary>
-    /// Applicable when the host mod is present and the pill seam resolves: <c>GetRoomGameModePill(string)</c>
-    /// returning <c>(string, Color, Color)</c>, plus the three private static <c>Color</c> properties.
-    ///
-    /// <see cref="CompatSnapshot"/> is not read. Nothing about a game-version breakpoint decides whether a
-    /// room card can carry a different label; the anchors themselves are the whole question.
+    /// <see cref="CompatSnapshot"/> is not read: no game-version breakpoint decides whether a room card can
+    /// carry a different label, the anchors themselves are the whole question
     /// </summary>
     public bool Applies(in CompatSnapshot snapshot, out string reason)
     {
@@ -86,7 +76,6 @@ internal sealed class RoomCardPillFix : ICompatFix
     {
         try
         {
-            // Self-healing: anything upstream already labelled is left untouched.
             if (!string.Equals(__result.Text, StandardPillText, StringComparison.Ordinal))
             {
                 return;
@@ -123,9 +112,8 @@ internal sealed class RoomCardPillFix : ICompatFix
     }
 
     /// <summary>
-    /// Everything this fix needs, resolved without <c>typeof</c> on any version-specific type: a probe
-    /// that named <c>NBlitzScreen</c> or the overlay directly would itself fail to JIT on a build that
-    /// dropped it, which is exactly the failure this probe exists to avoid.
+    /// No <c>typeof</c> on any version-specific type: a probe that named <c>NBlitzScreen</c> or the overlay
+    /// would itself fail to JIT on a build that dropped it
     /// </summary>
     private sealed class Shape
     {
@@ -145,7 +133,6 @@ internal sealed class RoomCardPillFix : ICompatFix
 
         internal PropertyInfo SurfaceMuted { get; }
 
-        /// <summary>Reads one of the overlay's private static <c>Color</c> properties on every call.</summary>
         internal Color ReadColor(PropertyInfo property, string name) =>
             property.GetValue(null) is Color color
                 ? color
@@ -191,10 +178,9 @@ internal sealed class RoomCardPillFix : ICompatFix
             return new Shape(pill, success, danger, surfaceMuted);
         }
 
-        // All three element types are checked, not just the first: the postfix binds
-        // "ref (string, Color, Color) __result", so a tuple whose other two elements are not Color would be
-        // accepted here and then fail at bind time. Color is a Godot type we already reference, so naming it is
-        // not a version-dependent game type.
+    // All three element types are checked: the postfix binds "ref (string, Color, Color) __result", so a tuple
+    // whose other two elements are not Color would be accepted here and fail at bind time. Color is a Godot
+    // type this project already references, so naming it is not a version-dependent game type
         private static bool ReturnsStringColorColor(Type returnType) =>
             returnType.IsGenericType
             && returnType.GetGenericArguments().Length == 3

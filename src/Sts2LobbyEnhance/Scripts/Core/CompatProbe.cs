@@ -2,21 +2,13 @@ using System.Reflection;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Reads the six 0.113 shape changes out of the running game, one observation at a time.
-///
-/// Two rules keep this layer from taking the mod down:
-///   1. <see cref="Capture"/> never throws. Each observation runs in its own try/catch and degrades to
-///      <c>false</c> on its own, so a renamed type or member costs that one flag — not startup, and not
-///      the other five flags.
-///   2. Nothing here is a gate any more. There is no "all six at once" predicate: every repair decides
-///      for itself which flags it needs (see <see cref="ICompatFix.Applies"/>), which is what keeps a
-///      small game patch from disabling the whole mod.
-///
-/// Types are looked up by name through <see cref="Reflect.TryType"/>, never through <c>typeof(...)</c>:
-/// a compile-time reference to a renamed type throws inside the probe itself, and that exception would
-/// abort <see cref="Entry.Execute"/> before a single repair was even considered.
-/// </summary>
+    /// <summary>
+    /// Reads the six 0.113 shape changes out of the running game, one observation at a time
+    ///
+    /// Each observation runs in its own try/catch and degrades to <c>false</c> on its own, and types are
+    /// looked up by name: a <c>typeof</c> on a renamed type throws inside the probe itself, which would abort
+    /// <see cref="Entry.Execute"/> before a single repair was considered
+    /// </summary>
 internal static class CompatProbe
 {
     private const string GameAssemblyName = "sts2";
@@ -34,7 +26,6 @@ internal static class CompatProbe
 
     private const string SaveManagerTypeName = "MegaCrit.Sts2.Core.Saves.SaveManager";
 
-    /// <summary>Types probed by <see cref="GameAssembly"/> when the game assembly is not called "sts2".</summary>
     private static readonly string[] ProbedTypeNames =
     {
         InitialGameInfoTypeName,
@@ -44,23 +35,21 @@ internal static class CompatProbe
         SaveManagerTypeName
     };
 
-    /// <summary>Probe labels already reported, so a repeated startup cannot flood the log.</summary>
     private static readonly HashSet<string> Reported = new(StringComparer.Ordinal);
 
     private static readonly object ReportedGate = new();
 
     /// <summary>
-    /// Where a "I could not answer this" line goes. <see cref="Entry"/> installs its own logger here.
+    /// Where a "I could not answer this" line goes, and <see cref="Entry"/> installs its own logger here
     ///
-    /// It is a hook rather than a direct <c>Entry.Info</c> call because this class is compiled on its own
-    /// by <c>tools/probe-check</c>, which has no <c>Entry</c>: Core must not depend on the host layer just
-    /// to be able to log. A harness that leaves it null still gets a working <see cref="Capture"/>.
+    /// A hook rather than a direct <c>Entry.Info</c> call because Core is compiled on its own by
+    /// <c>tools/probe-check</c>, which has no <c>Entry</c>
     /// </summary>
     internal static Action<string>? Logger { get; set; }
 
     /// <summary>
-    /// Observes the running build. Never throws: a probe that cannot answer reports itself once and
-    /// answers <c>false</c>, which means "this change is not visible", never "the mod is broken".
+    /// Never throws: a probe that cannot answer reports itself once and answers <c>false</c>, which means
+    /// "this change is not visible", never "the mod is broken"
     /// </summary>
     internal static CompatSnapshot Capture()
     {
@@ -186,9 +175,8 @@ internal static class CompatProbe
     }
 
     /// <summary>
-    /// Runs one observation. <c>null</c> from the probe means "this build does not let me answer" (a type
-    /// or member is gone); that is reported once and treated as "the change is not present", which keeps a
-    /// single renamed member from taking the other five observations with it.
+    /// <c>null</c> from the probe means "this build does not let me answer", which counts as "the change is
+    /// not present" so one renamed member cannot take the other five observations with it
     /// </summary>
     private static bool Observe(string label, Assembly? game, Func<Assembly, bool?> probe)
     {
@@ -219,11 +207,9 @@ internal static class CompatProbe
     }
 
     /// <summary>
-    /// Finds the game assembly without a compile-time reference.
-    ///
-    /// Name first (the assembly is <c>sts2</c>), then an explicit load — a harness that loads only the mod
-    /// DLL has not necessarily pulled the game in yet — then a scan for the probed types, so a renamed game
-    /// assembly degrades into "type not found" per probe instead of "assembly not found" for all six.
+    /// Name first (<c>sts2</c>), then an explicit load, then a scan for the probed types: a harness that loads
+    /// only the mod DLL has not pulled the game in yet, and a renamed game assembly degrades into "type not
+    /// found" per probe instead of "assembly not found" for all six
     /// </summary>
     private static Assembly? GameAssembly()
     {
@@ -239,7 +225,6 @@ internal static class CompatProbe
         }
         catch (Exception)
         {
-            // Not loadable by name here; fall through to the type scan.
         }
 
         if (named != null)
@@ -282,9 +267,8 @@ internal static class CompatProbe
         }
         catch (Exception)
         {
-            // Reporting must never be able to fail a probe. The logger reaches the game's logging stack,
-            // and a host that has no game assembly loaded at all fails to even JIT that call; the
-            // observation itself is still valid, so the log line is simply lost.
+            // Reporting must never fail a probe: the logger reaches the game's logging stack, and a host
+            // with no game assembly loaded fails to even JIT that call, so the line is simply lost
         }
     }
 }

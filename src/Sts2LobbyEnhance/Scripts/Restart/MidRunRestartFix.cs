@@ -24,27 +24,25 @@ using MegaCrit.Sts2.Core.Saves.Runs;
 
 namespace Sts2LobbyEnhance;
 
-/// <summary>
-/// Mid-run restart ("SL"): while a run is still in progress, put the whole room back at the beginning of the
-/// current floor without re-hosting, without re-joining, and without any confirmation step.
-///
-/// Why the save already means "start of this floor": the game writes <c>current_run_mp.save</c> inside
-/// <c>RunManager.EnterMapPointInternal</c> *before* the room is created (RunManager.cs:978-981 vs :996), together
-/// with the whole RNG state, and only overwrites it once the room is finished (CombatManager.cs:1418-1419,
-/// EventRoom.cs:141). Loading it therefore replays the current room from its start — exactly what singleplayer
-/// "SL" does (NMainMenu.OnContinueButtonPressedAsync, NMainMenu.cs:699-722).
-///
-/// Why the confirmation can be skipped: <c>LoadRunLobby.SetReady(bool)</c> is public and
-/// <c>IsAboutToBeginGame()</c> starts the run as soon as every present player is ready (LoadRunLobby.cs:324-372).
-/// The patch readies the host and every returning client programmatically, so the native "continue" screen never
-/// appears. The only prompt that survives is the game's own "N players are missing" confirmation, which is kept on
-/// purpose: starting with an absent player leaves their character uncontrolled.
-///
-/// Everything runs on the existing <c>NetService</c> (the same trick the new-run button uses: suppress the one
-/// <c>Disconnect</c> issued by <c>RunManager.CleanUp</c>), so the room never disappears and the protocol profile is
-/// untouched. The save file and the room binding are never deleted — unlike the new-run button, this feature only
-/// ever reads the save.
-/// </summary>
+    /// <summary>
+    /// Mid-run restart ("SL"): while a run is in progress, put the whole room back at the beginning of the current floor
+    /// without re-hosting, without re-joining and without a confirmation step
+    ///
+    /// The save already means "start of this floor": the game writes <c>current_run_mp.save</c> inside
+    /// <c>RunManager.EnterMapPointInternal</c> *before* the room is created (RunManager.cs:978-981 vs :996) with the
+    /// whole RNG state, and overwrites it only once the room is finished (CombatManager.cs:1418-1419, EventRoom.cs:141),
+    /// so loading it replays the current room from its start, exactly what singleplayer "SL" does
+    /// (NMainMenu.OnContinueButtonPressedAsync, NMainMenu.cs:699-722)
+    ///
+    /// The confirmation can be skipped because <c>LoadRunLobby.SetReady(bool)</c> is public and <c>IsAboutToBeginGame()</c>
+    /// starts the run once every present player is ready (LoadRunLobby.cs:324-372). The only prompt that survives is the
+    /// game's own "N players are missing" confirmation, kept on purpose: starting without a player leaves their character
+    /// uncontrolled
+    ///
+    /// Everything runs on the existing <c>NetService</c>, suppressing the single <c>Disconnect</c> from
+    /// <c>RunManager.CleanUp</c>, so the room never disappears and the protocol profile is untouched. The save file and the
+    /// room binding are never deleted: this feature only reads the save
+    /// </summary>
 internal sealed class MidRunRestartFix : ICompatFix
 {
     private const string RuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyRuntime";
@@ -54,13 +52,9 @@ internal sealed class MidRunRestartFix : ICompatFix
     private const string ModIdPrefix = "sts2_lobby_enhance";
 
     /// <summary>
-    /// How long the client waits for the host's <c>ClientLoadJoinResponseMessage</c>.
-    ///
-    /// The host's own deadline for the join request it is answering is 10000 ms
-    /// (<c>LoadRunLobby.ClientResponseTimeout</c>, LoadRunLobby.cs:81 / StartRunLobby.cs:104). This side waits
-    /// longer on purpose so the host's deadline is always the one that fires first and the log names the side that
-    /// actually gave up. The old comment here claimed "the host gives us ten seconds" while the constant was 15 s —
-    /// the two numbers were never the same thing.
+    /// How long the client waits for the host's <c>ClientLoadJoinResponseMessage</c>. The host's own deadline is 10000 ms
+    /// (<c>LoadRunLobby.ClientResponseTimeout</c>, LoadRunLobby.cs:81 / StartRunLobby.cs:104); this side waits longer on
+    /// purpose so the host's deadline always fires first and the log names the side that gave up
     /// </summary>
     private const int JoinResponseTimeoutMs = 15000;
 
@@ -86,18 +80,14 @@ internal sealed class MidRunRestartFix : ICompatFix
     /// </summary>
     private const int ClientBeginTimeoutMs = 180000;
 
-    /// <summary>How often the client says it is still waiting, so the log separates "waiting" from "stuck".</summary>
     private const int BeginWaitProgressIntervalMs = 10000;
 
     private const int MainMenuWaitFrames = 180;
 
-    /// <summary>Set by <see cref="Applies"/>, consumed by <see cref="Apply"/>. Non-null once <see cref="Applies"/> said yes.</summary>
     private static Shape? _shape;
 
-    /// <summary>Patched methods, resolved by <see cref="Applies"/> together with <see cref="_shape"/>.</summary>
     private static PatchTargets _targets;
 
-    /// <summary>The host-mod assembly <see cref="Applies"/> resolved, reused by <see cref="Apply"/>.</summary>
     private static Assembly? _host;
 
     private static PanelShape? _panelShape;
@@ -147,15 +137,12 @@ internal sealed class MidRunRestartFix : ICompatFix
     public FixGroup Group => FixGroup.Restart;
 
     /// <summary>
-    /// Answers "can this repair run on the build that is actually loaded", and resolves every anchor on the way.
+    /// Answers "can this repair run on the build that is actually loaded", resolving every anchor on the way
     ///
-    /// <paramref name="snapshot"/> is deliberately not read: none of the six 0.113 breakpoints is a precondition for a
-    /// same-session floor reload. The feature talks to <c>LoadRunLobby</c>, the two <c>NetService</c> classes and the
-    /// host mod's restart entry point, all of which are versioned independently of those flags. Gating on them is what
-    /// made a one-line game patch disable a feature it has nothing to do with.
-    ///
-    /// Resolving here rather than in <see cref="Apply"/> is what keeps the startup report honest: a missing anchor
-    /// becomes "skipped, here is why" instead of a repair that reports itself as applied and then does nothing.
+    /// <paramref name="snapshot"/> is deliberately not read: no 0.113 breakpoint is a precondition for a same-session
+    /// floor reload, which talks only to <c>LoadRunLobby</c>, the two <c>NetService</c> classes and the host mod's restart
+    /// entry point. Resolving here rather than in <see cref="Apply"/> is what keeps the startup report honest: a missing
+    /// anchor becomes "skipped, here is why" instead of a repair that claims to be applied and then does nothing
     /// </summary>
     public bool Applies(in CompatSnapshot snapshot, out string reason)
     {
@@ -233,20 +220,18 @@ internal sealed class MidRunRestartFix : ICompatFix
     // =====================================================================================================
 
     /// <summary>
-    /// Takes over <c>LanConnectRoomManagementPanel.StartRestartFlowAsync</c> — the handler behind the host mod's own
-    /// "restart" button — so its failure text cannot be written into a destroyed node.
+    /// Takes over <c>LanConnectRoomManagementPanel.StartRestartFlowAsync</c>, the handler behind the host mod's own
+    /// "restart" button, so its failure text cannot be written into a destroyed node
     ///
-    /// Upstream awaits <c>StartHostedRunRestartAsync()</c> and, when that returns false, writes
-    /// <c>_statusLabel.Text</c> after checking only the C# reference for null
-    /// (LanConnectRoomManagementPanel.cs:646, written at :648). But the restart flow itself ends with
-    /// <c>NGame.ReturnToMainMenu</c> — this patch's path, and the host mod's at LanConnectLobbyRuntime.cs:2060 — which
-    /// frees the panel (:661-666). Touching a member of a freed Godot object throws
-    /// <c>ObjectDisposedException</c>, so the one message the player was supposed to see never appeared (field log
-    /// 2026-11-13 PC 1803). The very same method's `finally` already guards the button with
-    /// <c>GodotObject.IsInstanceValid</c> (:654); only the label write forgot it.
+    /// Upstream awaits <c>StartHostedRunRestartAsync()</c> and, when that returns false, writes <c>_statusLabel.Text</c>
+    /// after checking only the C# reference for null (LanConnectRoomManagementPanel.cs:646, written at :648). But the
+    /// restart flow ends with <c>NGame.ReturnToMainMenu</c> (LanConnectLobbyRuntime.cs:2060), which frees the panel
+    /// (:661-666), and touching a freed Godot object throws <c>ObjectDisposedException</c> — so the message never
+    /// appeared (field log 2026-11-13 PC 1803). The same method's `finally` already guards the button with
+    /// <c>GodotObject.IsInstanceValid</c> (:654), only the label write forgot it
     ///
-    /// This is the only patch here that touches a *UI* type, so it is deliberately optional: if the type or one of
-    /// its private fields is renamed, the repair must still install and only this takeover is skipped.
+    /// The only patch here that touches a *UI* type, so it is deliberately optional: a renamed type or field must leave
+    /// the repair installed and skip only this takeover
     /// </summary>
     private static void InstallPanelRestartFlowPatch(
         Harmony harmony,
@@ -275,8 +260,8 @@ internal sealed class MidRunRestartFix : ICompatFix
                     $"StartRestartFlowAsync returns {flow.ReturnType.Name}, expected Task");
             }
 
-            // Arity alone is not enough: Reflect.RequireMethodByName compares the parameter *count* only
-            // (Reflect.cs:60-76), so a future one-parameter overload would be a coin flip. Pin the type.
+            // Arity alone is not enough: RequireMethodByName compares the parameter *count* only, so a future
+            // one-parameter overload would be a coin flip. Pin the type.
             ParameterInfo[] flowParameters = flow.GetParameters();
             if (flowParameters[0].ParameterType.FullName != RuntimeTypeName)
             {
@@ -326,12 +311,9 @@ internal sealed class MidRunRestartFix : ICompatFix
 
     /// <summary>
     /// The replacement body of <c>LanConnectRoomManagementPanel.StartRestartFlowAsync</c>
-    /// (LanConnectRoomManagementPanel.cs:642-659): await the restart, write the failure text only into a live label,
-    /// then always clear the in-flight flag and re-enable the button exactly as the original's `finally` does.
-    ///
-    /// Skipping the label write loses nothing: every false return either showed this patch's <c>NErrorPopup</c> or the
-    /// host mod's <c>LanConnectPopupUtil.ShowInfo</c> (LanConnectLobbyRuntime.cs:2012/2017/2022/2027/2068), so the
-    /// player is told either way.
+    /// (LanConnectRoomManagementPanel.cs:642-659): await the restart, write the failure text only into a live label, then
+    /// clear the in-flight flag and re-enable the button as the original's `finally` does. Skipping the label write loses
+    /// nothing, because every false return already showed a popup (LanConnectLobbyRuntime.cs:2012/2017/2022/2027/2068)
     /// </summary>
     private static async Task RunPanelRestartFlowAsync(object panel, object? runtime, PanelShape shape)
     {
@@ -393,12 +375,9 @@ internal sealed class MidRunRestartFix : ICompatFix
     }
 
     /// <summary>
-    /// Calls <c>LanConnectLobbyRuntime.StartHostedRunRestartAsync()</c> and waits for the real answer.
-    ///
-    /// The call goes through the Harmony-patched <see cref="MethodInfo"/>, so it re-enters
-    /// <see cref="StartHostedRunRestartPrefix"/> and honours whatever that decided. Awaiting the returned task — not
-    /// the <c>Invoke</c> call — is what makes the bool meaningful: <c>Invoke</c> only hands back the task, so reading
-    /// its result eagerly would report success before anything had run.
+    /// Calls <c>LanConnectLobbyRuntime.StartHostedRunRestartAsync()</c> through the Harmony-patched <see cref="MethodInfo"/>,
+    /// so it re-enters <see cref="StartHostedRunRestartPrefix"/>. Awaiting the returned task rather than the <c>Invoke</c>
+    /// call is what makes the bool meaningful: reading the result eagerly would report success before anything had run
     /// </summary>
     private static async Task<bool> InvokeHostRestartAsync(object? runtime, PanelShape shape)
     {
@@ -1808,7 +1787,6 @@ internal sealed class MidRunRestartFix : ICompatFix
         return $"tailBound={state.Bound} writerBindings={state.WriterBindings} bus={state.Bus}";
     }
 
-    /// <summary>Session binding state of the host mod's tail runtime for one service.</summary>
     private readonly record struct TailBindingState(bool Bound, int WriterBindings, string Bus);
 
     /// <summary>
@@ -2129,16 +2107,12 @@ internal sealed class MidRunRestartFix : ICompatFix
 
         internal MethodInfo AdmitLoadPeer { get; }
 
-        /// <summary><c>Sts2LanConnect.Scripts.LanConnectTailMessageRuntime</c>.</summary>
         internal Type TailRuntimeType { get; }
 
-        /// <summary><c>LanConnectTailMessageRuntime.GetMessageBus(INetGameService)</c>.</summary>
         internal MethodInfo TailGetMessageBus { get; }
 
-        /// <summary><c>LanConnectTailMessageRuntime._bindings</c> (bus → session binding).</summary>
         internal FieldInfo TailBindings { get; }
 
-        /// <summary><c>LanConnectTailMessageRuntime._writerBindings</c> (PacketWriter → session binding).</summary>
         internal FieldInfo TailWriterBindings { get; }
 
         // Resolution lives in TryCapture: it collects every missing anchor instead of throwing on the first one,
