@@ -26,7 +26,13 @@ internal enum FixGroup
 
     Cosmetic,
 
-    Unlock
+    Unlock,
+
+    /// <summary>Roster re-baselining for LobbyBeginRun (tail-error-paths is separate: that one only redirects two call sites)</summary>
+    Roster,
+
+    /// <summary>Load-join player ordering (independent of Roster: it runs on every save load, that one on every start)</summary>
+    LoadOrder
 }
 
     /// <summary>

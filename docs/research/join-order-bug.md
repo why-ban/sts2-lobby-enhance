@@ -1,5 +1,32 @@
 # 多人存档续玩「必须按原顺序加入」调查（task-11）
 
+> **2026-11-14 结论更正（读本文前必看）**
+>
+> 本文是在**没有失败日志**的情况下、从现象倒推候选机制写成的，其中的 H1–H5 假设**已被代码级证据取代**。
+>
+> 真正的原因在 `LanConnectTailMessageRuntime.cs:1275`（线上 0.6.3 反编译）：
+>
+> ```csharp
+> if (!alreadyConnected.Select(accessors.GetId).SequenceEqual(list.Select(accessors.GetId)))
+>     throw new InvalidDataException("Loaded-lobby vanilla membership disagrees with the Tail roster.");
+> ```
+>
+> 左边 `alreadyConnected` 来自消息体 `playersAlreadyConnected`，顺序是**加入顺序**；
+> 右边 `list` 来自 tail 快照载体，按 `(RealSlotId, PlayerId)` 规范排序，即**存档顺序**
+> （`BuildLoadJoinCarriers` 用 `savedPlayers.FindIndex(NetId)` 作 `RealSlotId`）。
+> `SequenceEqual` 是逐位比较，同一集合不同顺序必然判为不一致。
+>
+> 这正好推出用户观察到的规律：第 k 个加入者看到「房主 + 前 k-1 人」；
+> 第 1 个不按顺序的人只有 2 项，只要房主在存档里更靠前就能过；第 2 个有 3 项，一旦
+> `saveIdx(X) > saveIdx(Y)` 就失败；全员按原顺序时每个前缀都单调，于是全过。
+>
+> 因此本文 §1.3「读档链上没有按顺序分配槽位的字段」与 §2.2「`ModMismatch` 与顺序无关」
+> **在 tail_v1 房间上不成立**：它们只查了 vanilla 字段，漏掉了 tail 自造的 `RealSlotId` 与位置比较。
+> H1–H5 作为历史假设保留，但已不是首选解释。
+>
+> 修复：`load-join-order`（`Scripts/Tail/LoadJoinOrderFix.cs`），在比较前按存档下标重排。
+> 可证伪预测（尚未实测）：若房主不是存档里的第一位玩家，则该存档任何人都进不去。
+
 > **当前状态（2026-11-13 收尾）：未修复。** 这是本项目仍在生效的 P2 未决项 ——「多人存档续玩时必须按
 > 原玩家顺序加入」。它**阻塞在用户提供的信息**上：需要 §5.1 列出的 4 份日志，以及下面这 9 个问题
 > （房间里有几个人、第一个不按顺序的人进去后大厅显示的

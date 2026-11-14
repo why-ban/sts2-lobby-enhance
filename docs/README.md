@@ -21,7 +21,7 @@
 | 兼容修复 · 0.113 新模式 | **1 项** | 客户端加入极速 / 恐惧房间时，官方模组的推屏逻辑认不出新模式 |
 | 便利功能 | **4 项** | 局终新开一局、局中重开本层、极速 / 恐惧建房、解锁这两个模式 |
 
-合计 **11 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
+合计 **13 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
 
 ### 兼容修复：6 个元数据断点
 
@@ -48,7 +48,7 @@
 上表不是抄来的结论：`tests/` 里的 `BreakpointRegressionTests` 扫描官方 DLL 的 22,774 个元数据候选，
 断言"恰好这 6 个无法解析"；`GameApiShapeTests` 则直接读 `sts2.dll` 的元数据，断言每个断点的新旧形态。
 
-### 十一项修复清单
+### 十三项修复清单
 
 | # | id | 类别 | 解决什么 | 用户看到什么 |
 |---|----|------|----------|--------------|
@@ -60,9 +60,11 @@
 | 6 | `new-run-button` | 功能 | 局终结算页由房主一键把全房带回准备页，见下节 | 不用重建房间、不用重新找队友 |
 | 7 | `mid-run-restart` | 功能 | 局中回到本层开头，见下节 | 打错了不用退房重开 |
 | 8 | `extra-game-modes` | 功能 | 建房选择器新增极速 / 恐惧；大厅房间卡片也像「自定义」一样标注「极速」「恐惧」，见下节 | 大厅能选这两个模式，房间列表里也看得出类型 |
-| 9 | `room-card-pill` | 功能 | 大厅房间卡片标注「极速」「恐惧」（从 `extra-game-modes` 拆出的独立项，纯装饰、可单独失败而不牵连其它修复） | 房间列表里看得出模式 |
-| 10 | `new-protocol-only` | 功能 | 建房时只保留「新协议」，隐藏「兼容旧版 Mod」入口，见下节 | 不用再在两种协议之间做选择 |
-| 11 | `unlock-extra-modes` | 功能 | 装补丁即可使用这两个模式，见下节 | 不必先打完时间线 |
+| 9 | `roster-rebaseline` | 协议稳健性 | 上游的 tail 名册**只能表达"有人加入"，不能表达"有人离开"**（0.6.3 全树没有 `PlayerLeft` 处理）。因此开局前只要有减员，客户端名册就会停留在旧状态：开始游戏被 `StateTransition` 的成员校验拒、之后有人加入被 `MembershipMutation` 拒、续局/重开被 `CurrentState` 的逐字节校验拒——**该客户端本轮报废，只能退出重进**。本修复在 `LanConnectRosterAuthorityState.Accept` 前置判断：只要"我们手里有、房主快照里没有"的成员，就重新基线化 | 开局前踢人 / 有人掉线，不再让整个房间崩掉 |
+| 10 | `load-join-order` | 协议稳健性 | 上游 `RestoreLoadJoinPlayers` 用 `SequenceEqual` **逐位**比较两张表：左边是加入顺序，右边是存档顺序（快照按 `(RealSlotId, PlayerId)` 规范排序）。同集合不同序必判为不一致，于是"读档续玩必须按最初加入顺序进房"——第一个不按顺序的人只有 2 项尚能过，第二个就必然失败。本修复在比较前把已连接列表按存档下标重排 | 不必再按原顺序加入 |
+| 11 | `room-card-pill` | 功能 | 大厅房间卡片标注「极速」「恐惧」（从 `extra-game-modes` 拆出的独立项，纯装饰、可单独失败而不牵连其它修复） | 房间列表里看得出模式 |
+| 12 | `new-protocol-only` | 功能 | 建房时只保留「新协议」，隐藏「兼容旧版 Mod」入口，见下节 | 不用再在两种协议之间做选择 |
+| 13 | `unlock-extra-modes` | 功能 | 装补丁即可使用这两个模式，见下节 | 不必先打完时间线 |
 
 ### 功能详解
 
@@ -183,14 +185,15 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 [lobby-enhance] applied: extra-game-modes
 [lobby-enhance] applied: room-card-pill
 [lobby-enhance] applied: unlock-extra-modes
-[lobby-enhance] summary: applied=11[join-flow,join-screen-modes,host-wire,tail-error-paths,
-          abandon-run,new-run-button,mid-run-restart,extra-game-modes,new-protocol-only,
-          room-card-pill,unlock-extra-modes] skipped=0[] failed=0
+[lobby-enhance] summary: applied=13[join-flow,join-screen-modes,host-wire,tail-error-paths,
+          roster-rebaseline,load-join-order,abandon-run,new-run-button,mid-run-restart,
+          extra-game-modes,new-protocol-only,room-card-pill,unlock-extra-modes]
+          skipped=0[] failed=0
 ```
 
 判定标准：
 
-- `applied=11 ... failed=0` → 11 项修复全部装上。
+- `applied=13 ... failed=0` → 13 项修复全部装上。
 - `skipped=<n>` → 有 n 项判断为「这个构建不需要」，每一项都会单独打印原因
   （形如 `skipped: <id>: missing: <具体锚点>`）。
 - 出现 `no repair reported itself as needed` → 这个构建不需要任何修复，什么都没装（正常状态）。
@@ -205,7 +208,7 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 # 1) 只校验 6 个元数据断点的判定结果（不安装任何补丁）
 dotnet run --project tools/probe-check -c Release
 
-# 2) 跑 Entry.RunSilently()，确认 11 项修复真的挂上了
+# 2) 跑 Entry.RunSilently()，确认 13 项修复真的挂上了
 dotnet run --project tools/smoke-test -c Release
 
 # 3) 补丁依赖的每一个上游反射成员（30 条契约）
@@ -240,7 +243,7 @@ dotnet test tests
 5. **发布工作区**：`packaging/` 结构符合官方上传器要求，`image.png` 是 <1 MiB 的正方形 PNG，
    `content/` 只有 4 个文件、绝不含官方模组的任何文件，且其中的 DLL 与当前构建逐字节一致。
 6. **修复清单**：`FixRegistryTests`（4 个用例）断言 `Entry.cs` 里 `CompatFixes.Build()` 产出的 id
-   **集合与顺序**就是那 11 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
+   **集合与顺序**就是那 13 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
    `join-screen-modes` 的分派、`unlock-extra-modes` 的两个 epoch 与「不写盘」、`mid-run-restart` 的反射锚点。
 7. **反假绿闸门**：`GameDependentCoverageTests`（1 个用例）检查「依赖游戏 DLL 的那些用例真的跑过了」——
    22 个用例在缺输入时会静默跳过，这条断言让「全绿但其实没跑」变成红色（可用
@@ -293,7 +296,7 @@ dotnet test tests
 6. 局中重开：打到第二层中途 → 房主点「重开一局」→ 全房回到本层开头，无需逐人确认。
 7. 局终新开一局：打完一局 → 结算页点「新开一局」→ 全房回到对应模式的准备页；
    同时确认客户端结算页显示了提示文案。
-8. 双方日志都没有 `FAILED:`，且都有 `applied=11`。
+8. 双方日志都没有 `FAILED:`，且都有 `applied=13`。
 
 ### 构建与发布
 
@@ -308,7 +311,7 @@ pwsh -File packaging/build-content.ps1
 python packaging/make-image.py
 ```
 
-发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（11 项 applied）+
+发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（13 项 applied）+
 `tools/contract-check`（30 条契约）。
 
 > **官方模组升级后必须重跑 `tools/wire-verify`。** `host-wire` 用 `Priority.First` 覆盖宿主自己的
@@ -389,7 +392,7 @@ to take over a *readable* caller or an async stub.
 exactly these six fail to resolve; `GameApiShapeTests` reads the game's metadata directly and asserts
 each old/new shape.
 
-### The eleven fixes
+### The thirteen fixes
 
 | # | id | Kind | What it solves | What the player sees |
 |---|----|------|----------------|----------------------|
@@ -401,7 +404,11 @@ each old/new shape.
 | 6 | `new-run-button` | feature | One click on the game-over screen brings the whole room back to the lobby | No re-hosting, no re-joining |
 | 7 | `mid-run-restart` | feature | Restart the current floor mid-run | No need to leave and re-create the room |
 | 8 | `extra-game-modes` | feature | Blitz / Dread in the create-room picker, plus a 「极速」/「恐惧」 pill on each room card (the host mod only knows standard / daily / custom) | The lobby can pick them, and the room list shows which mode a room is |
-| 9 | `unlock-extra-modes` | feature | Both modes usable as soon as the patch is installed | No need to finish the timeline first |
+| 9 | `roster-rebaseline` | protocol robustness | Upstream's tail roster can express `PlayerJoined` but has no notion of a player leaving (0.6.3 has no `PlayerLeft` handling at all). Any departure before the run starts therefore leaves the client's roster stale: the BeginRun snapshot fails the `StateTransition` membership check, a later join fails `MembershipMutation`, and load/rejoin fails the byte-for-byte `CurrentState` check. That client is dead for the session and has to rejoin. This fix notices "we hold a member the host no longer has" and re-baselines | A kick or a drop in the lobby no longer bricks the remaining clients |
+| 10 | `load-join-order` | protocol robustness | Upstream compares the already-connected list with the tail roster using `SequenceEqual`, i.e. positionally, but one side is in join order and the other in save order. Same set in a different order is rejected, which is why a loaded save had to be re-entered in the original order: the first out-of-order player only has two entries and slips through, the second cannot. This fix reorders the list into save order before the comparison | Joining a loaded save in any order |
+| 11 | `room-card-pill` | feature | 「极速」/「恐惧」 pill on each lobby room card (split out of `extra-game-modes` so it can fail alone) | The room list shows the mode |
+| 12 | `new-protocol-only` | feature | Create-room offers 新协议 only; the legacy entry is hidden, not removed (see below) | No protocol choice to get wrong |
+| 13 | `unlock-extra-modes` | feature | Both modes usable as soon as the patch is installed | No need to finish the timeline first |
 
 ### Feature details
 
@@ -491,12 +498,13 @@ be installed (workshop, or `<game>\mods\sts2_lan_connect\`).
 Search the game log for `[lobby-enhance]`. On 0.113 the expected summary line is:
 
 ```
-[lobby-enhance] summary: applied=11[join-flow,join-screen-modes,host-wire,tail-error-paths,
-          abandon-run,new-run-button,mid-run-restart,extra-game-modes,new-protocol-only,
-          room-card-pill,unlock-extra-modes] skipped=0[] failed=0
+[lobby-enhance] summary: applied=13[join-flow,join-screen-modes,host-wire,tail-error-paths,
+          roster-rebaseline,load-join-order,abandon-run,new-run-button,mid-run-restart,
+          extra-game-modes,new-protocol-only,room-card-pill,unlock-extra-modes]
+          skipped=0[] failed=0
 ```
 
-- `applied=11 ... failed=0` — all eleven fixes installed.
+- `applied=13 ... failed=0` — all thirteen fixes installed.
 - `skipped=<n>` — n repairs decided this build does not need them; each prints its own reason
   (`skipped: <id>: missing: <anchor>`).
 - `no repair reported itself as needed` — this build needs no repair at all; nothing was installed (normal).
@@ -611,7 +619,7 @@ but `GameDependentCoverageTests` then fails on purpose: "green" must not mean "n
    that floor with no per-player confirmation.
 7. New run: finish a run, press "new run" on the game-over screen — the room returns to the lobby for
    the same mode, and the client-side hint is visible.
-8. Neither log contains `FAILED:`, and both contain `applied=11`.
+8. Neither log contains `FAILED:`, and both contain `applied=13`.
 
 ### Build and test
 

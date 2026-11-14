@@ -37,6 +37,8 @@ public sealed class FixRegistryTests
         "join-screen-modes",
         "host-wire",
         "tail-error-paths",
+        "roster-rebaseline",
+        "load-join-order",
         "abandon-run",
         "new-run-button",
         "mid-run-restart",

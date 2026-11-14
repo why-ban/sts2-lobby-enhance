@@ -35,6 +35,8 @@ string[] expectedFixIds =
     "join-screen-modes",
     "host-wire",
     "tail-error-paths",
+    "roster-rebaseline",
+    "load-join-order",
     "abandon-run",
     "new-run-button",
     "mid-run-restart",
@@ -56,6 +58,8 @@ string[] expectedFixIds =
     // AbortActiveBinding/RejectAndDisconnect, so the exact set is derived from IL. Any patched method
     // on that type proves the rewrite ran; the count is printed above for a human to eyeball.
     ("tail-error-paths",   "LanConnectTailMessageRuntime",     "*"),
+    ("roster-rebaseline",  "LanConnectRosterAuthorityState",  "Accept"),
+    ("load-join-order",    "LanConnectTailMessageRuntime",     "RestoreLoadJoin"),
     ("abandon-run",        "LanConnectMultiplayerSaveCompatibility", "AbandonCurrentRunAsync"),
     ("new-run-button",     "NGameOverScreen",                  "_Ready"),
     ("mid-run-restart",    "LanConnectLobbyRuntime",           "StartHostedRunRestartAsync"),

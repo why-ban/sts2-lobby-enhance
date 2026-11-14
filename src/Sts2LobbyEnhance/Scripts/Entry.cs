@@ -437,6 +437,8 @@ internal static class CompatFixes
         yield return new JoinScreenDispatchFix();
         yield return new HostWireFix();
         yield return new TailErrorPathFix();
+        yield return new RosterRebaselineFix();
+        yield return new LoadJoinOrderFix();
         yield return new AbandonRunFix();
         yield return new NewRunFromGameOverFix();
         yield return new MidRunRestartFix();

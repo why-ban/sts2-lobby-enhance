@@ -28,6 +28,24 @@
 - **房间管理面板接管失败不再静默**：日志以 `DEGRADED — the room management panel was NOT taken over` 开头。
 - **`GetEffectiveMaxPlayers` 的反射调用移进 try**，取不到就用 4，不再把可降级项升级成整次重开失败。
 
+### 修复（上游协议缺口，两项新增）
+
+- **`roster-rebaseline`：开局前有人离开，会让整个房间的客户端"报废"。**
+  上游 0.6.3 的 tail 名册**只能表达"有人加入"**（`PlayerJoined` → `MembershipMutation`），
+  **完全没有"有人离开"的路径**（全树搜 `PlayerLeft` 零命中）。于是开局前只要有减员
+  （被踢、自己退、掉线），客户端名册就停在旧状态，随后：开始游戏被 `StateTransition` 的成员校验拒、
+  之后有人加入被 `MembershipMutation` 拒、续局/重开被 `CurrentState` 的逐字节校验拒。
+  现场表现是「Mod 不匹配」并回主菜单——因为尾部的拒绝一律以 `ModMismatch` 收场，与真实原因无关。
+  本修复在 `LanConnectRosterAuthorityState.Accept` 前置判断「我们手里有、房主快照里没有的成员」，
+  命中就重新基线化（`Reset()` + 把 use 改为 `Bootstrap`，并把 `authoritativeMembership` 实参清空，
+  后者是必需的：该校验在取锁前就会用旧 `Current` 推导出的集合比较）。
+- **`load-join-order`：读档续玩不必再按最初加入顺序进房。**
+  上游 `RestoreLoadJoinPlayers` 用 `SequenceEqual` **逐位**比较两张表，而左边是加入顺序、
+  右边是存档顺序（快照按 `(RealSlotId, PlayerId)` 规范排序）。同一个集合、顺序不同就判为不一致。
+  这正是「第一个不按顺序的人能进、第二个进不去」的成因：第 k 个加入者看到的列表只有
+  「房主 + 前 k-1 人」，第 1 个不按顺序的人只有 2 项尚能通过，第 2 个就必然失败。
+  本修复在比较前把已连接列表按存档下标重排。
+
 ### 修复（探测本身的三处假阴性）
 
 探测过严会把**能用的功能判成不可用**，和原来的问题一样糟。smoke-test 现在会打印每项的跳过原因，
