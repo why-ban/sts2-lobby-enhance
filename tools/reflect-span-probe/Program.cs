@@ -6,7 +6,7 @@ using System.Reflection.Emit;
 // 能否被 MethodInfo.Invoke 以 byte[] 实参调用。
 // 结论用于判定 JoinTakeoverFix.TryBindTail 的反射写法是否可行。
 //
-// ！本工具只用假类型（下面的 Target），不加载游戏、不加载官方模组、不碰真实的 BindClient。
+// ！本工具只用假类型（下面的 Target），不加载游戏、不加载社区模组、不碰真实的 BindClient。
 // ！它验证的是「反射辅助函数在这组形参形态下能不能工作」，**不代表真实类型可用**。
 // ！真实类型的接缝是否被打上，由 tools/smoke-test 的 one-real-seam-per-fix 断言覆盖。
 // 退出码：0 = 三条可执行实验都得到预期结果；2 = 期望可行的路线（DynamicMethod shim / 强类型委托）失败。

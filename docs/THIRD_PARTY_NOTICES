@@ -77,9 +77,9 @@ to the STS2 LAN Connect author.
 
 中文摘要
 --------
-* 本模组不打包官方模组 `sts2_lan_connect`（工坊物品 3749766330）的任何文件，只在工坊页面上声明依赖，
+* 本模组不打包社区模组 `sts2_lan_connect`（工坊物品 3749766330）的任何文件，只在工坊页面上声明依赖，
   运行时通过反射使用玩家已安装的那一份。
 * 但源码里确实含有从该 GPL-3.0 项目移植过来的逻辑（tail_v1 错误路径、放弃本局流程），
   因此本项目整体以 GPL-3.0 发布；`LICENSE` 与上游副本逐字节一致。
 * 游戏本体文件（sts2.dll / GodotSharp.dll / 0Harmony.dll / pck）与 Harmony、Godot 均未随本模组分发。
-* 本项目为社区补丁，与 MegaCrit Games 及官方模组作者无关，未获其背书。
+* 本项目为社区补丁，与 MegaCrit Games 及社区模组作者无关，未获其背书。

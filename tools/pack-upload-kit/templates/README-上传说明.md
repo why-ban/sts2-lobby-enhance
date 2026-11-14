@@ -87,8 +87,8 @@ sts2-lobby-enhance-upload-kit/
 
 ## 六、这个模组是什么
 
-《杀戮尖塔 2》0.113 的**联机大厅增强**：让官方模组 LAN Connect（`sts2_lan_connect` 0.6.3）继续可用，
+《杀戮尖塔 2》0.113 的**联机大厅增强**：让社区模组 LAN Connect（`sts2_lan_connect` 0.6.3）继续可用，
 并补上极速 / 恐惧模式联机、局中重开、结算页一键新开一局等功能。
-它**不包含**官方模组的任何文件，只在 `workshop.json` 里声明依赖（工坊物品 3749766330）。
+它**不包含**社区模组的任何文件，只在 `workshop.json` 里声明依赖（工坊物品 3749766330）。
 
 版本：**{VERSION}**（以 `workspace/content/sts2_lobby_enhance.json` 里的 `version` 为准）

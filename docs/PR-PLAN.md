@@ -29,7 +29,7 @@
 | 东西 | 在哪 | 它是什么 | 能不能提 PR 到上游 |
 |---|---|---|---|
 | **A. 12 文件 / +273−113 未提交改动** | `LOBBY` 工作区 | **上游自己源码的 0.113 移植**（改的全是 `sts2-lan-connect/Scripts/` 里上游的代码） | **能，而且这是它唯一正确的去处** |
-| **B. 独立附属模组** | `COMPANION` | 另一个模组 `sts2_lan_connect_0113_fix` v1.6.1（`COMPANION\docs\README.md:3`），运行期给官方 0.6.3 DLL 打 Harmony 补丁 | **不能**。它不是上游代码，是独立产品 |
+| **B. 独立附属模组** | `COMPANION` | 另一个模组 `sts2_lan_connect_0113_fix` v1.6.1（`COMPANION\docs\README.md:3`），运行期给社区模组 0.6.3 DLL 打 Harmony 补丁 | **不能**。它不是上游代码，是独立产品 |
 
 所以「我们做的是独立附属模组，不是移植版」这句话对 **B** 成立、对 **A** 不成立。**A 就是移植版**——
 `git diff` 里改的 12 个文件全部是上游 `sts2-lan-connect/Scripts/` 下的文件，没有一个是 COMPANION 的文件。
@@ -129,7 +129,7 @@ http://127.0.0.1:7890
 
 ## 4. 6 处签名断裂（PC 端「加入必崩」的直接原因）
 
-来源两条独立证据：① `COMPANION\docs\README.md:32-39` 的断点表（由 `BreakpointRegressionTests` 扫官方 DLL
+来源两条独立证据：① `COMPANION\docs\README.md:32-39` 的断点表（由 `BreakpointRegressionTests` 扫社区模组 DLL
 22,774 个元数据候选、断言「恰好这 6 个不可解析」得出，`README.md:48-49`）；② 把 v0.6.3 源码直接对着
 0.113 的 `sts2.dll` 编译得到的错误清单（`WS\reports\lobby-issue-body.md:21-34`）。
 
@@ -444,7 +444,7 @@ ERROR: Node not found: "StandardButton"
 0.113 自己的取法是 `GetNode<NSubmenuButton>("%StandardButton")`（`%DailyButton` / `%BlitzButton` /
 `%DreadButton` / `%CustomRunButton` 同理，都在 `%ButtonContainer` 下）。
 所以 `Patches/HostSubmenu.cs` 里三处 `"StandardButton"` / `"DailyButton"` / `"CustomRunButton"`
-需要加 `%` 前缀。后果只是「LAN 调试建房」按钮注入不出来，不影响官方联机。
+需要加 `%` 前缀。后果只是「LAN 调试建房」按钮注入不出来，不影响游戏大厅联机。
 
 ### 3.3 `TreasurePatches` 的投票复刻在 0.113 上**不需要**（实测，不是 bug）
 

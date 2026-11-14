@@ -1,6 +1,6 @@
 # 游戏大厅增强 v1.8.1（sts2_lobby_enhance）
 
-独立模组 `sts2_lobby_enhance`（**v1.8.1**）—— 让官方模组 `sts2_lan_connect` 0.6.3 在
+独立模组 `sts2_lobby_enhance`（**v1.8.1**）—— 让社区模组 `sts2_lan_connect` 0.6.3 在
 《Slay the Spire 2》0.113.0 上继续可用，并补上 0.113 新增的极速（Blitz）/ 恐惧（Dread）模式的联机支持。
 
 发布包按 `dist/sts2-lobby-enhance-v1.8.1.zip` 命名（打包步骤见 [`UPLOAD.md`](UPLOAD.md)）。
@@ -18,19 +18,19 @@
 
 | 类别 | 数量 | 说明 |
 |------|------|------|
-| 兼容修复 · 元数据断点 | **6 个断点 / 4 项修复** | 0.113 改了成员签名或删了字段，官方 0.6.3 的引用直接解析不了（#5 不需要修复，见下） |
-| 兼容修复 · 0.113 新模式 | **1 项** | 客户端加入极速 / 恐惧房间时，官方模组的推屏逻辑认不出新模式 |
+| 兼容修复 · 元数据断点 | **6 个断点 / 4 项修复** | 0.113 改了成员签名或删了字段，社区模组 0.6.3 的引用直接解析不了（#5 不需要修复，见下） |
+| 兼容修复 · 0.113 新模式 | **1 项** | 客户端加入极速 / 恐惧房间时，社区模组的推屏逻辑认不出新模式 |
 | 便利功能 | **3 项** | 局终新开一局、极速 / 恐惧建房、解锁这两个模式 |
 
 合计 **13 项修复**，全部在启动日志里逐条可见（见「验证是否生效」）。
 
 ### 兼容修复：6 个元数据断点
 
-0.113 改动了 6 个成员的签名或存在性。官方 0.6.3 是按 0.111 的形态编译的，这 6 处引用在新版游戏里
+0.113 改动了 6 个成员的签名或存在性。社区模组 0.6.3 是按 0.111 的形态编译的，这 6 处引用在新版游戏里
 **无法解析**：方法既不能被 JIT，Harmony 连它的 IL 都读不出来（解析元数据 token 时直接抛异常），所以
 不能简单地给这些方法打补丁，必须绕到它们可读的调用者或异步存根上去接管。
 
-| # | 断点 | 0.111（官方 0.6.3 编译时） | 0.113（实测） |
+| # | 断点 | 0.111（社区模组 0.6.3 编译时） | 0.113（实测） |
 |---|------|---------------------------|---------------|
 | 1 | `InitialGameInfoMessage.gameMode` | 字段存在 | 字段已删除 |
 | 2 | `ClientLobbyJoinRequestMessage.maxAscensionUnlocked` | 字段存在 | 拆成 `maxStandardAscension` + `maxBlitzAscension` |
@@ -40,22 +40,22 @@
 | 6 | `SaveManager.UpdateProgressWithRunData` | `void` | 返回 `PostRunProgressUpdateResult` |
 
 > **断点 #5 不需要修复。** 0.113 原生的 `TreasureRoomRelicSynchronizer.OnPicked(Player, int?)` 已完整支持
-> 「跳过」票（`TreasureRoomRelicSynchronizer.cs:204-251`、`:253-334`），官方 0.6.3 在 0.113 上自己就跳过了
+> 「跳过」票（`TreasureRoomRelicSynchronizer.cs:204-251`、`:253-334`），社区模组 0.6.3 在 0.113 上自己就跳过了
 > 那条补丁（`dec-official/TreasurePatches.cs:122-127`、`:137-140`、`:163-167`），所以
 > `RelicPickingResult.GenerateRelicFight` 那条不可解析引用永远不会被 JIT。v1.5.0 曾在这里放一份复刻实现，
 > 现已移除（复刻与原生在安慰奖配对、全员跳过时的结果集上有可观测差异），依据见
 > [`CHANGELOG.md`](CHANGELOG.md) 的 `[Unreleased]` 一节。
 > 启动探测仍把这一项算作判据（`Core/CompatProbe.cs:62-74`），所以上表仍是 6 项。
-上表不是抄来的结论：`tests/` 里的 `BreakpointRegressionTests` 扫描官方 DLL 的 22,774 个元数据候选，
+上表不是抄来的结论：`tests/` 里的 `BreakpointRegressionTests` 扫描社区模组 DLL 的 22,774 个元数据候选，
 断言"恰好这 6 个无法解析"；`GameApiShapeTests` 则直接读 `sts2.dll` 的元数据，断言每个断点的新旧形态。
 
 ### 十三项修复清单
 
 | # | id | 类别 | 解决什么 | 用户看到什么 |
 |---|----|------|----------|--------------|
-| 1 | `join-flow` | 断点 #1 #2 | 被破坏的代码在 `LanConnectLobbyManagedJoinFlow.<BeginAsync>d__23.MoveNext` 里。给**异步存根** `BeginAsync` 加 Prefix 并返回 `false`，使状态机永远不会被编译；改为调用游戏自带的 `JoinFlow`，并把官方模组自己的网络服务工厂、`CancelToken` 与 tail_v1 绑定都接回去 | 客机能加入房间 |
-| 2 | `join-screen-modes` | 0.113 新模式 | 官方 `LanConnectLobbyJoinFlow.PushJoinedScreen` 的 switch 只认 Standard / Daily / Custom，0.113 新增的极速 / 恐惧会落到末尾的 `throw new ArgumentOutOfRangeException("Unhandled multiplayer game mode.")`。接管该方法，按 `GameMode` 推 `NBlitzScreen` / `NDreadScreen`（自定义局优先判，保持原分派顺序） | 加入极速 / 恐惧房间不再弹 InternalError |
-| 3 | `host-wire` | 断点 #1 同源报文 | 桌面房主有一条手工拼消息体的路径 `LanConnectSerializationPatches.SerializeJoinResponseBody`，按 0.111 布局写出 `ClientLobbyJoinResponseMessage`，缺 0.113 新增的 `gameMode`(3 bit) 与 `isCustom`(1 bit)。按 0.113 布局重写，列表位宽仍取自官方模组自己的档位逻辑 | 桌面房主建房后，客机不再错位/报 `IndexOutOfRangeException` |
+| 1 | `join-flow` | 断点 #1 #2 | 被破坏的代码在 `LanConnectLobbyManagedJoinFlow.<BeginAsync>d__23.MoveNext` 里。给**异步存根** `BeginAsync` 加 Prefix 并返回 `false`，使状态机永远不会被编译；改为调用游戏自带的 `JoinFlow`，并把社区模组自己的网络服务工厂、`CancelToken` 与 tail_v1 绑定都接回去 | 客机能加入房间 |
+| 2 | `join-screen-modes` | 0.113 新模式 | 社区模组 `LanConnectLobbyJoinFlow.PushJoinedScreen` 的 switch 只认 Standard / Daily / Custom，0.113 新增的极速 / 恐惧会落到末尾的 `throw new ArgumentOutOfRangeException("Unhandled multiplayer game mode.")`。接管该方法，按 `GameMode` 推 `NBlitzScreen` / `NDreadScreen`（自定义局优先判，保持原分派顺序） | 加入极速 / 恐惧房间不再弹 InternalError |
+| 3 | `host-wire` | 断点 #1 同源报文 | 桌面房主有一条手工拼消息体的路径 `LanConnectSerializationPatches.SerializeJoinResponseBody`，按 0.111 布局写出 `ClientLobbyJoinResponseMessage`，缺 0.113 新增的 `gameMode`(3 bit) 与 `isCustom`(1 bit)。按 0.113 布局重写，列表位宽仍取自社区模组自己的档位逻辑 | 桌面房主建房后，客机不再错位/报 `IndexOutOfRangeException` |
 | 4 | `tail-error-paths` | 断点 #3 #4 | `LanConnectTailMessageRuntime` 的拒绝 / 中止路径引用了改签名的两个 API，自身不可读。把调用点 IL 重定向到按 0.113 签名重写的方法，行为逐行对齐上游 | 踢人 / 拒绝 / 断线不再崩 |
 | 5 | `abandon-run` | 断点 #6 | 被破坏的是 `LanConnectMultiplayerSaveCompatibility.<AbandonCurrentRunAsync>d__14.MoveNext`。同样接管异步存根，按 0.113 签名重跑同一流程（确认框、备份、进度写入、历史记录、每日分数上传、删存档、房间绑定清理、按钮刷新）；新的返回值会被检查，写入失败会记日志 | "备份并放弃本局"正常完成 |
 | 6 | `new-run-button` | 功能 | 局终结算页由房主一键把全房带回准备页，见下节 | 不用重建房间、不用重新找队友 |
@@ -71,10 +71,10 @@
 
 #### 建房只用新协议（`new-protocol-only`）
 
-官方模组建房时会让房主在「兼容旧版 Mod」（协议 id 300）和「新协议」（id 301）之间二选一。本补丁把旧协议
+社区模组建房时会让房主在「兼容旧版 Mod」（协议 id 300）和「新协议」（id 301）之间二选一。本补丁把旧协议
 那个**入口隐藏**，只留「新协议」，并默认选中它。
 
-**为什么**：RitsuLib 是很多模组的依赖库，而官方模组明确不允许在旧协议房间里启用它
+**为什么**：RitsuLib 是很多模组的依赖库，而社区模组明确不允许在旧协议房间里启用它
 （`LanConnectCreateRoomIntent.cs:17-19` 直接抛 `RitsuLibNotAllowedInCompat`）。两种协议在联机体验上
 没有区别，所以同时摆出两个选项只会让人选错。
 
@@ -103,12 +103,12 @@
 
 大厅建房下拉框新增这两项。
 
-大厅**房间卡片**也会标注模式。官方 0.6.3 的 `LanConnectLobbyOverlay.GetRoomGameModePill` 只认
+大厅**房间卡片**也会标注模式。社区模组 0.6.3 的 `LanConnectLobbyOverlay.GetRoomGameModePill` 只认
 `daily` 与 `custom`，其余一律显示 `STD`，所以这两种新模式的房间在列表里看不出类型。补丁给该方法加了
 postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红框），其它输入原样返回。选中房间的摘要与
 无障碍播报走的是同一个方法，因此一并生效。
 
-技术注记：官方 0.6.3 编译时 `GameMode` 只有 4 个值，枚举成员被内联成常量；0.113 的枚举顺序变了
+技术注记：社区模组 0.6.3 编译时 `GameMode` 只有 4 个值，枚举成员被内联成常量；0.113 的枚举顺序变了
 （`3` 现在是 Dread、`4` 是 Blitz）。补丁因此用 `4` → Blitz（正好也是游戏自己的值）、`5` → Dread
 （哨兵值，只在本补丁接管的那几个方法之间流转；推给 `NDreadScreen` 时由该屏自己提供真正的
 `GameMode.Dread`，哨兵不会进入游戏引擎）。
@@ -146,7 +146,7 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 
 **方式二：手动安装**
 
-1. 确认官方模组已安装（工坊订阅，或放在 `<游戏目录>\mods\sts2_lan_connect\`）。
+1. 确认社区模组已安装（工坊订阅，或放在 `<游戏目录>\mods\sts2_lan_connect\`）。
 2. 新建目录 `<游戏目录>\mods\sts2_lobby_enhance\`，把下面两个文件放进去：
    - `sts2_lobby_enhance.dll`
    - `sts2_lobby_enhance.json`
@@ -186,7 +186,7 @@ postfix：`blitz` → 「极速」（绿框）、`dread` → 「恐惧」（红�
 - `skipped=<n>` → 有 n 项判断为「这个构建不需要」，每一项都会单独打印原因
   （形如 `skipped: <id>: missing: <具体锚点>`）。
 - 出现 `no repair reported itself as needed` → 这个构建不需要任何修复，什么都没装（正常状态）。
-- 出现 `host mod 'sts2_lan_connect' is not loaded` → 官方模组没装或没被加载。
+- 出现 `host mod 'sts2_lan_connect' is not loaded` → 社区模组没装或没被加载。
 - 出现 `FAILED:` → 某项修复没装上；**只撤销它所在的那一组**，其它组照常生效。请把日志发给作者。
 
 ### 不启动游戏的验证
@@ -217,7 +217,7 @@ dotnet test tests
 
 **61 个测试 / 9 个测试类**（本机 Release 实跑：通过 61 / 失败 0 / 跳过 0），覆盖八类事实：
 
-1. **断点回归**：官方 DLL 恰好 6 处引用解析不了，名称、token、表都与文档一致；360 条
+1. **断点回归**：社区模组 DLL 恰好 6 处引用解析不了，名称、token、表都与文档一致；360 条
    `TypeSpecification` 噪声被逐条证明是探针缺泛型实参导致的假阳性（成员在声明类型上确实存在），
    不是"过滤掉了看不见的东西"。
 2. **游戏侧形态**：直接读 `sts2.dll` 元数据，断言每个断点的新旧签名，以及补丁依赖的替换 API
@@ -230,7 +230,7 @@ dotnet test tests
 4. **产物自身**：本补丁的 DLL 在 0.113 上零无法解析引用，并且带 `[ModInitializer("Init")]`；
    结算页注入的 UI 另有布局几何断言（两视口 × 六种矩形 × 两种形态，断言按钮/说明/提示互不相交且不越界）。
 5. **发布工作区**：`packaging/` 结构符合官方上传器要求，`image.png` 是 <1 MiB 的正方形 PNG，
-   `content/` 只有 4 个文件、绝不含官方模组的任何文件，且其中的 DLL 与当前构建逐字节一致。
+   `content/` 只有 4 个文件、绝不含社区模组的任何文件，且其中的 DLL 与当前构建逐字节一致。
 6. **修复清单**：`FixRegistryTests`（4 个用例）断言 `Entry.cs` 里 `CompatFixes.Build()` 产出的 id
    **集合与顺序**就是那 13 项 —— 少写一行、改名或换序都必须有人同时改断言；另外单独覆盖
    `join-screen-modes` 的分派、`unlock-extra-modes` 的两个 epoch 与「不写盘」。
@@ -238,7 +238,7 @@ dotnet test tests
    22 个用例在缺输入时会静默跳过，这条断言让「全绿但其实没跑」变成红色（可用
    `STS2_ALLOW_MISSING_GAME_INPUTS=1` 显式降级为跳过）。
 
-游戏目录、官方模组 DLL、构建产物不存在时，相关用例会**跳过**并在输出里说明原因；但
+游戏目录、社区模组 DLL、构建产物不存在时，相关用例会**跳过**并在输出里说明原因；但
 `GameDependentCoverageTests` 会因为「该跑的没跑」判红 —— 这正是反假绿的那道闸门。开发者本机没有游戏时，
 用 `STS2_ALLOW_MISSING_GAME_INPUTS=1` 显式降级为跳过（跳过信息会列出缺的每一项输入）。
 
@@ -253,10 +253,10 @@ dotnet test tests
   「日志说 applied、功能其实没有」。
 - **每项失败只回滚自己那一组。** 十个 Harmony id（`sts2_lobby_enhance.<组名>`）互相独立，
   `UnpatchAll` 只作用于出问题的那一组。
-- **依赖官方模组 ≥ 0.6.3。** 未安装时补丁静默不生效（只留一条警告日志）。
+- **依赖社区模组 ≥ 0.6.3。** 未安装时补丁静默不生效（只留一条警告日志）。
 - **联机双方都要安装本补丁。** 房主校验加入方上报的解锁状态；只装一边会在加入或新开一局时失败。
 - **局终「新开一局」要求至少一名已连接队友装了补丁**，否则不显示按钮；未安装者会留在结算页。
-- **自定义局里把大厅模式切成极速 / 恐惧的下拉框仍不提供这两项。** 官方那条路径用
+- **自定义局里把大厅模式切成极速 / 恐惧的下拉框仍不提供这两项。** 社区模组那条路径用
   `new UnlockState(SaveManager.Instance.Progress)` 直接读存档，绕过了本补丁的两个接缝；直接建房时
   选极速 / 恐惧不受影响。
 - **加入被拒时的提示会退化成笼统文案。** join 接管整体跳过了上游的四道校验，其中只剩「房主声明的失败原因」
@@ -302,9 +302,9 @@ python packaging/make-image.py
 发布前跑一遍：`dotnet test tests`（61 通过）+ `tools/smoke-test`（13 项 applied）+
 `tools/contract-check`（30 条契约）。
 
-> **官方模组升级后必须重跑 `tools/wire-verify`。** `host-wire` 用 `Priority.First` 覆盖宿主自己的
+> **社区模组升级后必须重跑 `tools/wire-verify`。** `host-wire` 用 `Priority.First` 覆盖宿主自己的
 > `SerializeJoinResponseBody`，而它的 `Applies` 只判「游戏是不是 0.113」，不判「宿主是不是已经自己修好了」；
-> 宿主若改了报文布局，我们的覆盖可能把新字段写丢。`ascension` 的 5 bit 也是照抄官方的字面常量，
+> 宿主若改了报文布局，我们的覆盖可能把新字段写丢。`ascension` 的 5 bit 也是照抄社区模组的字面常量，
 > 游戏改位宽时两边都要改。
 
 上传流程见 [`UPLOAD.md`](UPLOAD.md)（含"三处版本号必须同时改"的说明）。
@@ -321,10 +321,10 @@ python packaging/make-image.py
 ### 许可
 
 GPL-3.0，全文见 [`LICENSE`](../LICENSE)（与上游 `STS2-Game-Lobby` 的 LICENSE 逐字节一致）。
-本模组不打包官方模组的任何文件，但源码中含从该 GPL-3.0 项目移植的逻辑，因此整体以 GPL-3.0 发布。
+本模组不打包社区模组的任何文件，但源码中含从该 GPL-3.0 项目移植的逻辑，因此整体以 GPL-3.0 发布。
 第三方声明见 [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES)。
 
-本项目是社区补丁，与 MegaCrit Games 及官方模组作者无关，未获其背书。
+本项目是社区补丁，与 MegaCrit Games 及社区模组作者无关，未获其背书。
 
 ---
 

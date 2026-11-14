@@ -99,7 +99,7 @@ pwsh -NoProfile -File tools/pack-release/pack-release.ps1
 | `packaging/content/` 存在且非空 | 必须 | 上传器 |
 | `packaging/image.png` 存在 | 必须 | 上传器 |
 | `image.png` < 1 MiB | 必须（Steam 后端限制） | 本仓库测试 |
-| `content/` 只有 4 个文件，且不含官方模组任何文件 | 必须 | 本仓库测试 |
+| `content/` 只有 4 个文件，且不含社区模组任何文件 | 必须 | 本仓库测试 |
 | `content/*.dll` 与当前构建逐字节一致 | 必须 | 本仓库测试 |
 | `dist/` 里的发布包与 `content/` 逐字节一致（且只有一个候选包） | 必须 | 本仓库测试（`dist/` 存在时）+ `tools/pack-release` |
 | `dependencies` 含 `3749766330` | 必须 | 本仓库测试 |
@@ -397,9 +397,9 @@ sts2-lobby-enhance-upload-kit/
 | 首次上传 | 2026-11-14 02:30:39（+08:00） |
 | 上传账号 | 维护者朋友的 Steam 账号（昵称从略；维护者本机账号没有 AppID 2868840 的许可） |
 | 首次上传用的包 | 6,439,500 B · sha256 `72FEFE34…17365D`（**不含** `mod_id.txt`，只能用于这一次新建） |
-| 1.8.1 上传包（当前） | 6,455,081 B · sha256 `50908FD5…A47F15CF`（**含** `mod_id.txt`，上传即更新同一条目） |
+| 1.8.1 上传包（当前） | 6,455,080 B · sha256 `3BBA03CD…AC866A23`（**含** `mod_id.txt`，上传即更新同一条目） |
 | 首次上传内容（1.7.0） | 226,838 B = dll 186,368 + 清单 651 + LICENSE 35,825 + NOTICES 3,994 |
-| 1.8.1 内容 | 274,951 B = dll 234,496 + 清单 636 + LICENSE 35,825 + NOTICES 3,994 |
+| 1.8.1 内容 | 274,945 B = dll 234,496 + 清单 630 + LICENSE 35,825 + NOTICES 3,994 |
 | 可见性 | public（页面匿名可访问、有订阅按钮） |
 | 必需物品 | 3749766330（游戏大厅 / STS2 LAN Connect） |
 
