@@ -183,6 +183,26 @@ cd <解压目录>
 > 只改 #1、忘了 #2，是本项目最容易犯的错：清单是对的、包是对的，但 `dotnet test` 报
 > `Assert.Equal() Failure: Strings differ`。看到这条错误先查版本号，不要去查代码。
 
+#### `changeNote` 只写「相对上一次已发布版本」的增量
+
+工坊上那条更新说明是**给已经装着旧版的人**看的，不是版本说明书。写之前必须先确认线上现在是哪个版本，
+否则会把上一版的内容再讲一遍（1.8.1 就犯过：把 1.8.0 的全部内容重述了一遍，而 1.8.0 当时已经发布）。
+
+确认线上版本（公开接口，不需要 key）：
+
+```powershell
+(Invoke-RestMethod -Uri 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/' `
+  -Method Post -Body 'itemcount=1&publishedfileids[0]=3839101755' `
+  -ContentType 'application/x-www-form-urlencoded').response.publishedfiledetails[0] |
+  Select-Object title, time_updated, file_size, description
+```
+
+`description` 里带 `[h1]游戏大厅增强 vX.Y.Z[/h1]`，就是要对比的当前线上版本；`file_size` 可以核对
+它是否已经换成你刚打的那个包（1.8.1 = 274,951 B）。
+
+**已发布的更新说明改不了**：Steam 把它绑在那一次提交上，没有「编辑历史更新说明」的接口。
+要更正只能在**下一次**提交时写对；如果把同一份内容再提交一次，会多出一条更新记录。
+
 ### 4.2 发版步骤
 
 1. 改代码 → 按 4.1 改 #1、#2 两处版本号 + 写 `docs/CHANGELOG.md` + 写 `packaging/workshop.json` 的
@@ -377,7 +397,7 @@ sts2-lobby-enhance-upload-kit/
 | 首次上传 | 2026-11-14 02:30:39（+08:00） |
 | 上传账号 | 维护者朋友的 Steam 账号（昵称从略；维护者本机账号没有 AppID 2868840 的许可） |
 | 首次上传用的包 | 6,439,500 B · sha256 `72FEFE34…17365D`（**不含** `mod_id.txt`，只能用于这一次新建） |
-| 1.8.1 上传包（当前） | 6,456,443 B · sha256 `B50D5F72…72153E93`（**含** `mod_id.txt`，上传即更新同一条目） |
+| 1.8.1 上传包（当前） | 6,455,081 B · sha256 `50908FD5…A47F15CF`（**含** `mod_id.txt`，上传即更新同一条目） |
 | 首次上传内容（1.7.0） | 226,838 B = dll 186,368 + 清单 651 + LICENSE 35,825 + NOTICES 3,994 |
 | 1.8.1 内容 | 274,951 B = dll 234,496 + 清单 636 + LICENSE 35,825 + NOTICES 3,994 |
 | 可见性 | public（页面匿名可访问、有订阅按钮） |
