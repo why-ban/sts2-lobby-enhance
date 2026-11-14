@@ -71,7 +71,7 @@ Write-Host "  game data : $gameDataDir"
 
 Assert-FileExists (Join-Path $workspace 'workshop.json') 'Workshop config'
 Assert-FileExists (Join-Path $workspace 'image.png') 'Workshop preview image'
-Assert-FileExists (Join-Path $docsDir 'LICENSE') 'docs/LICENSE'
+Assert-FileExists (Join-Path $companion 'LICENSE') 'LICENSE'
 Assert-FileExists (Join-Path $docsDir 'THIRD_PARTY_NOTICES') 'docs/THIRD_PARTY_NOTICES'
 
 # ---------------------------------------------------------------------- build
@@ -117,7 +117,7 @@ Get-ChildItem -LiteralPath $contentDir -Force | Remove-Item -Recurse -Force
 $artifacts = @(
     @{ Source = $builtDll;                          Name = "$modId.dll" }
     @{ Source = $sourceManifest;                    Name = "$modId.json" }
-    @{ Source = (Join-Path $docsDir 'LICENSE');     Name = 'LICENSE' }
+    @{ Source = (Join-Path $companion 'LICENSE');  Name = 'LICENSE' }
     @{ Source = (Join-Path $docsDir 'THIRD_PARTY_NOTICES'); Name = 'THIRD_PARTY_NOTICES' }
 )
 

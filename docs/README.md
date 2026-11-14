@@ -1,11 +1,12 @@
-# 游戏大厅增强 v1.7.0（sts2_lobby_enhance）
+# 游戏大厅增强 v1.8.0（sts2_lobby_enhance）
 
-独立模组 `sts2_lobby_enhance`（**v1.7.0**）—— 让官方模组 `sts2_lan_connect` 0.6.3 在
+独立模组 `sts2_lobby_enhance`（**v1.8.0**）—— 让官方模组 `sts2_lan_connect` 0.6.3 在
 《Slay the Spire 2》0.113.0 上继续可用，并补上 0.113 新增的极速（Blitz）/ 恐惧（Dread）模式的联机支持。
 
-发布包按 `dist/sts2-lobby-enhance-v1.7.0.zip` 命名（打包步骤见 [`UPLOAD.md`](UPLOAD.md)）。
-注意发布件**不在**自动化校验范围内：`tests/` 不读 `dist/`，打包后必须自行比对包内 DLL 与
-`packaging/content/` 的 sha256。本次改动见 [`CHANGELOG.md`](CHANGELOG.md)。
+发布包按 `dist/sts2-lobby-enhance-v1.8.0.zip` 命名（打包步骤见 [`UPLOAD.md`](UPLOAD.md)）。
+`ReleasePackageTests.LatestReleaseZipShipsTheContentAssembly` 会断言 `dist/` 里那个包与
+`packaging/content/` 逐条目一致（2026-11-13 出过一次「dist 里的包和 content 不是同一次构建」，
+这条测试就是补那个洞的）。本次改动见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 **中文** | [English](#english)
 
@@ -333,7 +334,7 @@ python packaging/make-image.py
 
 ### 许可
 
-GPL-3.0，全文见 [`LICENSE`](LICENSE)（与上游 `STS2-Game-Lobby` 的 LICENSE 逐字节一致）。
+GPL-3.0，全文见 [`LICENSE`](../LICENSE)（与上游 `STS2-Game-Lobby` 的 LICENSE 逐字节一致）。
 本模组不打包官方模组的任何文件，但源码中含从该 GPL-3.0 项目移植的逻辑，因此整体以 GPL-3.0 发布。
 第三方声明见 [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES)。
 
@@ -345,14 +346,13 @@ GPL-3.0，全文见 [`LICENSE`](LICENSE)（与上游 `STS2-Game-Lobby` 的 LICEN
 
 ### What this is
 
-An independent mod, `sts2_lobby_enhance` (**v1.7.0**), that keeps the official mod
+An independent mod, `sts2_lobby_enhance` (**v1.8.0**), that keeps the official mod
 `sts2_lan_connect` 0.6.3 working after Slay the Spire 2 0.113.0, and adds multiplayer support for the
 two game modes 0.113 introduced: Blitz (极速) and Dread (恐惧).
 
-The release package is named `dist/sts2-lobby-enhance-v1.7.0.zip` (packaging steps in
-[`UPLOAD.md`](UPLOAD.md)). The archive is **not** covered by automation — no test reads `dist/` — so after
-packaging you must compare the DLL inside it against `packaging/content/` by sha256 yourself. What changed:
-[`CHANGELOG.md`](CHANGELOG.md).
+The release package is named `dist/sts2-lobby-enhance-v1.8.0.zip` (packaging steps in
+[`UPLOAD.md`](UPLOAD.md)). `ReleasePackageTests.LatestReleaseZipShipsTheContentAssembly` asserts that the
+zip in `dist/` matches `packaging/content/` entry by entry. What changed: [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Three kinds of content
 
@@ -656,7 +656,7 @@ whoever touches that code sees them — instead of in separate records:
 
 ### Licence
 
-GPL-3.0; see [`LICENSE`](LICENSE), which is byte-identical to the upstream `STS2-Game-Lobby` copy. No
+GPL-3.0; see [`LICENSE`](../LICENSE), which is byte-identical to the upstream `STS2-Game-Lobby` copy. No
 file from the official mod is redistributed, but the source does contain logic ported from that
 GPL-3.0 project, so this project is distributed under GPL-3.0 as a whole. See
 [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES).

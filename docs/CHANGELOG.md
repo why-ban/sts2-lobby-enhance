@@ -326,4 +326,4 @@ Harmony 也读不出它们的 IL，因此修复都落在可读的调用者或异
 ### 许可
 
 GPL-3.0。本项目不打包官方模组的任何文件，但源码含从该 GPL-3.0 项目移植的逻辑，详见
-[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) 与 [`LICENSE`](LICENSE)。
+[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) 与 [`LICENSE`](../LICENSE)。

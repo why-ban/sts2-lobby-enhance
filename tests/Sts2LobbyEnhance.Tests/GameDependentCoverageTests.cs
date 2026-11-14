@@ -126,10 +126,10 @@ public sealed class GameDependentCoverageTests
 
         foreach (string name in new[] { "LICENSE", "THIRD_PARTY_NOTICES" })
         {
-            string path = Path.Combine(TestPaths.DocsDirectory, name);
+            string path = TestPaths.DocumentationSource(name);
             if (!File.Exists(path))
             {
-                missing.Add($"docs/{name} is missing.");
+                missing.Add($"{name} is missing from {Path.GetDirectoryName(path)}.");
             }
         }
 

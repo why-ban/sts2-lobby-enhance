@@ -20,7 +20,7 @@
 | 手机 logcat | `work\logs\new-report-2\internal-files\logs\sts2.log` | 244 行 |
 | 启动器日志 | `...\instances\v0.113.0-16ac0fe3--d32b3370\logs\android-launch.log` | 185 行 |
 | 移植层 diag | `work\logs\new-report-2\internal-files\logs\compat-diag.log` | 9531 行 |
-| PC 房主日志 | `C:\Users\Administrator\AppData\Roaming\SlayTheSpire2\logs\godot.log` | 2535 行 |
+| PC 房主日志 | `%APPDATA%\SlayTheSpire2\logs\godot.log` | 2535 行 |
 | 游戏 0.113 反编译 | `work\compat\decompiled-v0.113.0\` | — |
 | **移植层反编译源码** | `work\lead\v8dec\`（`STS2Mobile.Patches\*`） | 83 文件 |
 

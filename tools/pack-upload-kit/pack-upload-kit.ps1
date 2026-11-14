@@ -18,7 +18,7 @@
 [CmdletBinding()]
 param(
     # 官方上传器 v0.2.0 的解压目录（含 ModUploader.exe / steam_api64.dll / steam_appid.txt）
-    [string] $UploaderSource = 'C:\Users\Administrator\AppData\Local\Temp\sts2uploader\extracted',
+    [string] $UploaderSource = (Join-Path $env:TEMP 'sts2uploader\extracted'),
 
     # 产物输出目录，默认 <workspace>\dist
     [string] $OutDir = '',

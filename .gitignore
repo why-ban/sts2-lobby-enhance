@@ -9,6 +9,9 @@ packaging/content/
 zip-stage/
 *.zip
 
+# Tool run records (contain machine-specific paths)
+*.log
+
 # Python
 __pycache__/
 *.pyc

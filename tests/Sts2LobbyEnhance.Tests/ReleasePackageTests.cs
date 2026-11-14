@@ -282,7 +282,7 @@ public sealed class ReleasePackageTests
         foreach (string name in new[] { "LICENSE", "THIRD_PARTY_NOTICES" })
         {
             string packaged = Path.Combine(ContentDirectory, name);
-            string source = Path.Combine(TestPaths.DocsDirectory, name);
+            string source = TestPaths.DocumentationSource(name);
 
             if (!File.Exists(packaged))
             {
@@ -307,7 +307,7 @@ public sealed class ReleasePackageTests
 
         foreach ((string file, int minimumBytes) in required)
         {
-            string path = Path.Combine(TestPaths.DocsDirectory, file);
+            string path = TestPaths.DocumentationSource(file);
             Assert.True(File.Exists(path), $"Missing documentation file: {path}");
             Assert.True(
                 new FileInfo(path).Length >= minimumBytes,
@@ -340,7 +340,7 @@ public sealed class ReleasePackageTests
     [Fact]
     public void LicenseIsTheUnmodifiedGnuGplText()
     {
-        string license = Path.Combine(TestPaths.DocsDirectory, "LICENSE");
+        string license = Path.Combine(TestPaths.CompanionRoot, "LICENSE");
         string text = File.ReadAllText(license);
 
         Assert.Contains("GNU GENERAL PUBLIC LICENSE", text, StringComparison.Ordinal);

@@ -49,6 +49,13 @@ internal static class TestPaths
 
     internal static string DocsDirectory => Path.Combine(CompanionRoot, "docs");
 
+    /// <summary>
+    /// Source file the upload ships, by name. The licence sits at the repository root so GitHub recognises
+    /// it; the packaging script and these tests follow that one copy instead of keeping a second one in docs/.
+    /// </summary>
+    internal static string DocumentationSource(string name) =>
+        name == "LICENSE" ? Path.Combine(CompanionRoot, name) : Path.Combine(DocsDirectory, name);
+
     internal static string TestsDirectory => Path.Combine(CompanionRoot, "tests");
 
     /// <summary>
