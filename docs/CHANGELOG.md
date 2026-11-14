@@ -4,7 +4,8 @@
 
 ## [1.8.0] - 2026-11-14
 
-目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项 **10**（新增 `room-card-pill`）。
+目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项 **14**（1.7.0 的 9 项 + 新增 5 项：
+`room-card-pill`、`new-protocol-only`、`roster-rebaseline`、`load-join-order`、`new-run-save-binding`）。
 
 ### 修复（可靠性重构）
 
@@ -13,10 +14,19 @@
   参数类型逐个比对），缺一个只跳过它自己，并在日志里打印 `skipped: <id>: missing: <具体锚点>`。
 - **启动探测不再抛异常。** `CompatProbe.Capture()` 里 6 个探测各自 try/catch，游戏类型一律用字符串
   `Assembly.GetType` 查；以前它用 `typeof()`，类型一改名探测自己就抛，导致**一个修复项都装不上**。
-- **失败只回滚自己那一组。** 九个 Harmony id（`sts2_lobby_enhance.<组名>`）互相独立，
+- **失败只回滚自己那一组。** 十一个 Harmony id（`sts2_lobby_enhance.<组名>`）互相独立，
   `UnpatchAll` 只作用于出问题的那一组；以前任一项失败会把全部 9 项一起拆掉。
 - **`Applies()` 移进 try/catch**，探测抛异常不再留下「无回滚、无记录、已装补丁还活着」的状态。
 - **房间卡片模式标注拆成独立项 `room-card-pill`**（纯装饰）。以前一个颜色属性改名就能带走全部修复项。
+
+### 行为变更
+
+- **建房只提供「新协议」（`new-protocol-only`）。** 0.113 里 RitsuLib 只在 `tail_v1` 下允许
+  （`LanConnectCreateRoomIntent.cs:17-19` 抛 `RitsuLibNotAllowedInCompat`），而新旧协议联机体验无差别，
+  所以把旧协议入口隐藏掉。postfix 挂在 `RefreshProtocolProfileOptionAvailability` 上：仅当
+  `IsCreateProtocolSelectable(301, offer, tailAvailable)` 为真时才动手，把 `_protocolCompatButton` 隐藏、
+  `_selectedCreateProtocolId` 置 301、重跑两个刷新方法。**一行代码都没删**，加入旧协议房间完全不受影响
+  （那条路读房间广播，根本不碰这两个按钮）。
 
 ### 修复（真实缺陷）
 
