@@ -2,6 +2,74 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循语义化版本。
 
+## [2.1.0] - 2026-11-15
+
+目标游戏 **0.113**；依赖 `sts2_lan_connect` **0.6.4**。修复项 **5 → 12**，Harmony 分组 **4 → 9**。
+
+这一版第一次做「扩展」而不只是「修补」：大厅列表不再只显示一台服务器的房间，聊天可以换服务器看，
+手机能正常滑动聊天。原有的 5 项修复一项没少。
+
+### 新增功能
+
+#### 1. 服务器池（`server-pool-refresh` / `server-pool-join` / `server-pool-create`，组 `Pool`）
+
+- 房间列表变成**所有服务器的池**：客户端并发拉每台的 `GET /rooms`，逐台回填，哪台先回来先显示。
+- 数据键是 `(baseUrl, roomId)`：`roomId` 是各服独立的 UUIDv4，没有服务器命名空间（`lobby-service/src/store.ts:361`），
+  只存 roomId 必然 404。
+- 排序：与本机游戏版本相同优先 → `currentPlayers` 降序 → 该服延迟升序 → 上游原顺序。
+- 卡片第二行（`BuildRoomMetaRow:3943`，`HFlowContainer` 会换行）追加 muted 小字 `来源：{短名}`。
+- **跨服加入**：点别的服务器的房间会先 `SwitchLobbyServerAsync`（上游邀请码同一条路，`LanConnectInviteServerJoinCoordinator.cs:63-150`），
+  再重拉该服列表确认房间仍在，然后走原加入流程。切服是上游语义，会退房、重启公共频道、写 `config.json` 的默认服务器。
+- **建房选服**：`CreateRoomAsync` 之前切到「延迟最低且 `createRoomGuardStatus == allow`」的一台，最多试 3 台；30 ms 迟滞避免抖动。
+- 单台 **2 s** 硬顶（用 `CancellationToken`，不是 `HttpClient.Timeout`——后者写死 10 s 改不了），死节点静默跳过，全失败保留上一轮。
+
+#### 2. 「相同版本」筛选器（`room-version-filter`，组 `Filter`）
+
+- 筛选弹窗新增「版本」节，一个 chip「相同游戏版本」；**只比游戏版本**（`LobbyRoomSummary.Version`），不比 Mod 版本、不比协议档位。
+- 谓词落在 `GetFilteredRooms` 的 postfix（`:7036`，5 个调用点全覆盖），原地删元素，不换 List 实例。
+- 上游没有排序（`Sort`/`OrderBy` 全仓 0 命中），筛选顺序即服务端返回顺序。
+- 弹窗原本是固定 360 px 高（`CreateDialogShell:3158-3175` 的 `OffsetTop/Bottom = ∓180`），加一节会溢出，
+  所以同时把 `MarginContainer` 上下各放大 43 px。
+
+#### 3. 聊天换服务器（`chat-server-switch`，组 `Chat`）
+
+- 聊天标题行右侧加 `‹ {服务器短名} ›`。切的是**公共频道连哪台**，不切大厅服务器、不退出房间、不写 config。
+- 走 `LanConnectRotatingServerChatPort.ConnectAsync`（`:777-838`）：它会 dispose 旧 client 并接新 coordinator，
+  `runtime.Chat.Server` 换成新对象，overlay 的 `EnsureCurrentLobbyServerChatBinding`（`:2185-2200`）自动 rebind。
+- **切换前必须 `GET /probe` 预检 `capabilities.serverChatVersion == 1`**：连到不支持的目标会让客户端
+  `MarkPermanentStop(Unsupported)`（`LanConnectServerChatClient.cs:181-189`）且重连循环对该异常直接 return
+  （`:1048-1059`），一次误切 = 本次进程内公共频道彻底死掉。预检结果缓存 5 分钟。
+- 候选顺序：当前服 → 置顶服（`LanConnectServerListBootstrap.FeaturedServerAddress`）→ 其余按延迟升序，只保留支持频道的。
+
+#### 4. 手机端聊天操作（`touch-chat-scroll`，组 `Touch`）
+
+- 根因不是「开了选中」，是两件事叠加：
+  `MouseFilter = Stop`（`LanConnectRichMessageView.cs:55`）让 Godot 在标签这层吞掉指针事件，外层
+  `ScrollContainer` 收不到拖动；同时 `emulate_mouse_from_touch` 默认 true，触摸被合成鼠标，
+  `RichTextLabel` 按下即落选区锚点、移动即扩选。
+- 手机端：`SelectionEnabled = false` + `MouseFilter = Pass`（拖动回到滚动容器）；长按 **400 ms** 且位移 < **16 px** 复制整条；
+  滚动条 `CustomMinimumSize` 加宽到 44 px。
+- 总闸是 `OS.HasFeature("mobile")`：**PC 上一行属性都不写、一个回调都不挂**，拖拽仍是框选。
+  不用 `DisplayServer.IsTouchscreenAvailable()`——Windows 触屏本也是 true，会把 PC 的框选关掉。
+
+#### 5. 公告来源与滚轮（`announcement-source`，组 `Announce`）
+
+- 每条公告正文下方加红字 `来源：{服务器名}`；标题不动（用户要求：服务器名太长，不塞标题）。
+- 轮播支持滚轮上/下翻页（`_frame` 才是收到事件的 Stop 控件，`:131`）。
+- `LobbyAnnouncementItem` 只有 6 个字段且 `SetAnnouncements` 显式拷贝（`:87-96`），加字段会被丢掉，所以来源只能渲染层落地。
+- 分组理由：轮播是独立接缝，锚点坏掉不该把整块房间池一起回滚。
+
+### 保留（5 项不变）
+
+`roster-rebaseline`、`load-join-order`、`new-run-button`、`new-run-save-binding`、`new-protocol-only`。
+
+### 说明
+
+- 每个新修复都有自己的 `Shape.TryCapture` 锚点探针；任一锚点缺失就 clean skip 并把缺的成员写进日志，绝不半装。
+- `Applies()` / `Apply()` 里**零 Godot 调用**（平台判断、节点操作全在补丁体内），所以 `tools/smoke-test` 能在无 Godot 的进程里验证全部 12 项。
+- 已知限制：跨服加入会切服（退房 + 重启频道 + 写默认服务器），这是上游 `SwitchLobbyServerAsync` 的语义，我们没有绕开它；
+  池刷新沿用上游 8 s 节拍（只在大厅页面可见时跑）。
+
 ## [2.0.0] - 2026-11-15
 
 目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.4**（原 0.6.3）。修复项 **13 → 5**，Harmony 分组 **10 → 4**。

@@ -198,7 +198,19 @@ cd <解压目录>
 ```
 
 `description` 里带 `[h1]游戏大厅增强 vX.Y.Z[/h1]`，就是要对比的当前线上版本；`file_size` 可以核对
-它是否已经换成你刚打的那个包（2.0.0 = 160,841 B）。
+它是否已经换成你刚打的那个包。
+
+> **这台机器上直连 `api.steampowered.com` 是不通的**（curl 21 秒超时），必须走代理，并且 curl 要加
+> `--ssl-no-revoke`（本机证书吊销检查离线）：
+>
+> ```powershell
+> curl.exe -sS --ssl-no-revoke -x http://127.0.0.1:7890 -X POST `
+>   -H "Content-Type: application/x-www-form-urlencoded" `
+>   -d "itemcount=1&publishedfileids[0]=3839101755" `
+>   https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/
+> ```
+>
+> 2026-11-15 实测基线：**线上是 2.0.0**，`time_updated = 2026-11-15T06:38:05Z`，`file_size = 160,841 B`。
 
 **已发布的更新说明改不了**：Steam 把它绑在那一次提交上，没有「编辑历史更新说明」的接口。
 要更正只能在**下一次**提交时写对；如果把同一份内容再提交一次，会多出一条更新记录。
@@ -397,7 +409,11 @@ sts2-lobby-enhance-upload-kit/
 | 首次上传 | 2026-11-14 02:30:39（+08:00） |
 | 上传账号 | 维护者朋友的 Steam 账号（昵称从略；维护者本机账号没有 AppID 2868840 的许可） |
 | 首次上传用的包 | 6,439,500 B · sha256 `72FEFE34…17365D`（**不含** `mod_id.txt`，只能用于这一次新建） |
-| 2.0.0 上传包（当前） | 6,418,628 B · sha256 `43234A0E…6457422190`（**含** `mod_id.txt`，上传即更新同一条目） |
+| 2.0.0 上传包 | 6,418,628 B · sha256 `43234A0E…6457422190`（**含** `mod_id.txt`，上传即更新同一条目） |
+| **2.0.0 已上线** | 2026-11-15T06:38:05Z（本地 14:38），线上 `file_size = 160,841 B`，描述首行 `v2.0.0` |
+| **2.1.0 上传包（当前，待上传）** | 6,470,087 B · sha256 `C0115636CE14885E6B252FD73FA564F93F6BB4B2056A6BF327201D3BF7EB199A` |
+| 2.1.0 发布包 | 112,820 B · sha256 `0493807E369FACC9D6425C34B7F055FBACB01688F38C1541177B038161DB4923` |
+| 2.1.0 内容 | 287,030 B = dll 246,272 + 清单 939 + LICENSE 35,825 + NOTICES 3,994 |
 | 首次上传内容（1.7.0） | 226,838 B = dll 186,368 + 清单 651 + LICENSE 35,825 + NOTICES 3,994 |
 | 2.0.0 内容 | 160,841 B = dll 120,320 + 清单 702 + LICENSE 35,825 + NOTICES 3,994 |
 | 可见性 | public（页面匿名可访问、有订阅按钮） |

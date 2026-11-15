@@ -409,5 +409,12 @@ internal static class CompatFixes
         yield return new NewRunFromGameOverFix();
         yield return new NewRunSaveBindingFix();
         yield return new NewProtocolOnlyFix();
+        yield return new RoomVersionFilterFix();
+        yield return new TouchChatScrollFix();
+        yield return new ChatServerSwitchFix();
+        yield return new AnnouncementSourceFix();
+        yield return new PoolRefreshFix();
+        yield return new PoolJoinFix();
+        yield return new PoolCreateFix();
     }
 }

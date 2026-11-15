@@ -18,7 +18,23 @@ internal enum FixGroup
     Roster,
 
     /// <summary>Load-join player ordering (independent of Roster: it runs on every save load, that one on every start)</summary>
-    LoadOrder
+    LoadOrder,
+
+    /// <summary>Room-list narrowing by game version. Answers only to the filter row, which is a different seam</summary>
+    Filter,
+
+    /// <summary>Server pool: fan-out room collection, origin badges and the server switch a cross-server join needs</summary>
+    Pool,
+
+    /// <summary>Touch scrolling and long-press selection in the chat panel; the only group that reads the platform</summary>
+    Touch,
+
+    /// <summary>Switching which server's public channel the chat panel is attached to</summary>
+    Chat,
+
+    /// <summary>Announcement rendering: the per-server source line and wheel paging. Separate from Pool so a
+    /// carousel shape change costs the carousel, not the room list</summary>
+    Announce
 }
 
     /// <summary>

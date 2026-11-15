@@ -35,7 +35,14 @@ public sealed class FixRegistryTests
         "load-join-order",
         "new-run-button",
         "new-run-save-binding",
-        "new-protocol-only"
+        "new-protocol-only",
+        "room-version-filter",
+        "touch-chat-scroll",
+        "chat-server-switch",
+        "announcement-source",
+        "server-pool-refresh",
+        "server-pool-join",
+        "server-pool-create"
     ];
 
     private static string ScriptsDirectory =>
@@ -91,7 +98,12 @@ public sealed class FixRegistryTests
         return match.Groups["body"].Value;
     }
 
-    /// <summary>Reads <c>public string Id =&gt; "..."</c> out of the fix's own file.</summary>
+    /// <summary>
+    /// Reads the id out of the fix's own file. Two shapes are accepted, because both are in use:
+    /// <c>public string Id =&gt; "literal";</c> and <c>public string Id =&gt; FixId;</c> where <c>FixId</c> is a
+    /// <c>const string</c> in the same file. The indirection is checked rather than skipped: a const that
+    /// cannot be resolved fails the test instead of silently passing.
+    /// </summary>
     private static string ResolveFixId(string className)
     {
         string[] candidates = Directory.GetFiles(ScriptsDirectory, className + ".cs", SearchOption.AllDirectories);
@@ -99,8 +111,25 @@ public sealed class FixRegistryTests
             candidates.Length == 1,
             $"Expected exactly one source file for {className}, found {candidates.Length}.");
 
-        Match match = Regex.Match(File.ReadAllText(candidates[0]), @"public\s+string\s+Id\s*=>\s*""(?<id>[^""]+)"";");
-        Assert.True(match.Success, $"Could not find 'public string Id => ...' in {candidates[0]}.");
-        return match.Groups["id"].Value;
+        string source = File.ReadAllText(candidates[0]);
+        Match literal = Regex.Match(source, @"public\s+string\s+Id\s*=>\s*""(?<id>[^""]+)"";");
+        if (literal.Success)
+        {
+            return literal.Groups["id"].Value;
+        }
+
+        Match reference = Regex.Match(source, @"public\s+string\s+Id\s*=>\s*(?<name>[A-Za-z_]\w*)\s*;");
+        Assert.True(
+            reference.Success,
+            $"Could not find 'public string Id => \"...\";' or 'public string Id => <Const>;' in {candidates[0]}.");
+
+        string constName = reference.Groups["name"].Value;
+        Match constant = Regex.Match(
+            source,
+            @"const\s+string\s+" + Regex.Escape(constName) + @"\s*=\s*""(?<id>[^""]+)""\s*;");
+        Assert.True(
+            constant.Success,
+            $"Id => {constName} but no 'const string {constName} = \"...\";' in {candidates[0]}.");
+        return constant.Groups["id"].Value;
     }
 }

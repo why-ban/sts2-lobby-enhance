@@ -40,7 +40,14 @@ string[] expectedFixIds =
     "load-join-order",
     "new-run-button",
     "new-run-save-binding",
-    "new-protocol-only"
+    "new-protocol-only",
+    "room-version-filter",
+    "touch-chat-scroll",
+    "chat-server-switch",
+    "announcement-source",
+    "server-pool-refresh",
+    "server-pool-join",
+    "server-pool-create"
 ];
 
 // 每一项修复至少要有这一处 Harmony 接缝被真正打上。id 出现在 applied 里只证明 Apply() 没抛异常，
@@ -52,7 +59,14 @@ string[] expectedFixIds =
     ("load-join-order",    "LanConnectTailMessageRuntime",     "RestoreLoadJoin"),
     ("new-run-button",     "NGameOverScreen",                  "_Ready"),
     ("new-run-save-binding", "RunManager",                       "SetUpNewMultiplayer"),
-    ("new-protocol-only",  "LanConnectLobbyOverlay",           "RefreshProtocolProfileOptionAvailability")
+    ("new-protocol-only",  "LanConnectLobbyOverlay",           "RefreshProtocolProfileOptionAvailability"),
+    ("room-version-filter", "LanConnectLobbyOverlay",           "GetFilteredRooms"),
+    ("touch-chat-scroll",   "LanConnectRichMessageView",        "_Ready"),
+    ("chat-server-switch",  "LanConnectBasicChatPanel",         "UpdateAvailability"),
+    ("announcement-source", "LanConnectLobbyOverlay",           "ApplyAnnouncements"),
+    ("server-pool-refresh", "LanConnectLobbyOverlay",           "RefreshRoomsAsync"),
+    ("server-pool-join",    "LanConnectLobbyOverlay",           "BeginJoinRoomAsync"),
+    ("server-pool-create",  "LanConnectLobbyOverlay",           "CreateRoomAsync")
 ];
 
 AppDomain.CurrentDomain.AssemblyResolve += (_, eventArgs) =>
