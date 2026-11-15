@@ -178,9 +178,8 @@ static string CheckFixWiring(out int exitCode)
     }
 
     Type? fixType = patch.GetType(fixTypeName, throwOnError: false);
-    Type? snapshotType = patch.GetType("Sts2LobbyEnhance.CompatSnapshot", throwOnError: false);
     Type? entryType = patch.GetType("Sts2LobbyEnhance.Entry", throwOnError: false);
-    if (fixType == null || snapshotType == null || entryType == null)
+    if (fixType == null || entryType == null)
     {
         return $"SKIP: {Path.GetFileName(patchDll)} predates this repair (no {fixTypeName}).";
     }
@@ -190,12 +189,12 @@ static string CheckFixWiring(out int exitCode)
     entryType.GetField("_suppressLogging", BindingFlags.Static | BindingFlags.NonPublic)?.SetValue(null, true);
 
     object fix = Activator.CreateInstance(fixType, nonPublic: true)!;
-    object compat = Activator.CreateInstance(snapshotType)!;
 
-    object?[] appliesArguments = [compat, null];
+    // Since 2.0.0 Applies() takes no game-version snapshot: the only out-parameter is the skip reason.
+    object?[] appliesArguments = [null];
     bool applies = (bool)fixType.GetMethod("Applies", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
         .Invoke(fix, appliesArguments)!;
-    string reason = appliesArguments[1] as string ?? string.Empty;
+    string reason = appliesArguments[0] as string ?? string.Empty;
 
     if (!applies)
     {
@@ -205,7 +204,7 @@ static string CheckFixWiring(out int exitCode)
 
     var harmony = new HarmonyLib.Harmony("sts2_lobby_enhance.newrun.probe");
     fixType.GetMethod("Apply", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
-        .Invoke(fix, [harmony, compat]);
+        .Invoke(fix, [harmony]);
 
     MethodBase? seam = harmony.GetPatchedMethods().FirstOrDefault(method =>
         string.Equals(method.Name, "SetUpNewMultiplayer", StringComparison.Ordinal)

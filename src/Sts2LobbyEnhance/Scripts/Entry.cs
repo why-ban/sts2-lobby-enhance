@@ -78,30 +78,10 @@ public static class Entry
         _suppressLogging = silent;
         try
         {
-    // Capture() guards each probe internally, but not its OWN type initialiser: a throwing static initialiser
-    // surfaces as TypeInitializationException at the first static member access, which is this line and outside
-    // Capture()'s try. Losing one snapshot is acceptable, losing the whole startup report is not
-            CompatSnapshot snapshot = default;
-            string? captureFailure = null;
-            try
-            {
-                CompatProbe.Logger ??= Info;
-                snapshot = CompatProbe.Capture();
-            }
-            catch (Exception exception)
-            {
-    // Keep going with an all-false snapshot: repairs that do not depend on a flag still install, and the ones
-    // that do skip with a "missing: ..." reason. Aborting here would be the old global switch in disguise
-                captureFailure = "CompatProbe.Capture(): " + exception.GetType().Name + ": " + exception.Message +
-                                 " (repairs that read a flag will skip; those that do not still install)";
-            }
+            var report = new StartupReport();
 
-            var report = new StartupReport(snapshot);
-            if (captureFailure != null)
-            {
-                report.Failed.Add(captureFailure);
-            }
-
+            // The only remaining global precondition: every repair patches the host mod, so if it is not
+            // loaded there is nothing to do. Everything else is decided per repair in its own Applies()
             Assembly? host = Reflect.FindAssembly(HostModAssemblyName);
             if (host == null)
             {
@@ -127,7 +107,7 @@ public static class Entry
 
             foreach (ICompatFix fix in fixes)
             {
-                Install(fix, snapshot, report);
+                Install(fix, report);
             }
 
             report.Inert = report.Applied.Count == 0 && report.Failed.Count == 0;
@@ -143,7 +123,7 @@ public static class Entry
     /// Ask, then patch, then record. Never lets an exception escape, because one repair is not allowed to decide
     /// whether the other repairs run
     /// </summary>
-    private static void Install(ICompatFix fix, CompatSnapshot snapshot, StartupReport report)
+    private static void Install(ICompatFix fix, StartupReport report)
     {
         GroupReport group = report.GroupFor(fix.Group);
 
@@ -151,7 +131,7 @@ public static class Entry
         bool applies;
         try
         {
-            applies = fix.Applies(snapshot, out reason);
+            applies = fix.Applies(out reason);
         }
         catch (Exception exception)
         {
@@ -170,7 +150,7 @@ public static class Entry
 
         try
         {
-            fix.Apply(group.Harmony, snapshot);
+            fix.Apply(group.Harmony);
             group.Applied.Add(fix.Id);
             report.Applied.Add(fix.Id);
         }
@@ -228,8 +208,6 @@ public static class Entry
 
     private static void Announce(StartupReport report)
     {
-        Info($"game probe: {report.Snapshot.Describe()}");
-
         if (report.HostMissing)
         {
             Warn(
@@ -344,20 +322,12 @@ public static class Entry
 }
 
     /// <summary>
-    /// Outcome of one startup. The first five properties are read by out-of-process harnesses,
-    /// <c>tools/smoke-test</c> by reflection over their names and <c>tools/wire-verify</c> by compiling against
-    /// them, so their names and types are part of the contract
+    /// Outcome of one startup. <c>tools/smoke-test</c> reads these by reflection over their names, so the names
+    /// and types are part of the contract
     /// </summary>
 internal sealed class StartupReport
 {
     private readonly List<GroupReport> _groups = new();
-
-    internal StartupReport(CompatSnapshot snapshot)
-    {
-        Snapshot = snapshot;
-    }
-
-    internal CompatSnapshot Snapshot { get; }
 
     /// <summary>
     /// True when this startup installed nothing and nothing failed. It describes the run, it gates nothing

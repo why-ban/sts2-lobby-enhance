@@ -34,8 +34,10 @@
 - `DisconnectClient` / `ConnectedPeers` 两种形状自适应：`LanConnectNetHostCompatibility.cs:11-40`、`:42-65`；
 - 放弃本局：`Lobby/LanConnectMultiplayerSaveCompatibility.cs:283-348`，进度写入按名反射（`:350-364`）。
 
-实测证据：用本仓库的 `tools/tail-readability` 扫 0.6.4 的出货 DLL —— **「引用失效成员的方法」列表为空**
-（`examined=192 probeLimited=20 unexplainedBroken=0`）；同一工具扫 0.6.3 会列出 7 个方法。
+实测证据（记录在 [`CHANGELOG.md`](CHANGELOG.md) 的 2.0.0 段）：扫过 0.6.4 的出货 DLL，
+**引用失效成员的方法列表为空**（`examined=192 probeLimited=20 unexplainedBroken=0`）；同一份扫描
+在 0.6.3 上会列出 7 个方法。扫出这个结果的一次性工具已随那批修复一起从仓库删除，
+所以现在没有「启动探测」可跑 —— 这条结论由 `BreakpointRegressionTests` 在测试里继续守着。
 所以这 6 处不再是我们的工作，继续留着只会盖住上游已经修好的实现。
 
 ### 这个补丁现在包含什么
@@ -126,8 +128,6 @@
 启动游戏后，在日志里搜 `[lobby-enhance]`。0.113 上的正常输出形如：
 
 ```
-[lobby-enhance] game probe: breaks[gameModeGone=True,maxAscensionUnlockedGone=True,disconnectClient4=True,
-          connectedPeersIReadOnly=True,generateRelicFight4=True,updateProgressReturns=True]
 [lobby-enhance] host mod: sts2_lan_connect 0.6.4.0 @ ...\sts2_lan_connect.dll
 [lobby-enhance] applied: roster-rebaseline
 [lobby-enhance] applied: load-join-order
@@ -138,8 +138,8 @@
           new-run-save-binding,new-protocol-only] skipped=0[] failed=0
 ```
 
-`game probe` 那行仍然打印游戏侧 6 个签名变化的判定，但它**只是诊断**：本版没有任何一项修复再据此决定
-装不装（`Core/CompatProbe.cs`）。判定标准：
+本版**不再打印任何探测行**：2.0.0 删掉了「启动探测 6 个断点」的整套机制和读它的 8 项修复，日志里
+只剩下面这些。判定标准：
 
 - `applied=5 ... failed=0` → 5 项修复全部装上。
 - `skipped=<n>` → 有 n 项判断为「这个构建不需要」，每一项都会单独打印原因
@@ -153,13 +153,10 @@
 仓库自带几个不需要开游戏的控制台工具（需要 .NET 9 SDK 与已安装的游戏）：
 
 ```powershell
-# 1) 诊断：打印游戏侧 6 个签名变化的当前判定（不装补丁，本版不再据此决定修复）
-dotnet run --project tools/probe-check -c Release
-
-# 2) 跑 Entry.RunSilently()，确认 5 项修复真的挂上了
+# 1) 跑 Entry.RunSilently()，确认 5 项修复真的挂上了
 dotnet run --project tools/smoke-test -c Release
 
-# 3) 补丁依赖的上游反射成员（3 条契约，只覆盖 Core/TailRoster.cs）
+# 2) 补丁依赖的上游反射成员（3 条契约，只覆盖 Core/TailRoster.cs）
 dotnet run --project tools/contract-check -c Release
 ```
 
@@ -206,7 +203,7 @@ dotnet test tests
 
 - **只针对 0.113 验证。** 开发与验证基于 0.113（0.113.0 commit `16ac0fe3`；0.113.1 的 mod 元数据
   形状与之一致）。其它大版本没有验证过。
-- **没有「总开关」，每项自己判断。** 每项修复在 `Applies(in CompatSnapshot, out string reason)` 里自己
+- **没有「总开关」，每项自己判断。** 每项修复在 `Applies(out string reason)` 里自己
   解析锚点（类型 / 方法 / 参数类型逐个比对），缺一个只跳过它自己，并在日志里打印
   `skipped: <id>: missing: <具体锚点>`。所以将来上游改了某个东西，**受影响的那一项会明确跳过，其余照常工作**。
 - **每项失败只回滚自己那一组。** 四个 Harmony id（`sts2_lobby_enhance.<组名>`：`newrun` / `modes` /
@@ -294,10 +291,12 @@ The shipped 0.6.3 build referenced six members 0.113 no longer provides
 - abandon run: `Lobby/LanConnectMultiplayerSaveCompatibility.cs:283-348`, progress write resolved by name
   (`:350-364`).
 
-Measured: `tools/tail-readability` against the shipped 0.6.4 DLL lists **no method that references an
-unresolvable member** (`examined=192 probeLimited=20 unexplainedBroken=0`); the same tool against 0.6.3
-lists seven. Those six breaks are no longer our work — keeping the fixes would only cover up upstream's
-own, working implementation.
+Measured (recorded in the 2.0.0 section of [`CHANGELOG.md`](CHANGELOG.md)): a scan of the shipped 0.6.4 DLL
+lists **no method that references an unresolvable member** (`examined=192 probeLimited=20
+unexplainedBroken=0`); the same scan on 0.6.3 lists seven. The one-off scanner that produced that number
+was deleted along with those repairs, so there is no startup probe to run any more —
+`BreakpointRegressionTests` keeps the conclusion guarded instead. Those six breaks are no longer our work;
+keeping the fixes would only cover up upstream's own, working implementation.
 
 ### What this patch contains now
 
@@ -387,8 +386,8 @@ Search the game log for `[lobby-enhance]`. On 0.113 the expected summary line is
           new-run-save-binding,new-protocol-only] skipped=0[] failed=0
 ```
 
-The `game probe` line still prints the game-side verdict for the six signature changes, but it is
-**diagnostic only**: no repair in this version gates on it any more (`Core/CompatProbe.cs`).
+This version prints **no probe line at all**: 2.0.0 deleted the six-break startup probe together with the
+eight repairs that read it, so the log contains only the lines below.
 
 - `applied=5 ... failed=0` — all five fixes installed.
 - `skipped=<n>` — n repairs decided this build does not need them; each prints its own reason
@@ -401,13 +400,10 @@ The `game probe` line still prints the game-side verdict for the six signature c
 ### Verifying without launching the game
 
 ```powershell
-# 1) diagnostic: the game-side verdict for the six signature changes (installs nothing; not a gate any more)
-dotnet run --project tools/probe-check -c Release
-
-# 2) runs Entry.RunSilently() and reports which repairs Harmony actually installed
+# 1) runs Entry.RunSilently() and reports which repairs Harmony actually installed
 dotnet run --project tools/smoke-test -c Release
 
-# 3) the upstream reflection members the patch depends on (3 contracts, Core/TailRoster.cs only)
+# 2) the upstream reflection members the patch depends on (3 contracts, Core/TailRoster.cs only)
 dotnet run --project tools/contract-check -c Release
 ```
 
@@ -462,7 +458,7 @@ Set `STS2_ALLOW_MISSING_GAME_INPUTS=1` on a machine without the game to downgrad
 - **Verified on 0.113 only** (0.113.0 commit `16ac0fe3`; the 0.113.1 mod metadata shape matches). Other
   major versions are untested.
 - **There is no global switch; every repair decides for itself.** Each repair resolves its own anchors
-  (types, methods, exact parameter types) inside `Applies(in CompatSnapshot, out string reason)`. A missing
+  (types, methods, exact parameter types) inside `Applies(out string reason)`. A missing
   anchor skips only that repair and logs `skipped: <id>: missing: <anchor>`, so a future upstream change
   costs only the repairs touching it.
 - **A failure rolls back only its own group.** The four Harmony ids (`sts2_lobby_enhance.newrun` /

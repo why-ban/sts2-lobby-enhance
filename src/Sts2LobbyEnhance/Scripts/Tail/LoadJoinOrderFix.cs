@@ -73,10 +73,10 @@ internal sealed class LoadJoinOrderFix : ICompatFix
     public FixGroup Group => FixGroup.LoadOrder;
 
     /// <summary>
-    /// Not gated on a <see cref="CompatSnapshot"/> flag: this is an ordering disagreement between the host mod
-    /// and itself, independent of what 0.113 changed. Whether the repair is possible is answered by the anchors.
+    /// This is an ordering disagreement between the host mod and itself, so nothing version-specific gates it:
+    /// whether the repair is possible is answered by the anchors alone.
     /// </summary>
-    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    public bool Applies(out string reason)
     {
         Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
         if (host == null)
@@ -96,7 +96,7 @@ internal sealed class LoadJoinOrderFix : ICompatFix
         return true;
     }
 
-    public void Apply(Harmony harmony, in CompatSnapshot snapshot)
+    public void Apply(Harmony harmony)
     {
         Shape shape = _shape
             ?? throw new InvalidOperationException(

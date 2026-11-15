@@ -9,8 +9,8 @@
 ### 移除（上游 0.6.4 已原生覆盖，共 8 项）
 
 上游 0.6.4 发布说明明写「适配游戏 0.113 的加入流程、消息布局和 API 变化；支持已解锁的极速／恐惧模式建房及对应准备页」。
-用我们自己的 `tools/tail-readability` 扫它的出货 DLL：「引用失效成员的方法」列表为空（`unexplainedBroken=0`）；
-同一条工具扫 0.6.3 会列出 7 个方法 —— 6 个断点在 0.6.4 是真的没了，不是藏进兼容层。
+用当时仓库里的 `tools/tail-readability`（该工具已随本次删除一并移除）扫它的出货 DLL：「引用失效成员的方法」列表为空（`unexplainedBroken=0`）；
+同一个扫描器扫 0.6.3 会列出 7 个方法 —— 6 个断点在 0.6.4 是真的没了，不是藏进兼容层。
 
 - `join-flow`：0.6.4 自己重写了加入流程（`Lobby/LanConnectLobbyManagedJoinFlow.cs:64-143`）。
 - `join-screen-modes`：Blitz / Dread 的推屏映射是原生的（`Lobby/LanConnectLobbyJoinFlow.cs:462-480`）。

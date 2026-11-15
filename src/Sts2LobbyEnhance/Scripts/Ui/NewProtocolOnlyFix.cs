@@ -43,10 +43,10 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
     public FixGroup Group => FixGroup.Modes;
 
     /// <summary>
-    /// <see cref="CompatSnapshot"/> is not read: no game-version breakpoint has anything to say about which
-    /// protocol buttons exist
+    /// Nothing version-specific gates this: which protocol buttons exist is answered by the dialog screenshot,
+    /// not by a game-version check
     /// </summary>
-    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    public bool Applies(out string reason)
     {
         Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
         if (host == null)
@@ -66,7 +66,7 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
         return true;
     }
 
-    public void Apply(Harmony harmony, in CompatSnapshot snapshot)
+    public void Apply(Harmony harmony)
     {
         Shape shape = _shape ?? throw new InvalidOperationException(
             "new-protocol-only: Applies() did not capture the dialog shape; refusing to patch blind.");

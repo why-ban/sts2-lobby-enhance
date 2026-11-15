@@ -383,26 +383,22 @@ static bool TryInstallDirect(Assembly patch, Type entry, List<string> lines, out
     failure = string.Empty;
 
     Type? fixType = patch.GetType(FixTypeName, throwOnError: false);
-    Type? snapshotType = patch.GetType("Sts2LobbyEnhance.CompatSnapshot", throwOnError: false);
-    if (fixType == null || snapshotType == null)
+    if (fixType == null)
     {
-        failure = $"FAIL: {FixTypeName} or CompatSnapshot is missing from {Path.GetFileName(patch.Location)}.";
+        failure = $"FAIL: {FixTypeName} is missing from {Path.GetFileName(patch.Location)}.";
         return false;
     }
 
     object fix = Activator.CreateInstance(fixType, nonPublic: true)
         ?? throw new InvalidOperationException($"Could not construct {FixTypeName}.");
 
-    // CompatSnapshot 是启动探测的结果；本修复一个标志都不读，所以传默认实例即可。
-    object compat = Activator.CreateInstance(snapshotType)
-        ?? throw new InvalidOperationException("Could not construct CompatSnapshot.");
-
-    object?[] appliesArguments = [compat, null];
+    // Since 2.0.0 Applies() takes no game-version snapshot: the only out-parameter is the skip reason.
+    object?[] appliesArguments = [null];
     bool applies = (bool)fixType
         .GetMethod("Applies", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
         .Invoke(fix, appliesArguments)!;
 
-    string reason = appliesArguments[1] as string ?? string.Empty;
+    string reason = appliesArguments[0] as string ?? string.Empty;
     lines.Add("Applies(): " + applies + (applies ? string.Empty : " (" + reason + ")"));
 
     if (!applies)
@@ -414,7 +410,7 @@ static bool TryInstallDirect(Assembly patch, Type entry, List<string> lines, out
     var harmony = new Harmony(HarmonyId(entry, ".roster"));
     fixType
         .GetMethod("Apply", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
-        .Invoke(fix, [harmony, compat]);
+        .Invoke(fix, [harmony]);
 
     return true;
 }

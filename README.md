@@ -93,7 +93,8 @@ dotnet run --project tools/smoke-test/smoke-test.csproj -c Release
 ```
 
 `tools/` 下另有几个离线复现工具（`roster-probe` / `loadjoin-probe` / `savebinding-probe` /
-`contract-check` / `tail-readability`），每个都能对着社区模组与游戏的真实程序集复现对应的上游缺陷。
+`contract-check`），每个都能对着社区模组与游戏的真实程序集复现对应的上游缺陷——
+它们对应的正是仍然保留的那 5 项修复。
 详见 [`tests/README.md`](tests/README.md) 与 [`docs/README.md`](docs/README.md)。
 
 **测试覆盖的边界（诚实说明）**：Windows 桌面版作房主 + Android 作客户端是反复验证过的；

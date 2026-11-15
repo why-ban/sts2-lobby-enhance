@@ -229,17 +229,6 @@ internal static class ReflectScope
         return property;
     }
 
-    internal static FieldInfo? FieldOf(Type type, string name, List<string> missing)
-    {
-        FieldInfo? field = type.GetField(name, AnyMember);
-        if (field == null)
-        {
-            missing.Add($"{type.FullName}.{name}");
-        }
-
-        return field;
-    }
-
     internal static PropertyInfo? PropertyOf(Type type, string name, List<string> missing)
     {
         PropertyInfo? property = type.GetProperty(name, AnyMember);
@@ -267,43 +256,6 @@ internal static class ReflectScope
         missing.Add(matches.Length == 0
             ? $"{type.FullName}.{name} ({parameterCount} parameter(s))"
             : $"{type.FullName}.{name} ({parameterCount} parameter(s)) is ambiguous: {matches.Length} overloads");
-        return null;
-    }
-
-    internal static FieldInfo? InstanceFieldOf(Type type, string name, List<string> missing)
-    {
-        FieldInfo? field = type.GetField(
-            name,
-            InstanceMember);
-        if (field == null)
-        {
-            missing.Add($"{type.FullName}.{name}");
-        }
-
-        return field;
-    }
-
-    internal static MethodInfo? UniqueMethod(Type? type, string name, int parameterCount, List<string> missing)
-    {
-        if (type == null)
-        {
-            return null;
-        }
-
-        MethodInfo[] matches = type
-            .GetMethods(AnyMember)
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-            .Where(method => method.GetParameters().Length == parameterCount)
-            .ToArray();
-
-        if (matches.Length == 1)
-        {
-            return matches[0];
-        }
-
-        missing.Add(matches.Length == 0
-            ? type.Name + "." + name + "/" + parameterCount + " param(s)"
-            : type.Name + "." + name + "/" + parameterCount + " param(s) (ambiguous: " + matches.Length + " overloads)");
         return null;
     }
 

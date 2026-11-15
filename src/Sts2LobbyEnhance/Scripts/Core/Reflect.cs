@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Reflection;
 
 namespace Sts2LobbyEnhance;
@@ -76,97 +75,6 @@ internal static class Reflect
             return null;
         }
     }
-
-    internal static FieldInfo? TryField(Type type, string name)
-    {
-        ArgumentNullException.ThrowIfNull(type);
-
-        try
-        {
-            return type.GetField(name, AnyMember);
-        }
-        catch (AmbiguousMatchException)
-        {
-            return null;
-        }
-    }
-
-    internal static PropertyInfo? TryProperty(Type type, string name)
-    {
-        ArgumentNullException.ThrowIfNull(type);
-
-        try
-        {
-            return type.GetProperty(name, AnyMember);
-        }
-        catch (AmbiguousMatchException)
-        {
-            return null;
-        }
-    }
-
-    internal static MethodInfo? TryMethodByName(Type type, string name)
-    {
-        ArgumentNullException.ThrowIfNull(type);
-
-        MethodInfo[] matches = type.GetMethods(AnyMember)
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-            .ToArray();
-
-        return matches.Length == 1 ? matches[0] : null;
-    }
-
-    internal static MethodInfo? TryMethodByName(Type type, string name, int parameterCount)
-    {
-        ArgumentNullException.ThrowIfNull(type);
-
-        MethodInfo[] matches = type.GetMethods(AnyMember)
-            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-            .Where(method => method.GetParameters().Length == parameterCount)
-            .ToArray();
-
-        return matches.Length == 1 ? matches[0] : null;
-    }
-
-    /// <summary>Null means the field holds null, not that the field is missing</summary>
-    internal static object? GetField(object instance, string name)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        return RequireField(instance.GetType(), name).GetValue(instance);
-    }
-
-    internal static void SetField(object instance, string name, object? value)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        RequireField(instance.GetType(), name).SetValue(instance, value);
-    }
-
-    internal static object? GetPropertyValue(object instance, string name)
-    {
-        ArgumentNullException.ThrowIfNull(instance);
-        return RequireProperty(instance.GetType(), name).GetValue(instance);
-    }
-
-    internal static object RequireStaticPropertyValue(Type type, string name) =>
-        RequireProperty(type, name).GetValue(null)
-        ?? throw new InvalidOperationException($"{type.FullName}.{name} returned null.");
-
-    internal static object? InvokeStatic(Type type, string name, params object?[] arguments)
-    {
-        MethodInfo method = RequireMethodByName(type, name, arguments.Length);
-        if (!method.IsStatic)
-        {
-            throw new MissingMethodException(
-                type.FullName, $"{name} is an instance method, not static.");
-        }
-
-        return method.Invoke(null, arguments);
-    }
-
-    internal static bool HasField(Type type, string name) => type.GetField(name, AnyMember) != null;
-
-    internal static string Describe(params object?[] values) =>
-        string.Join(", ", values.Select(value => value?.ToString() ?? "<null>"));
 }
 
 internal sealed class MissingTypeException : Exception

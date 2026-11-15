@@ -164,15 +164,14 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// <summary>
     /// Answers "can this repair run on the build that is actually loaded", and resolves every anchor on the way.
     ///
-    /// <paramref name="snapshot"/> is deliberately not read: none of the six 0.113 breakpoints is a precondition for a
-    /// game-over "start a new run" button. That flow rides the vanilla <c>StartRunLobby</c> protocol and only touches
-    /// the game-over screen, so it is versioned independently of those flags. Gating on them is what made a one-line
-    /// game patch disable a feature it has nothing to do with.
+    /// Nothing version-specific gates this: a game-over "start a new run" button rides the vanilla
+    /// <c>StartRunLobby</c> protocol and only touches the game-over screen, so its only preconditions are the
+    /// anchors resolved below.
     ///
     /// Resolving here rather than in <see cref="Apply"/> is what keeps the startup report honest: a missing anchor
     /// becomes "skipped, here is why" instead of a repair that reports itself as applied and then does nothing.
     /// </summary>
-    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    public bool Applies(out string reason)
     {
         Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
         if (host == null)
@@ -193,7 +192,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         return true;
     }
 
-    public void Apply(Harmony harmony, in CompatSnapshot snapshot)
+    public void Apply(Harmony harmony)
     {
         // Applies() resolved and cached these; reaching Apply without them is a host-contract violation, not a build
         // problem, so it must not be silently tolerated. The shape itself is only needed at runtime, not here.

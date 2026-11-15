@@ -61,7 +61,7 @@ internal sealed class NewRunSaveBindingFix : ICompatFix
     /// </summary>
     public FixGroup Group => FixGroup.NewRun;
 
-    public bool Applies(in CompatSnapshot snapshot, out string reason)
+    public bool Applies(out string reason)
     {
         Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
         if (host == null)
@@ -91,7 +91,7 @@ internal sealed class NewRunSaveBindingFix : ICompatFix
         }
     }
 
-    public void Apply(Harmony harmony, in CompatSnapshot snapshot)
+    public void Apply(Harmony harmony)
     {
         Shape shape = _shape
             ?? throw new InvalidOperationException(

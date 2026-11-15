@@ -22,33 +22,6 @@ internal enum FixGroup
 }
 
     /// <summary>
-    /// Independent observations of the running game build
-    ///
-    /// Deliberately not combined into one "does this build need a patch" predicate: an AND over six flags
-    /// turns any single surprise into "the whole mod does nothing", so each repair reads only the flags it
-    /// depends on. <see cref="GenerateRelicFightGainedParameter"/> is diagnostic only and stays in
-    /// <see cref="Describe"/>: no repair consumes it
-    /// </summary>
-internal readonly record struct CompatSnapshot(
-    bool InitialGameInfoLostGameMode,
-    bool JoinRequestLostMaxAscensionUnlocked,
-    bool DisconnectClientGainedParameter,
-    bool ConnectedPeersChangedType,
-    bool GenerateRelicFightGainedParameter,
-    bool UpdateProgressGainedReturnValue)
-{
-    /// <summary>One line for the startup log. Diagnostic only — never feed this back into a gate.</summary>
-    internal string Describe() =>
-        "breaks[" +
-        $"gameModeGone={InitialGameInfoLostGameMode}," +
-        $"maxAscensionUnlockedGone={JoinRequestLostMaxAscensionUnlocked}," +
-        $"disconnectClient4={DisconnectClientGainedParameter}," +
-        $"connectedPeersIReadOnly={ConnectedPeersChangedType}," +
-        $"generateRelicFight4={GenerateRelicFightGainedParameter}," +
-        $"updateProgressReturns={UpdateProgressGainedReturnValue}]";
-}
-
-    /// <summary>
     /// One isolated repair, installed into the Harmony instance of its <see cref="FixGroup"/>.
     ///
     /// Resolve every anchor before the first <c>harmony.Patch</c> call. A lookup that fails after a patch has
@@ -63,6 +36,9 @@ internal readonly record struct CompatSnapshot(
     /// <see cref="Applies"/> asks whether the running build allows the repair, not whether the feature would
     /// be nice to have. Answering <c>true</c> with missing anchors turns a clean "skipped, here is why"
     /// into a failure.
+    ///
+    /// Since 2.0.0 neither method takes a game-version snapshot: the six 0.113 breaks that used to be probed
+    /// are adapted upstream (0.6.4), so no repair here reads a version flag any more
     /// </summary>
 internal interface ICompatFix
 {
@@ -77,8 +53,8 @@ internal interface ICompatFix
     /// a sentence a user can act on rather than a status code, and use <see cref="string.Empty"/> when
     /// <c>true</c>. Throwing counts as a failure of this repair alone, so prefer answering <c>false</c>
     /// </summary>
-    bool Applies(in CompatSnapshot snapshot, out string reason);
+    bool Applies(out string reason);
 
     /// <summary>Resolve every anchor first; throwing rolls back this repair's group only</summary>
-    void Apply(Harmony harmony, in CompatSnapshot snapshot);
+    void Apply(Harmony harmony);
 }

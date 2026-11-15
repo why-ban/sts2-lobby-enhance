@@ -18,9 +18,15 @@ string gameDir = args.Length > 0
     ? args[0]
     : @"D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64";
 
-string hostDll = args.Length > 1
-    ? args[1]
-    : @"D:\zhuanban\sts2m\work\lobby\STS2-Game-Lobby\releases\sts2_lan_connect\sts2_lan_connect.dll";
+// 宿主模组默认取 **0.6.4**（manifest 的 min_version）：补丁的 5 项锚点是对着它校验的。
+// 覆盖顺序与 tests 一致：命令行 > STS2_LAN_CONNECT_064_DLL > 在工作树里发现 upstream-064 的出货 DLL。
+const string DefaultHostMod064 =
+    @"D:\zhuanban\sts2m\work\lobby\upstream-064\src\emptylower-STS2-Game-Lobby-1db4e10\releases\sts2_lan_connect\sts2_lan_connect.dll";
+
+string? hostOverride = args.Length > 1 ? args[1] : Environment.GetEnvironmentVariable("STS2_LAN_CONNECT_064_DLL");
+string hostDll = string.IsNullOrWhiteSpace(hostOverride)
+    ? FindHostMod064() ?? DefaultHostMod064
+    : hostOverride;
 
 string? patchDll = args.Length > 2 ? args[2] : FindShippedPatchDll();
 
@@ -136,31 +142,13 @@ if (report is null)
     return 1;
 }
 
-object? snapshot = GetProperty(report, "Snapshot");
-
 // There is no global "requires patch" switch any more: every repair answers for itself through
-// ICompatFix.Applies, and the host-missing case is the only whole-mod gate left. What is still worth
-// printing is how many of the six 0.113 signature changes this build shows, because that is the input
-// every probe sees.
-string[] breakFlags =
-[
-    "InitialGameInfoLostGameMode",
-    "JoinRequestLostMaxAscensionUnlocked",
-    "DisconnectClientGainedParameter",
-    "ConnectedPeersChangedType",
-    "GenerateRelicFightGainedParameter",
-    "UpdateProgressGainedReturnValue"
-];
-int breakCount = breakFlags.Count(name => GetProperty(snapshot, name) is true);
-string describe = (string)(snapshot?.GetType().GetMethod("Describe", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
-    ?.Invoke(snapshot, null) ?? "(no Describe)");
-
+// ICompatFix.Applies, and the host-missing case is the only whole-mod gate left. There is also no
+// game-version snapshot any more (2.0.0 deleted the six-break probe along with the repairs that read it).
 List<string> applied = GetStringList(report, "Applied");
 List<string> skipped = GetStringList(report, "Skipped");
 List<string> failed = GetStringList(report, "Failed");
 
-Console.WriteLine("probe       : " + describe);
-Console.WriteLine("breaks      : " + breakCount + "/6");
 Console.WriteLine("inert       : " + GetProperty(report, "Inert"));
 Console.WriteLine("hostMissing : " + GetProperty(report, "HostMissing"));
 Console.WriteLine("applied     : " + string.Join(", ", applied));
@@ -289,6 +277,36 @@ Console.WriteLine($"OK ({applied.Count} fixes applied from {Path.GetFileName(pat
 return 0;
 
 // ---------------------------------------------------------------- helpers
+
+/// <summary>
+/// The 0.6.4 release bundle, discovered the same way <c>tools/contract-check</c> resolves it:
+/// walk up to the work root, then look for <c>lobby/upstream-064/src/&lt;checkout&gt;/releases/...</c>.
+/// The checkout directory name is discovered rather than hard-coded; the bytes are what the run reports.
+/// </summary>
+static string? FindHostMod064()
+{
+    DirectoryInfo? directory = new(AppContext.BaseDirectory);
+    while (directory is not null)
+    {
+        string upstream = Path.Combine(directory.FullName, "lobby", "upstream-064", "src");
+        if (Directory.Exists(upstream))
+        {
+            foreach (string checkout in Directory.GetDirectories(upstream))
+            {
+                string candidate = Path.Combine(
+                    checkout, "releases", "sts2_lan_connect", "sts2_lan_connect.dll");
+                if (File.Exists(candidate))
+                {
+                    return Path.GetFullPath(candidate);
+                }
+            }
+        }
+
+        directory = directory.Parent;
+    }
+
+    return null;
+}
 
 static string? FindShippedPatchDll()
 {

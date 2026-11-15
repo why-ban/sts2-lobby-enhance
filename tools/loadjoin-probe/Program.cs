@@ -454,23 +454,22 @@ bool InstallFixDirectly(Assembly patchAssembly, Assembly harmonyLib, Type entry,
     why = string.Empty;
 
     Type? fixType = patchAssembly.GetType("Sts2LobbyEnhance.LoadJoinOrderFix", throwOnError: false);
-    Type? snapshotStruct = patchAssembly.GetType("Sts2LobbyEnhance.CompatSnapshot", throwOnError: false);
     MethodInfo? applies = fixType?.GetMethod("Applies", BindingFlags.Instance | BindingFlags.Public);
     MethodInfo? apply = fixType?.GetMethod("Apply", BindingFlags.Instance | BindingFlags.Public);
 
-    if (fixType is null || snapshotStruct is null || applies is null || apply is null)
+    if (fixType is null || applies is null || apply is null)
     {
         why = "the dll has no Sts2LobbyEnhance.LoadJoinOrderFix with Applies/Apply.";
         return false;
     }
 
     object fix = Activator.CreateInstance(fixType, nonPublic: true)!;
-    object compatSnapshot = Activator.CreateInstance(snapshotStruct)!;
 
-    object?[] appliesArguments = [compatSnapshot, null];
+    // Since 2.0.0 Applies() takes no game-version snapshot: the only out-parameter is the skip reason.
+    object?[] appliesArguments = [null];
     if (applies.Invoke(fix, appliesArguments) is not true)
     {
-        why = "Applies returned false: " + (appliesArguments[1] as string ?? "(no reason)");
+        why = "Applies returned false: " + (appliesArguments[0] as string ?? "(no reason)");
         return false;
     }
 
@@ -480,7 +479,7 @@ bool InstallFixDirectly(Assembly patchAssembly, Assembly harmonyLib, Type entry,
 
     Type harmonyType = harmonyLib.GetType("HarmonyLib.Harmony")!;
     object harmony = Activator.CreateInstance(harmonyType, harmonyId)!;
-    _ = apply.Invoke(fix, [harmony, compatSnapshot]);
+    _ = apply.Invoke(fix, [harmony]);
 
     Console.WriteLine("  installed load-join-order under Harmony id '" + harmonyId + "' (group " + group + ")");
     return true;
