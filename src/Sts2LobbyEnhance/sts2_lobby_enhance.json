@@ -2,8 +2,8 @@
   "id": "sts2_lobby_enhance",
   "name": "游戏大厅增强",
   "author": "大同",
-  "description": "《杀戮尖塔 2》0.113 的联机大厅增强：让社区模组 LAN Connect（sts2_lan_connect）继续可用，并补充极速 / 恐惧模式联机、结算页新开一局、房间管理与存档续玩兼容。需与 LAN Connect 一起使用；本模组不包含、也不替换它的任何文件。",
-  "version": "1.8.1",
+  "description": "《杀戮尖塔 2》0.113 的联机大厅增强，配合社区模组 LAN Connect（sts2_lan_connect）0.6.4 使用：局终结算页一键「新开一局」、新一局自动接管存档绑定、有人掉线后名册仍能重基线开局、读档加入不再因加入顺序被拒、建房只保留新协议。本模组不包含、也不替换 LAN Connect 的任何文件。",
+  "version": "2.0.0",
   "has_dll": true,
   "has_pck": false,
   "affects_gameplay": false,
@@ -11,7 +11,7 @@
   "dependencies": [
     {
       "id": "sts2_lan_connect",
-      "min_version": "0.6.3"
+      "min_version": "0.6.4"
     }
   ]
 }

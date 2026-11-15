@@ -10,23 +10,11 @@ namespace Sts2LobbyEnhance;
     /// </summary>
 internal enum FixGroup
 {
-    Join,
-
-    Wire,
-
-    Tail,
-
-    Gameplay,
-
     NewRun,
 
     Modes,
 
-    Cosmetic,
-
-    Unlock,
-
-    /// <summary>Roster re-baselining for LobbyBeginRun (tail-error-paths is separate: that one only redirects two call sites)</summary>
+    /// <summary>Roster re-baselining for LobbyBeginRun (load-join-order is separate: that one re-sorts one message list)</summary>
     Roster,
 
     /// <summary>Load-join player ordering (independent of Roster: it runs on every save load, that one on every start)</summary>

@@ -157,7 +157,7 @@ public sealed class ReleasePackageTests
         Assert.Equal("sts2_lobby_enhance", root.GetProperty("id").GetString());
         // Bump this together with the manifest and the release zip name: the Workshop item shows this string to
         // subscribers, so a frozen value would advertise 1.0.0 for every release.
-        Assert.Equal("1.8.1", root.GetProperty("version").GetString());
+        Assert.Equal("2.0.0", root.GetProperty("version").GetString());
         Assert.True(root.GetProperty("has_dll").GetBoolean());
         Assert.False(root.GetProperty("has_pck").GetBoolean());
         Assert.Equal("0.113.0", root.GetProperty("min_game_version").GetString());
@@ -169,7 +169,7 @@ public sealed class ReleasePackageTests
 
         JsonElement dependency = Assert.Single(root.GetProperty("dependencies").EnumerateArray().ToList());
         Assert.Equal("sts2_lan_connect", dependency.GetProperty("id").GetString());
-        Assert.Equal("0.6.3", dependency.GetProperty("min_version").GetString());
+        Assert.Equal("0.6.4", dependency.GetProperty("min_version").GetString());
     }
 
     [Fact]

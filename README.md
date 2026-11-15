@@ -20,13 +20,17 @@
 - 清单里 `affects_gameplay: false` —— 装与不装的两台机器**不会**因为模组列表不一致而互相拒绝进房；
 - 只读取游戏自身的公开 / 内部 API，**不改存档格式、不改协议、不伪造进度**。
 
-解决的问题分两类：
+**从 2.0.0 起，它只做 5 件事。** 社区模组 0.6.4 已经自己适配了游戏 0.113，所以兼容层、极速 / 恐惧的
+建房与准备页、房间卡片的模式标注都不再由本模组接手（1.x 里这些接管在 2.0.0 全部删除）。目前保留的是大厅
+自己还没做的部分：
 
-1. **兼容**：社区模组 0.6.3 是按游戏 0.111 编译的，在 0.113 上有 6 处成员签名断裂 —— 加入房间、
-   建房、放弃本局等流程会抛异常或直接崩。这些被逐个接管修好。
-2. **功能**：结算页「新开一局」、极速 / 恐惧模式建房与加入、房间列表标注模式。
+1. **结算页一键新开一局** —— 房主点一下，全房回到准备页；
+2. **新开一局之后存档仍可续玩** —— 不会因为房间还记着上一局的存档键而读不回来；
+3. **踢人 / 掉线之后照样能开局** —— 大厅的名册只能表达"有人加入"，减员后客户端会被判「Mod 不匹配」；
+4. **读档不必按最初加入顺序进房** —— 大厅按"加入序 vs 存档序"逐位比较，同队换序就失败；
+5. **建房只留「新协议」** —— 0.113 里只有新协议支持 RitsuLib，新旧协议联机体验无差别。
 
-完整清单见 [技术文档](docs/README.md)（13 项修复，每项都有 id、注入点与替代方案），
+完整清单见 [技术文档](docs/README.md)（5 项修复，每项都有 id、注入点与替代方案），
 逐版本改动见 [更新日志](docs/CHANGELOG.md)。
 
 ## 可靠性设计
@@ -34,14 +38,14 @@
 每个版本、每次社区模组更新，最常见的失败模式不是崩溃，而是**补丁悄悄没装上**。
 所以这一版把「版本开关」整个拆掉了：
 
-- 13 项修复各自实现 `ICompatFix`，自己解析锚点（类型 / 方法 / 参数类型逐个比对）；
-- 10 个 `FixGroup`，每组一个 Harmony id，某组失败只回滚自己那组，其它照常工作；
+- 5 项修复各自实现 `ICompatFix`，自己解析锚点（类型 / 方法 / 参数类型逐个比对）；
+- 4 个 `FixGroup`，每组一个 Harmony id，某组失败只回滚自己那组，其它照常工作；
 - 对不上时日志里明确写 `skipped: <id>: missing: <具体锚点>`，而不是整体静默失效。
 
 启动日志里能看到一行汇总：
 
 ```
-[lobby-enhance] summary: applied=13[...] skipped=0[] failed=0
+[lobby-enhance] summary: applied=5[...] skipped=0[] failed=0
 ```
 
 ## 环境要求
@@ -49,11 +53,11 @@
 | 项 | 要求 |
 |---|---|
 | 游戏 | Slay the Spire 2 **0.113.0**（Windows 桌面版 / Android 第三方启动器） |
-| 社区模组「游戏大厅」 | `sts2_lan_connect` **0.6.3 或更新**（创意工坊必需物品，订阅本模组会自动装上） |
+| 社区模组「游戏大厅」 | `sts2_lan_connect` **0.6.4 或更新**（创意工坊必需物品，订阅本模组会自动装上） |
 | 联机双方 | **都要装**本模组。只装一边能用，但「新开一局」等新功能不对等 |
 
-> **1.7.0 与 1.8.0 可以一起联机。** 对端识别只比对模组 id 前缀、不比较版本号
-> （`NewRunFromGameOverFix.cs:59-64`），所以不需要双方同时更新；只是没升级的那一端享受不到新修的几项。
+> **2.0.0 依赖「游戏大厅」0.6.4。** 从 1.x 升级时请把大厅一并更新，否则本补丁打不上任何一项。
+> 大厅 0.6.4 与更早的 0.6.3 房间不互通（上游自己改了消息布局），所以房间里所有人要一起升。
 
 ## 安装
 
@@ -116,7 +120,8 @@ Android 作房主验证过一次；**PC 作为加入方（客户端）尚未验�
   结算页「新开一局」的设计与实现要点（该 issue 最初还提过「局中重开本层」，我们后来撤回了，
   原因见 issue 里的评论：房间中途有人掉线时它本来就失效，而那正是最需要它的场景）。
 
-代码里对每一处上游行为都标了 `文件:行号`（以部署版 0.6.3 的反编译为基准）。
+代码里对每一处上游行为都标了 `文件:行号`（以「游戏大厅」**0.6.4 的 GitHub 源码**为基准；0.6.3 时代引用的
+反编译行号已随 2.0.0 一并清理）。
 如果有用得上的地方，按 GPL-3.0 直接取用即可，不需要额外授权。
 
 ## 关于 AI 参与
@@ -147,11 +152,12 @@ It ships no file of the official mod and replaces nothing: at runtime it Harmony
 official mod, which keeps updating from the Workshop as usual. `affects_gameplay: false`, so a patched
 and an unpatched machine still join each other.
 
-Two jobs: (1) keep the official mod usable on game **0.113.0**, where six of its member signatures no
-longer resolve, and (2) add the multiplayer features players kept asking for — restart the current floor,
-start a new run from the game-over screen, host Blitz / Dread rooms, and label the room type in the lobby
-list. 13 repairs across 10 isolated Harmony groups; anything that no longer resolves disables only itself
-and says so in the log.
+**Since 2.0.0 it does five things**, because the lobby mod's own 0.6.4 already supports game 0.113: the
+compatibility layer, Blitz / Dread hosting and room-card labels are no longer ours (all of that was removed
+in 2.0.0). What remains is what the lobby does not do yet: one-click "new run" from the game-over screen,
+keeping that new run's save loadable, re-baselining a shrunken roster, reordering a save-load join, and
+offering only the new protocol when creating a room. Five repairs across four isolated Harmony groups;
+anything that no longer resolves disables only itself and says so in the log.
 
 Build with `dotnet build src/Sts2LobbyEnhance/Sts2LobbyEnhance.csproj -c Release -p:SkipModCopy=true`,
 verify with `dotnet test` plus `tools/smoke-test`. Details in [`docs/README.md`](docs/README.md).

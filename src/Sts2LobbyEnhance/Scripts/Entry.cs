@@ -110,7 +110,7 @@ public static class Entry
             }
 
     // BUILDING the list is itself fallible and is not a per-repair concern: Build() is an iterator, so
-    // "new JoinTakeoverFix()" runs during MoveNext(), here and not inside Install()'s try, and a throwing
+    // "new NewRunFromGameOverFix()" runs during MoveNext(), here and not inside Install()'s try, and a throwing
     // constructor (or static initialiser) would escape with the groups installed so far left live and no
     // summary line
             List<ICompatFix> fixes;
@@ -234,7 +234,7 @@ public static class Entry
         {
             Warn(
                 $"host mod '{HostModAssemblyName}' is not loaded; nothing to patch. " +
-                "Install LAN Connect 0.6.3 or newer and restart.");
+                "Install LAN Connect 0.6.4 or newer and restart.");
             return;
         }
 
@@ -311,10 +311,11 @@ public static class Entry
             "inactive; the rest of the mod is not.");
         Error(
             "removing a group's patches is NOT the same as undoing them. Harmony hooks are gone, but state a " +
-            "repair had already written into this process stays until the process restarts — cached " +
-            "reflection handles and transpiler plan tables (ExtraGameModesFix), the last tail rejection " +
-            "(TailErrorPathFix) and resolved epoch ids (UnlockExtraModesFix) are the known cases. Restart the " +
-            "game for a clean state.");
+            "repair had already written into this process stays until the process restarts — the reflection " +
+            "handles every remaining repair captures at startup (NewRunFromGameOverFix, NewRunSaveBindingFix, " +
+            "RosterRebaselineFix, LoadJoinOrderFix, NewProtocolOnlyFix), the game-over nodes " +
+            "NewRunFromGameOverFix injects, and the reassemble / disconnect-suppression flags it raises are the " +
+            "known cases. Restart the game for a clean state.");
     }
 
     internal static void Info(string message)
@@ -433,18 +434,10 @@ internal static class CompatFixes
 {
     internal static IEnumerable<ICompatFix> Build()
     {
-        yield return new JoinTakeoverFix();
-        yield return new JoinScreenDispatchFix();
-        yield return new HostWireFix();
-        yield return new TailErrorPathFix();
         yield return new RosterRebaselineFix();
         yield return new LoadJoinOrderFix();
-        yield return new AbandonRunFix();
         yield return new NewRunFromGameOverFix();
         yield return new NewRunSaveBindingFix();
-        yield return new ExtraGameModesFix();
         yield return new NewProtocolOnlyFix();
-        yield return new RoomCardPillFix();
-        yield return new UnlockExtraModesFix();
     }
 }

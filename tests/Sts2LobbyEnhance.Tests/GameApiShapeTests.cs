@@ -3,14 +3,14 @@ using Xunit;
 namespace Sts2LobbyEnhance.Tests;
 
 /// <summary>
-/// Verifies the *cause* of every break directly against the game assembly: what 0.113 changed, and
-/// which replacement members the patch binds to.
+/// Verifies what 0.113 changed directly against the <b>game</b> assembly: the six signature changes 0.6.3
+/// could not resolve, and the message shapes they moved.
 ///
-/// <see cref="BreakpointRegressionTests"/> proves that the official DLL cannot resolve six members. This
-/// file proves *why*, so a reader can tell "the member is gone" apart from "the member moved", and so a
-/// future game build that merely renames something again is diagnosed in one place. The replacement
-/// assertions double as a contract check for the fixes themselves: every member the patch writes into
-/// must still exist.
+/// This file no longer documents a requirement of the patch: upstream 0.6.4 adapts all six itself, so the
+/// repairs that needed these seams are gone. What it still does is name the game-side shape of each member,
+/// so a future game build that reshapes one of them is diagnosed in one place instead of surfacing as a
+/// mysterious reflection failure. <see cref="BreakpointRegressionTests"/> is the test that keeps the
+/// official build honest (0.6.4 has no unresolvable references left).
 /// </summary>
 public sealed class GameApiShapeTests
 {
@@ -28,8 +28,7 @@ public sealed class GameApiShapeTests
         Assert.NotNull(game.FindType(LobbyMessages, "InitialGameInfoMessage"));
         Assert.False(
             game.HasField(LobbyMessages, "InitialGameInfoMessage", "gameMode"),
-            "InitialGameInfoMessage.gameMode is expected to be gone in 0.113; the join flow's read of it " +
-            "is what break #1 is about.");
+            "InitialGameInfoMessage.gameMode is expected to be gone in 0.113.");
 
         // What the message carries instead. Pinned so a future reshuffle is noticed here first.
         Assert.Equal(
@@ -109,12 +108,12 @@ public sealed class GameApiShapeTests
     }
 
     [Fact]
-    public void HostWireFixFieldsExistOnTheJoinResponseMessage()
+    public void JoinResponseMessageCarriesGameModeAndIsCustom()
     {
         using GameMetadata game = OpenGame();
 
-        // HostWireFix re-emits this message body by hand, so both fields must be readable from the game's
-        // own type. A rename here would silently truncate the frame instead of failing to compile.
+        // The 0.113 shape of this message: the two mode fields sit between dailyTime and ascension. Pinned
+        // as a game fact — a rename or reorder here changes what a hand-written body may emit.
         Assert.True(game.HasField(LobbyMessages, "ClientLobbyJoinResponseMessage", "gameMode"));
         Assert.True(game.HasField(LobbyMessages, "ClientLobbyJoinResponseMessage", "isCustom"));
 
@@ -132,15 +131,15 @@ public sealed class GameApiShapeTests
     }
 
     [Fact]
-    public void JoinFlowProvidesTheSeamTheJoinTakeoverUses()
+    public void JoinFlowBeginTakesASceneTree()
     {
         using GameMetadata game = OpenGame();
 
         string fullName = Assert.Single(game.FindTypesBySimpleName("JoinFlow"));
         Assert.Equal("MegaCrit.Sts2.Core.Multiplayer.Game.JoinFlow", fullName);
 
-        // JoinTakeoverFix calls JoinFlow.Begin(SceneTree) and returns its result, so the method has to be
-        // there with exactly the one SceneTree parameter.
+        // The game's own join entry point: one SceneTree parameter and a result, which is what any takeover
+        // of the host mod's join flow would have to call.
         Assert.Equal([1], game.GetMethodParameterCounts(
             "MegaCrit.Sts2.Core.Multiplayer.Game",
             "JoinFlow",

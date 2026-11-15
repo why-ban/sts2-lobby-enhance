@@ -37,8 +37,8 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
     public string Id => "new-protocol-only";
 
     /// <summary>
-    /// Same group as <see cref="ExtraGameModesFix"/>: both edit the create-room dialog, so a shape change that
-    /// breaks one almost always breaks the other and they roll back together
+    /// The only repair that edits the create-room dialog, so it owns the <see cref="FixGroup.Modes"/> instance:
+    /// a shape change in that dialog rolls back this repair and nothing else
     /// </summary>
     public FixGroup Group => FixGroup.Modes;
 
@@ -229,8 +229,9 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
             }
 
             // Static, not instance: dec-official LanConnectLobbyOverlay.cs:10667 is
-            // "private static bool IsStandaloneTailRuntimeAvailable()". Checking the wrong shape here is exactly
-            // what silently disabled extra-game-modes once, so the probe reports it as a missing anchor.
+            // "private static bool IsStandaloneTailRuntimeAvailable()". Getting that shape wrong is exactly the
+            // failure mode that once left a repair installed-but-inert, so a mismatch is reported as a missing
+            // anchor instead of patching blind.
             MethodInfo? tailRuntimeAvailable = Static(overlay, TailRuntimeMethodName, 0, missing);
 
             if (missing.Count > 0)

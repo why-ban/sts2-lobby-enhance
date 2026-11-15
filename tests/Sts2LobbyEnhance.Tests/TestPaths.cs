@@ -30,9 +30,22 @@ internal static class TestPaths
     /// a mismatch is reported as a failure instead of being silently tolerated.
     /// </summary>
     internal const string PinnedOfficialModSha256 =
-        "197E5D2E67C9BC805170F842D7CB5BF14F150F2E478C658C9DC25BEB2AD59D4B";
+        "E9644876FF9F563E7784AE21C10F2B67C6EEBE2FAB53C8106D0D6AE1D3814AE9";
 
-    internal const long PinnedOfficialModSize = 2_473_472L;
+    internal const long PinnedOfficialModSize = 2_506_752L;
+
+    /// <summary>
+    /// The official sts2_lan_connect <b>0.6.4</b> DLL: the build this mod requires since 2.0.0. Both the
+    /// path constants above and this one resolve to it — 0.6.3 is out of support, and loading two builds with
+    /// the same assembly identity into one process is a FileLoadException waiting to happen.
+    /// </summary>
+    internal const string OfficialMod064Variable = "STS2_LAN_CONNECT_064_DLL";
+
+    /// <summary>SHA-256 of the shipped 0.6.4 build (equals the hash its own release notes publish).</summary>
+    internal const string PinnedOfficial064Sha256 =
+        "E9644876FF9F563E7784AE21C10F2B67C6EEBE2FAB53C8106D0D6AE1D3814AE9";
+
+    internal const long PinnedOfficial064Size = 2_506_752L;
 
     /// <summary>Workshop item ID of the official mod; also the value that must appear in workshop.json.</summary>
     internal const ulong OfficialWorkshopItemId = 3_749_766_330UL;
@@ -68,6 +81,9 @@ internal static class TestPaths
     /// <summary>The official 0.6.3 DLL, or <c>null</c> when it is not on this machine.</summary>
     internal static string? OfficialModDll { get; } = ResolveOfficialModDll();
 
+    /// <summary>The official 0.6.4 DLL, or <c>null</c> when it is not on this machine.</summary>
+    internal static string? OfficialMod064Dll { get; } = ResolveOfficial064Dll();
+
     /// <summary>Path of sts2.dll when the game directory is known.</summary>
     internal static string? GameAssembly =>
         GameDirectory is null ? null : Path.Combine(GameDirectory, "sts2.dll");
@@ -80,7 +96,10 @@ internal static class TestPaths
         $"Install Slay the Spire 2, or set {GameDirectoryVariable} to the folder that contains sts2.dll.";
 
     internal static string OfficialModHint =>
-        $"Set {OfficialModVariable} to sts2_lan_connect.dll (0.6.3, sha256 {PinnedOfficialModSha256}).";
+        $"Set {OfficialModVariable} to sts2_lan_connect.dll (0.6.4, sha256 {PinnedOfficialModSha256}).";
+
+    internal static string OfficialMod064Hint =>
+        $"Set {OfficialMod064Variable} to sts2_lan_connect.dll (0.6.4, sha256 {PinnedOfficial064Sha256}).";
 
     internal static string BuildHint =>
         "Build it first: dotnet build src/Sts2LobbyEnhance/Sts2LobbyEnhance.csproj -c Release -p:SkipModCopy=true";
@@ -141,22 +160,47 @@ internal static class TestPaths
             return File.Exists(overridden) ? Path.GetFullPath(overridden) : null;
         }
 
-        // The upstream release bundle lives next to this workspace: work/lobby/STS2-Game-Lobby/releases/...
+        // 2.0.0 requires 0.6.4, so there is exactly one reference binary. Both this slot and the 064 slot
+        // resolve to the same file on purpose: two builds with the same assembly name cannot be loaded into
+        // one process, and the tests that used 0.6.3 now assert the shipped 0.6.4 instead.
+        return ResolveOfficial064Dll();
+    }
+
+    /// <summary>
+    /// The 0.6.4 release bundle: work/lobby/upstream-064/src/&lt;checkout&gt;/releases/sts2_lan_connect/...
+    /// The checkout directory name is discovered rather than hard-coded, so a different export of the same
+    /// tag keeps working; the pinned hash is what actually decides whether the file is the right build.
+    /// </summary>
+    private static string? ResolveOfficial064Dll()
+    {
+        string? overridden = Environment.GetEnvironmentVariable(OfficialMod064Variable);
+        if (!string.IsNullOrWhiteSpace(overridden))
+        {
+            return File.Exists(overridden) ? Path.GetFullPath(overridden) : null;
+        }
+
         string? workDirectory = Path.GetDirectoryName(CompanionRoot);
         if (workDirectory is null)
         {
             return null;
         }
 
-        string candidate = Path.Combine(
-            workDirectory,
-            "lobby",
-            "STS2-Game-Lobby",
-            "releases",
-            "sts2_lan_connect",
-            "sts2_lan_connect.dll");
+        string upstreamRoot = Path.Combine(workDirectory, "lobby", "upstream-064", "src");
+        if (!Directory.Exists(upstreamRoot))
+        {
+            return null;
+        }
 
-        return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
+        string[] candidates =
+        [
+            .. Directory.GetDirectories(upstreamRoot)
+                .Select(directory => Path.Combine(
+                    directory, "releases", "sts2_lan_connect", "sts2_lan_connect.dll"))
+        ];
+
+        return candidates.FirstOrDefault(File.Exists) is { } candidate
+            ? Path.GetFullPath(candidate)
+            : null;
     }
 
     private static string? ResolveBuiltPatchAssembly()

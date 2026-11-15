@@ -1638,8 +1638,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             if (System.Environment.TickCount64 > deadline)
             {
                 throw new TimeoutException(
-                    $"the host did not answer the reassemble join request within {JoinResponseTimeoutMs} ms. " +
-                    TailErrorPathFix.DescribeLastRejection());
+                    $"the host did not answer the reassemble join request within {JoinResponseTimeoutMs} ms.");
             }
 
             try

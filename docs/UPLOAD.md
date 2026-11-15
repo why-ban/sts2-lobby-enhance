@@ -169,7 +169,7 @@ cd <解压目录>
 | # | 位置 | 怎么变 | 漏改的后果 |
 |---|------|--------|-----------|
 | 1 | `src/Sts2LobbyEnhance/sts2_lobby_enhance.json` 的 `"version"` | **手工** | 游戏与工坊内容里仍是旧版本号 |
-| 2 | `tests/Sts2LobbyEnhance.Tests/ReleasePackageTests.cs` 中 `ContentShipsThePatchManifest` 的 `Assert.Equal("1.8.1", …)` | **手工**（唯一被机器强制的一处） | `dotnet test` 直接失败 |
+| 2 | `tests/Sts2LobbyEnhance.Tests/ReleasePackageTests.cs` 中 `ContentShipsThePatchManifest` 的 `Assert.Equal("2.0.0", …)` | **手工**（唯一被机器强制的一处） | `dotnet test` 直接失败 |
 | 3 | `packaging/content/sts2_lobby_enhance.json` | 自动：`build-content.ps1` 从 #1 复制 | — |
 | 4 | `src/Sts2LobbyEnhance/Sts2LobbyEnhance.csproj` 的 `Version`/`FileVersion`/`AssemblyVersion`/`InformationalVersion` | 自动：csproj 在求值期从 #1 读取 `version` | 出货 DLL 的 FileVersion 与发布版本脱节（1.5.0 之前就是这样：清单 1.5.0、DLL 自报 1.0.0.0，崩溃报告会指向一个从未发布的版本） |
 | 5 | 发布包文件名 `dist/sts2-lobby-enhance-v<version>.zip` | 自动：`tools/pack-release` 用 #1 的版本拼名 | — |
@@ -198,7 +198,7 @@ cd <解压目录>
 ```
 
 `description` 里带 `[h1]游戏大厅增强 vX.Y.Z[/h1]`，就是要对比的当前线上版本；`file_size` 可以核对
-它是否已经换成你刚打的那个包（1.8.1 = 274,951 B）。
+它是否已经换成你刚打的那个包（2.0.0 = 175,177 B）。
 
 **已发布的更新说明改不了**：Steam 把它绑在那一次提交上，没有「编辑历史更新说明」的接口。
 要更正只能在**下一次**提交时写对；如果把同一份内容再提交一次，会多出一条更新记录。
@@ -299,7 +299,7 @@ workspace. If it is also not present, a new item is created.
    - "必需物品"里能看到 `sts2_lan_connect`（3749766330）；
    - 可见性是 **Public** —— `packaging/workshop.json` 写的就是 `public`，**一次上传即公开**，
      没有"先私有看一眼再公开"这一步（作者 2026-11-14 明确要求直接公开）。
-2. 用另一个账号或本机订阅一次，验证能正常下载并加载（日志出现 `[lobby-enhance] ... applied=13 ... failed=0`）。
+2. 用另一个账号或本机订阅一次，验证能正常下载并加载（日志出现 `[lobby-enhance] ... applied=5 ... failed=0`）。
 3. 如果 Steam 提示需要先接受工坊法律协议，请在浏览器里接受后重新上传：
    `https://steamcommunity.com/sharedfiles/workshoplegalagreement`
 5. **上传账号必须拥有本游戏。** 2026-11-14 实测：在没有 AppID 2868840 许可的账号上，
@@ -397,9 +397,9 @@ sts2-lobby-enhance-upload-kit/
 | 首次上传 | 2026-11-14 02:30:39（+08:00） |
 | 上传账号 | 维护者朋友的 Steam 账号（昵称从略；维护者本机账号没有 AppID 2868840 的许可） |
 | 首次上传用的包 | 6,439,500 B · sha256 `72FEFE34…17365D`（**不含** `mod_id.txt`，只能用于这一次新建） |
-| 1.8.1 上传包（当前） | 6,455,080 B · sha256 `3BBA03CD…AC866A23`（**含** `mod_id.txt`，上传即更新同一条目） |
+| 2.0.0 上传包（当前） | 6,423,134 B · sha256 `8EFE47BD…A1066E77169`（**含** `mod_id.txt`，上传即更新同一条目） |
 | 首次上传内容（1.7.0） | 226,838 B = dll 186,368 + 清单 651 + LICENSE 35,825 + NOTICES 3,994 |
-| 1.8.1 内容 | 274,945 B = dll 234,496 + 清单 630 + LICENSE 35,825 + NOTICES 3,994 |
+| 2.0.0 内容 | 175,177 B = dll 134,656 + 清单 702 + LICENSE 35,825 + NOTICES 3,994 |
 | 可见性 | public（页面匿名可访问、有订阅按钮） |
 | 必需物品 | 3749766330（游戏大厅 / STS2 LAN Connect） |
 

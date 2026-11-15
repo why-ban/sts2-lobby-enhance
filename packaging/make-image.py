@@ -41,7 +41,7 @@ DARK = (10, 6, 6)
 TITLE = "游戏大厅增强"
 SUBTITLE = "Game Lobby Enhance  ·  联机大厅扩展"
 EYEBROW = "SLAY THE SPIRE 2   ·   v0.113"
-FOOTER = "联机双方都要安装  ·  五种模式全支持"
+FOOTER = "需游戏大厅 0.6.4  ·  联机双方都要安装"
 
 PILL_TOP, PILL_HEIGHT, PILL_TEXT = 22, 30, 20
 TITLE_CY, TITLE_SIZE = 96, 62
@@ -54,11 +54,11 @@ CARD_TEXT_SIZE = 23
 FOOTER_CY, FOOTER_SIZE = 474, 20
 
 FEATURES = [
-    ("check", "0.113", " 联机修复，加入房间可用"),
-    ("bolt", "极速 / 恐惧", " 模式可建房可加入"),
-    ("restart", "局中重开", " 全队回到本层开头"),
-    ("play", "结算页新开一局", " 不用退出游戏"),
-    ("slider", "房间管理增强", " 存档续玩兼容"),
+    ("play", "结算页新开一局", " 全房回准备页"),
+    ("check", "新开一局仍可续", " 存档不再失效"),
+    ("bolt", "踢人不废房", " 减员照样能开局"),
+    ("restart", "读档免排队", " 不必按原顺序"),
+    ("slider", "建房只留新协议", " 少一个选择题"),
 ]
 
 FONT_DIR = Path("C:/Windows/Fonts")

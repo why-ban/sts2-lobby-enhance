@@ -2,6 +2,44 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循语义化版本。
 
+## [2.0.0] - 2026-11-15
+
+目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.4**（原 0.6.3）。修复项 **13 → 5**，Harmony 分组 **10 → 4**。
+
+### 移除（上游 0.6.4 已原生覆盖，共 8 项）
+
+上游 0.6.4 发布说明明写「适配游戏 0.113 的加入流程、消息布局和 API 变化；支持已解锁的极速／恐惧模式建房及对应准备页」。
+用我们自己的 `tools/tail-readability` 扫它的出货 DLL：「引用失效成员的方法」列表为空（`unexplainedBroken=0`）；
+同一条工具扫 0.6.3 会列出 7 个方法 —— 6 个断点在 0.6.4 是真的没了，不是藏进兼容层。
+
+- `join-flow`：0.6.4 自己重写了加入流程（`Lobby/LanConnectLobbyManagedJoinFlow.cs:64-143`）。
+- `join-screen-modes`：Blitz / Dread 的推屏映射是原生的（`Lobby/LanConnectLobbyJoinFlow.cs:462-480`）。
+- `host-wire`：0.6.4 已按 0.113 布局写 `gameMode` / `isCustom`（`LanConnectSerializationPatches.cs:603-615`）。
+- `tail-error-paths`：拒绝 / 中止路径改走兼容层（`Protocol/Patches/LanConnectTailMessageRuntime.cs:1423,1643,1658`）。
+- `abandon-run`：放弃本局已按 0.113 签名重做（`Lobby/LanConnectMultiplayerSaveCompatibility.cs:283-364`）。
+- `extra-game-modes`：建房模式原生支持（`Lobby/LanConnectLobbyOverlay.cs:5183-5184`）。我们原来用的 `4→Blitz / 5→Dread`
+  哨兵值与 0.6.4 的真实枚举撞车，留着不是多余，而是会覆盖原生分派。
+- `room-card-pill`：房间卡片已含 `blitz` / `dread`（`Lobby/LanConnectLobbyOverlay.cs:3863`）。
+- `unlock-extra-modes`：维护者决定不再提供进度捷径；上游也要求「已原生解锁」才可选。
+
+### 保留（5 项，均为上游仍未覆盖）
+
+| # | id | 依据 |
+|---|---|---|
+| 1 | `new-run-button` | 上游无此入口：0.6.4 全仓 `NGameOverScreen` 0 命中 |
+| 2 | `new-run-save-binding` | 仍是「先拒绝后更新」：`LanConnectCurrentSaveBindingWriter.cs:37-43` + `Lobby/LanConnectLobbyRuntime.cs:2227-2231` |
+| 3 | `roster-rebaseline` | `PlayerLeft` 仍 0 命中；`MembershipMutation` 只做 `Add`，没有减法 |
+| 4 | `load-join-order` | `SequenceEqual` 逐位比较仍在（`TailMessageRuntime.cs:1259-1263`），`RestoreLoadJoinPlayers` 与 0.6.3 逐字相同 |
+| 5 | `new-protocol-only` | 建房仍二选一（`Lobby/LanConnectLobbyOverlay.cs:646`、`:3278-3288`），旧协议仍禁 RitsuLib |
+
+### 说明
+
+- 这是一次**破坏性**升级：依赖下限从 0.6.3 提到 **0.6.4**，清单里的 `min_version` 同步改了；
+  旧版大厅 + 2.0.0 的组合不会打上任何一项。
+- 保留 4 个 `FixGroup`（NewRun / Roster / LoadOrder / Modes），每组一个 Harmony id 的隔离模型不变。
+- 锚点是干净的：`RestoreLoadJoin`、`Accept` / `Reset`、`HostedRoomSession.BoundSaveKey` 在 0.6.4 里与 0.6.3 逐字相同，
+  保留的修复项不需要跟着改签名。
+
 ## [1.8.1] - 2026-11-14
 
 目标游戏 **0.113.0**；依赖 `sts2_lan_connect` **0.6.3**。修复项 **14 → 13**，Harmony 分组 **11 → 10**。

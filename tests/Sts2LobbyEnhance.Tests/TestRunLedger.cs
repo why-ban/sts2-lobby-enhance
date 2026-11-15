@@ -14,7 +14,7 @@ namespace Sts2LobbyEnhance.Tests;
 ///
 /// The counter is fed by the helpers every game-dependent test goes through, not by the tests
 /// themselves, so a test cannot forget to report:
-///   * <see cref="OfficialModScan.Require"/> — the 12 BreakpointRegressionTests cases;
+///   * <see cref="OfficialModScan.Require064"/> — the 12 BreakpointRegressionTests cases;
 ///   * <see cref="GameApiShapeTests"/>'s OpenGame() — the 9 game-API cases;
 ///   * <see cref="BuiltPatchTests"/>'s RequireGameDirectory() — the 1 patch-scan case;
 ///   * <see cref="TailRosterContractTests"/>'s RequireHostType() — the 4 roster-contract cases;
