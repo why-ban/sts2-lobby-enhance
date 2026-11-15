@@ -121,7 +121,7 @@ internal sealed class PoolJoinFix : ICompatFix
                 return true;
             }
 
-            PoolOrigin? origin = PoolRoomStore.Instance.OriginOf(room);
+            PoolOrigin? origin = PoolRoomStore.Instance.OriginOf(anchors, room);
             if (origin == null)
             {
                 // Not a pooled room (an invite, a saved-run resume): upstream's own server is the right one.
@@ -412,35 +412,98 @@ internal static class PoolServerSwitch
         throw new InvalidOperationException("the host mod has no server switch method");
     }
 
-    /// <summary>Puts the player back on the server they started from. Never throws and never cancelled by the caller.</summary>
-    internal static async Task ReturnToAsync(PoolAnchors anchors, string baseUrl, object overlay)
+    /// <summary>
+    /// Puts the player back on the server they started from.
+    ///
+    /// Two rules, both learned from a real log (godot.log 1236-1248) where the rollback died with TaskCanceledException
+    /// and left the player on a stranger's server:
+    ///
+    /// - The switch is started with <see cref="CancellationToken.None"/>. The caller is, almost by definition, a join
+    ///   that just failed or was cancelled, and inheriting that token made the rollback abort on its first await.
+    /// - The budget only decides how long we wait, never whether the switch runs. Cancelling a switch mid-flight leaves
+    ///   the coordinator between generations (it leaves rooms, stops the public channel and persists the address), so a
+    ///   slow rollback is watched to completion instead of being aborted.
+    ///
+    /// A failure is reported as: which server the player is on now, that it works, and which one could not be reached.
+    /// </summary>
+    internal static async Task<bool> ReturnToAsync(PoolAnchors anchors, string baseUrl, object overlay)
     {
-        if (PoolAddress.TryNormalize(baseUrl) == null)
+        string target = PoolAddress.TryNormalize(baseUrl) ?? string.Empty;
+        if (target.Length == 0)
         {
-            return;
+            return true;
         }
 
-        if (PoolAddress.Same(baseUrl, PoolServerCatalog.CurrentBaseUrl(anchors)))
+        if (PoolAddress.Same(target, PoolServerCatalog.CurrentBaseUrl(anchors)))
         {
-            return;
+            return true;
+        }
+
+        Task<object?> switching = SwitchAsync(anchors, target, CancellationToken.None);
+        Task budget = Task.Delay(SwitchBackTimeoutMs);
+        if (ReferenceEquals(await Task.WhenAny(switching, budget).ConfigureAwait(true), budget))
+        {
+            Entry.Warn(
+                "[server-pool] switching back to " + target + " is taking longer than " + SwitchBackTimeoutMs +
+                " ms; it is left running rather than cancelled halfway.");
+            PoolRefreshFix.SetStatus(overlay, "正在切回 " + ShortName(target) + "…（较慢，完成后会自动更新）");
+            _ = CompleteRollbackAsync(anchors, overlay, switching, target);
+            return false;
         }
 
         try
         {
-            using var cts = new CancellationTokenSource(SwitchBackTimeoutMs);
-            object? lease = await SwitchAsync(anchors, baseUrl, cts.Token).ConfigureAwait(true);
-            DisposeLease(lease);
+            DisposeLease(await switching.ConfigureAwait(true));
             RefreshServerUi(anchors, overlay);
-            PoolRefreshFix.SetStatus(overlay, "已切回原服务器：" + PoolAddress.ShortName(null, baseUrl, PoolText.SourceNameMaxLength));
+            PoolRefreshFix.SetStatus(overlay, "已切回原服务器：" + ShortName(target));
+            return true;
         }
         catch (Exception exception)
         {
-            PoolRefreshFix.WarnOnce(
-                "switch-back",
-                "switching back to the original server failed, so the player stays on the last server until they " +
-                "pick one: " + PoolRoomClient.Describe(exception));
+            ReportRollbackFailure(anchors, overlay, target, exception);
+            return false;
         }
     }
+
+    /// <summary>Watches a rollback that outlived its budget, so its result (and its lease) is not lost.</summary>
+    private static async Task CompleteRollbackAsync(
+        PoolAnchors anchors,
+        object overlay,
+        Task<object?> switching,
+        string target)
+    {
+        try
+        {
+            DisposeLease(await switching.ConfigureAwait(true));
+            RefreshServerUi(anchors, overlay);
+            PoolRefreshFix.SetStatus(overlay, "已切回原服务器：" + ShortName(target));
+        }
+        catch (Exception exception)
+        {
+            ReportRollbackFailure(anchors, overlay, target, exception);
+        }
+    }
+
+    /// <summary>
+    /// A rollback that did not happen is not a crash and must not look like one: the UI is pointed at the server the
+    /// client is really on, and the player is told the lobby still works there.
+    /// </summary>
+    private static void ReportRollbackFailure(PoolAnchors anchors, object overlay, string target, Exception exception)
+    {
+        string current = PoolServerCatalog.CurrentBaseUrl(anchors);
+        RefreshServerUi(anchors, overlay);
+        PoolRefreshFix.WarnOnce(
+            "switch-back",
+            "could not switch back to " + target + ": " + PoolRoomClient.Describe(exception));
+        PoolRefreshFix.SetStatus(
+            overlay,
+            current.Length == 0
+                ? "未能切回 " + ShortName(target) + "。"
+                : "未能切回 " + ShortName(target) + "，当前大厅服务器是 " + ShortName(current) + "，可以在这里正常建房或加入。");
+    }
+
+    private static string ShortName(string url) =>
+        PoolAddress.ShortName(null, url, PoolText.SourceNameMaxLength);
 
     /// <summary>
     /// Mirrors what the host mod does after its own switch (LanConnectLobbyOverlay.cs:6392-6399): repaint the

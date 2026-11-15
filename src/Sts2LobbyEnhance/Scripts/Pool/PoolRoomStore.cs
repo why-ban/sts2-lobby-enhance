@@ -219,6 +219,14 @@ internal sealed class PoolRoomStore
 
     private Dictionary<object, PoolOrigin> _origins = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>
+    /// Second index, keyed by room id. A steady-state round replaces the room instances without rebuilding the cards
+    /// (that is the point of "unchanged means no repaint"), so the card closures still hold last round's objects; the
+    /// identity lookup misses for those and this one answers instead. Ambiguous only when two servers advertise the same
+    /// room id, and then it answers with the most recent origin rather than with nothing.
+    /// </summary>
+    private Dictionary<string, PoolOrigin> _originByRoomId = new(StringComparer.Ordinal);
+
     private IReadOnlyList<object> _rooms = Array.Empty<object>();
 
     private string _localVersion = string.Empty;
@@ -264,6 +272,7 @@ internal sealed class PoolRoomStore
                 {
                     _rooms = Array.Empty<object>();
                     _origins = new Dictionary<object, PoolOrigin>(ReferenceEqualityComparer.Instance);
+                    _originByRoomId = new Dictionary<string, PoolOrigin>(StringComparer.Ordinal);
                 }
 
                 return true;
@@ -279,10 +288,21 @@ internal sealed class PoolRoomStore
             return false;
         }
 
+        var byRoomId = new Dictionary<string, PoolOrigin>(StringComparer.Ordinal);
+        foreach (KeyValuePair<object, PoolOrigin> entry in origins)
+        {
+            string roomId = PoolRoomClient.RoomIdOf(anchors, entry.Key);
+            if (roomId.Length > 0)
+            {
+                byRoomId[roomId] = entry.Value;
+            }
+        }
+
         lock (_gate)
         {
             _rooms = rooms;
             _origins = origins;
+            _originByRoomId = byRoomId;
         }
 
         LastSummary = cycle.Describe();
@@ -290,11 +310,22 @@ internal sealed class PoolRoomStore
     }
 
     /// <summary>The server a card was drawn for, or null when the room did not come from the pool.</summary>
-    internal PoolOrigin? OriginOf(object room)
+    internal PoolOrigin? OriginOf(PoolAnchors anchors, object room)
     {
         lock (_gate)
         {
-            return _origins.TryGetValue(room, out PoolOrigin? origin) ? origin : null;
+            if (_origins.TryGetValue(room, out PoolOrigin? exact))
+            {
+                return exact;
+            }
+
+            string roomId = PoolRoomClient.RoomIdOf(anchors, room);
+            if (roomId.Length == 0)
+            {
+                return null;
+            }
+
+            return _originByRoomId.TryGetValue(roomId, out PoolOrigin? byId) ? byId : null;
         }
     }
 

@@ -118,6 +118,12 @@ internal sealed class PoolAnchors
     /// <summary>LanConnectConstants.LobbyRefreshIntervalSeconds (:3376), read as a constant so a bump follows upstream</summary>
     internal double RefreshIntervalSeconds;
 
+    /// <summary>LanConnectConstants.LobbyRoomsPerPage (:50 area) - the page size ClampCurrentPage divides by</summary>
+    internal int RoomsPerPage;
+
+    /// <summary>LanConnectLobbyOverlay._currentPageIndex (:236) - saved and clamped around a rebuild</summary>
+    internal FieldInfo? CurrentPageIndex;
+
     /// <summary>LobbyServiceException - the refresh failure branch is chosen by this type (:3441)</summary>
     internal Type LobbyServiceExceptionType = null!;
 
@@ -507,6 +513,8 @@ internal sealed class PoolAnchors
         RefreshFailureHint = ReflectScope.StaticField(missing, Overlay, "RefreshFailureSwitchHint")!;
 
         RefreshIntervalSeconds = ConstantDouble(host, ConstantsTypeName, "LobbyRefreshIntervalSeconds", missing);
+        RoomsPerPage = ConstantInt(host, ConstantsTypeName, "LobbyRoomsPerPage", missing);
+        CurrentPageIndex = OptionalField(Overlay, "_currentPageIndex");
         LobbyServiceExceptionType = ReflectScope.HostType(host, "Sts2LanConnect.Scripts.LobbyServiceException", missing)!;
     }
 
@@ -655,6 +663,9 @@ internal sealed class PoolAnchors
             .ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
+
+    private static FieldInfo? OptionalField(Type? owner, string name) =>
+        owner?.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
     private static PropertyInfo? OptionalProperty(Type? owner, string name) =>
         owner?.GetProperty(name, BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);

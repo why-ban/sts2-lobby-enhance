@@ -43,6 +43,14 @@ internal sealed class PoolRefreshFix : ICompatFix
     /// </summary>
     private const int CurrentServerQueryBudgetMs = 3000;
 
+    /// <summary>
+    /// Rebuilds the stage per refresh round. A round is allowed the cold-start paints plus the one final draw; anything
+    /// beyond that is the flicker regression and gets a log line of its own for on-device checking.
+    /// </summary>
+    private const int MaxRebuildsPerRound = 3;
+
+    private static int _roundRebuilds;
+
     private static PoolAnchors? _anchors;
 
     /// <summary>
@@ -191,8 +199,8 @@ internal sealed class PoolRefreshFix : ICompatFix
         object? apiClient = null;
         try
         {
-            IReadOnlyList<object> previousRooms = Snapshot(anchors, overlay);            // :3386
             string? selectedRoomId = CurrentSelection(anchors, overlay);                 // :3387
+            Interlocked.Exchange(ref _roundRebuilds, 0);
 
             // :3388-3390 - the current server's probe and announcements. The pool does not replace these: the
             // announcements belong to the server the player is on, and AnnouncementSourceFix rides on the same call.
@@ -221,19 +229,32 @@ internal sealed class PoolRefreshFix : ICompatFix
                 anchors.EnsureAnnouncementFallback.Invoke(overlay, null);
             }
 
-            IReadOnlyList<object> rooms = PoolRoomStore.Instance.Rooms;
+            // What is on screen right now: the previous round's list, or the part the cold-start pump has already
+            // drawn. This is the baseline the round has to beat before it is worth touching the scene tree.
+            IReadOnlyList<object> previousRooms = Snapshot(anchors, overlay);
+            string? selectionBefore = CurrentSelection(anchors, overlay) ?? selectedRoomId;
+
+            // The round is committed exactly once, here. Nothing is written into _rooms while servers are still
+            // answering, which is what used to clamp the page (RebuildRoomStage -> ClampCurrentPage on a short list)
+            // and flash the stage up to a dozen times per round.
+            IReadOnlyList<object> rooms = session.CommitRound();
+
+            int pageBefore = ReadCurrentPage(anchors, overlay);
             WriteRooms(anchors, overlay, rooms);                                         // :3398-3399
 
-            string? nextSelection = ApplySelection(anchors, overlay, rooms, selectedRoomId); // :3409-3416
+            string? nextSelection = ApplySelection(anchors, overlay, rooms, selectionBefore); // :3409-3416
 
-            // :3418-3420 exactly: nothing here asks whether the pump painted, so "unchanged means no rebuild" can
-            // actually hold. The pump is responsible for what it painted; the one case it cannot cover - an answer that
-            // arrived after its last frame - is settled below.
+            // :3418-3420 exactly, and nothing about painting: "unchanged" has to mean "do not rebuild".
             bool roomStageChanged = userInitiated
                                     || !AreVisuallyEquivalent(anchors, previousRooms, rooms)
-                                    || !string.Equals(selectedRoomId, nextSelection, StringComparison.Ordinal);
+                                    || !string.Equals(selectionBefore, nextSelection, StringComparison.Ordinal);
             if (roomStageChanged)
             {
+                // Put the page back first, clamped to the new length: RebuildRoomStage clamps too, but it would clamp
+                // whatever a previous partial write left behind, and a page the player chose must survive a refresh
+                // that did not make it invalid.
+                RestoreCurrentPage(anchors, overlay, pageBefore);
+                NoteRebuild();
                 anchors.RebuildRoomStage.Invoke(overlay, null);                          // :3423
             }
             else
@@ -243,9 +264,12 @@ internal sealed class PoolRefreshFix : ICompatFix
                 anchors.RefreshSelectedRoomDetails.Invoke(overlay, null);                // :3429
             }
 
-            // The pump paints on a coalescing window; if a server answered inside the last one, the stage is showing
-            // the list as of the previous paint. This draws the final one, and does nothing at all when it already is.
-            session.Settle();
+            if (Volatile.Read(ref _roundRebuilds) > MaxRebuildsPerRound)
+            {
+                Entry.Warn(
+                    Tag + "the stage was rebuilt " + Volatile.Read(ref _roundRebuilds) + " times in one refresh; " +
+                    "expected 0 (steady state) or at most " + MaxRebuildsPerRound + " (cold start).");
+            }
 
             // The pool's failure mode is per server, so upstream's catch blocks cannot fire for it. "Every server
             // was silent" is still a failed refresh, and it is reported with upstream's own wording.
@@ -317,12 +341,7 @@ internal sealed class PoolRefreshFix : ICompatFix
                 return;
             }
 
-            if (!session.TryBeginPaint())
-            {
-                return;
-            }
-
-            session.PublishPartial();
+            session.PaintColdStartIfNeeded();
         }
         catch (Exception exception)
         {
@@ -344,7 +363,7 @@ internal sealed class PoolRefreshFix : ICompatFix
                 return;
             }
 
-            PoolOrigin? origin = PoolRoomStore.Instance.OriginOf(room);
+            PoolOrigin? origin = PoolRoomStore.Instance.OriginOf(anchors, room);
             if (origin == null)
             {
                 return;
@@ -629,6 +648,46 @@ internal sealed class PoolRefreshFix : ICompatFix
         return false;
     }
 
+    internal static void NoteRebuild() => Interlocked.Increment(ref _roundRebuilds);
+
+    /// <summary>Clamps the page to the new list length and writes it back, leaving it alone while it is still valid.</summary>
+    private static void RestoreCurrentPage(PoolAnchors anchors, object overlay, int page)
+    {
+        if (anchors.CurrentPageIndex == null || anchors.RoomsPerPage <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            int filtered = FilteredCount(anchors, overlay);
+            int totalPages = filtered <= 0 ? 0 : (filtered + anchors.RoomsPerPage - 1) / anchors.RoomsPerPage;
+            int clamped = totalPages <= 0 ? 0 : Math.Clamp(page, 0, totalPages - 1);
+            if (anchors.CurrentPageIndex.GetValue(overlay) is int current && current == clamped)
+            {
+                return;
+            }
+
+            anchors.CurrentPageIndex.SetValue(overlay, clamped);
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("page", "the current page could not be preserved: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    private static int ReadCurrentPage(PoolAnchors anchors, object overlay)
+    {
+        try
+        {
+            return anchors.CurrentPageIndex?.GetValue(overlay) as int? ?? 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
     private static bool ReadBool(FieldInfo field, object overlay) => field.GetValue(overlay) is true;
 
     private static int ReadInt(FieldInfo field, object overlay) => field.GetValue(overlay) as int? ?? 0;
@@ -730,24 +789,13 @@ internal sealed class PoolRefreshSession
     internal PoolCycle Cycle => _cycle;
 
     /// <summary>
-    /// Draws the round's final list if the pump still owes a paint (a server answered inside the last coalescing
-    /// window). When the pump already put everything on screen this is a no-op, which is what keeps an unchanged round
-    /// from rebuilding the stage at all.
+    /// Commits the finished round and returns the list the overlay should hold. Called once per round, from the
+    /// refresh's epilogue; a round that produced nothing keeps the previously published list.
     /// </summary>
-    internal void Settle()
+    internal IReadOnlyList<object> CommitRound()
     {
-        if (Interlocked.Exchange(ref _dirty, 0) == 0)
-        {
-            return;
-        }
-
-        if (!PoolRoomStore.Instance.Commit(_cycle, _anchors))
-        {
-            return;
-        }
-
-        WriteRooms();
-        _anchors.RebuildRoomStage.Invoke(Overlay, null);
+        _ = PoolRoomStore.Instance.Commit(_cycle, _anchors);
+        return PoolRoomStore.Instance.Rooms;
     }
 
     /// <summary>Starts the fan-out. Runs on the caller's thread and returns immediately.</summary>
@@ -762,6 +810,11 @@ internal sealed class PoolRefreshSession
     /// once per PaintCoalesceMs, and the dirty flag is left set so the very next frame past the gate paints.
     /// </summary>
     private const int PaintCoalesceMs = 120;
+
+    /// <summary>Middleware cap: a cold start may draw at most this often, then waits for the round's own paint.</summary>
+    private const int MaxColdStartPaints = 2;
+
+    private int _coldStartPaints;
 
     private int _lastPaintTicks = System.Environment.TickCount - PaintCoalesceMs;
 
@@ -790,16 +843,40 @@ internal sealed class PoolRefreshSession
         return true;
     }
 
-    /// <summary>Commits what the round has so far, writes _rooms and redraws. Only ever called from the _Process pump.</summary>
-    internal void PublishPartial()
+    /// <summary>
+    /// Cold start only: while the stage has no rooms at all, draw what has arrived so far instead of leaving the lobby
+    /// blank for the length of a slow round. Once the first list exists the pump stops touching the scene tree - the
+    /// round's epilogue compares and paints once - which is what removes the every-eight-seconds flash and the page
+    /// reset it caused.
+    /// </summary>
+    internal void PaintColdStartIfNeeded()
     {
-        if (Volatile.Read(ref _finished) != 0 || !PoolRoomStore.Instance.Commit(_cycle, _anchors))
+        if (Volatile.Read(ref _finished) != 0)
+        {
+            return;
+        }
+
+        if (Volatile.Read(ref _coldStartPaints) >= MaxColdStartPaints)
+        {
+            // Nothing left to gain: drop the flag so the pump stops considering this round at all.
+            Interlocked.Exchange(ref _dirty, 0);
+            return;
+        }
+
+        if (!TryBeginPaint())
+        {
+            return;
+        }
+
+        if (RoomCountOnStage() != 0 || !PoolRoomStore.Instance.Commit(_cycle, _anchors))
         {
             return;
         }
 
         WriteRooms();
+        PoolRefreshFix.NoteRebuild();
         _anchors.RebuildRoomStage.Invoke(Overlay, null);
+        Interlocked.Increment(ref _coldStartPaints);
 
         if (Interlocked.Exchange(ref _announced, 1) == 0)
         {
@@ -807,6 +884,9 @@ internal sealed class PoolRefreshSession
                        "; every room card now carries the server it came from.");
         }
     }
+
+    private int RoomCountOnStage() =>
+        _anchors.Rooms.GetValue(Overlay) is ICollection rooms ? rooms.Count : 0;
 
     /// <summary>Clears the pump's session and stops a superseded fan-out.</summary>
     internal void Finish()
