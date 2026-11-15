@@ -226,15 +226,12 @@ internal sealed class PoolRefreshFix : ICompatFix
 
             string? nextSelection = ApplySelection(anchors, overlay, rooms, selectedRoomId); // :3409-3416
 
-            // :3418-3420, plus the one thing upstream cannot know about: whether the pump has already put THIS
-            // round's final list on the stage. If it has, both "changed" conditions are already satisfied visually and
-            // the rebuild would be a second full pass over cards the player is looking at. Painted-but-not-current is
-            // the only case that still needs the rebuild on top of upstream's own conditions.
-            bool stageIsCurrent = session.PaintedVersion != 0 && session.PaintedVersion == session.Cycle.Version;
+            // :3418-3420 exactly: nothing here asks whether the pump painted, so "unchanged means no rebuild" can
+            // actually hold. The pump is responsible for what it painted; the one case it cannot cover - an answer that
+            // arrived after its last frame - is settled below.
             bool roomStageChanged = userInitiated
-                                    || !string.Equals(selectedRoomId, nextSelection, StringComparison.Ordinal)
-                                    || (!stageIsCurrent
-                                        && (!AreVisuallyEquivalent(anchors, previousRooms, rooms) || session.Painted));
+                                    || !AreVisuallyEquivalent(anchors, previousRooms, rooms)
+                                    || !string.Equals(selectedRoomId, nextSelection, StringComparison.Ordinal);
             if (roomStageChanged)
             {
                 anchors.RebuildRoomStage.Invoke(overlay, null);                          // :3423
@@ -245,6 +242,10 @@ internal sealed class PoolRefreshFix : ICompatFix
                 anchors.UpdatePageControls.Invoke(overlay, new object[] { FilteredCount(anchors, overlay) }); // :3428
                 anchors.RefreshSelectedRoomDetails.Invoke(overlay, null);                // :3429
             }
+
+            // The pump paints on a coalescing window; if a server answered inside the last one, the stage is showing
+            // the list as of the previous paint. This draws the final one, and does nothing at all when it already is.
+            session.Settle();
 
             // The pool's failure mode is per server, so upstream's catch blocks cannot fire for it. "Every server
             // was silent" is still a failed refresh, and it is reported with upstream's own wording.
@@ -711,8 +712,6 @@ internal sealed class PoolRefreshSession
 
     private int _dirty;
 
-    private int _painted;
-
     private int _finished;
 
     internal PoolRefreshSession(PoolAnchors anchors, object overlay, CancellationToken cancellationToken)
@@ -730,8 +729,26 @@ internal sealed class PoolRefreshSession
     /// <summary>How the round went, for the refresh's "every server was silent" decision.</summary>
     internal PoolCycle Cycle => _cycle;
 
-    /// <summary>True once the pump has written the scene tree during this round.</summary>
-    internal bool Painted => Volatile.Read(ref _painted) != 0;
+    /// <summary>
+    /// Draws the round's final list if the pump still owes a paint (a server answered inside the last coalescing
+    /// window). When the pump already put everything on screen this is a no-op, which is what keeps an unchanged round
+    /// from rebuilding the stage at all.
+    /// </summary>
+    internal void Settle()
+    {
+        if (Interlocked.Exchange(ref _dirty, 0) == 0)
+        {
+            return;
+        }
+
+        if (!PoolRoomStore.Instance.Commit(_cycle, _anchors))
+        {
+            return;
+        }
+
+        WriteRooms();
+        _anchors.RebuildRoomStage.Invoke(Overlay, null);
+    }
 
     /// <summary>Starts the fan-out. Runs on the caller's thread and returns immediately.</summary>
     internal void Start()
@@ -748,11 +765,7 @@ internal sealed class PoolRefreshSession
 
     private int _lastPaintTicks = System.Environment.TickCount - PaintCoalesceMs;
 
-    internal int PaintedVersion { get; private set; }
-
     internal void MarkDirty() => Volatile.Write(ref _dirty, 1);
-
-    internal bool TakeDirty() => Interlocked.Exchange(ref _dirty, 0) != 0;
 
     /// <summary>True when there is something to paint and the coalescing window has elapsed.</summary>
     internal bool TryBeginPaint()
@@ -787,8 +800,6 @@ internal sealed class PoolRefreshSession
 
         WriteRooms();
         _anchors.RebuildRoomStage.Invoke(Overlay, null);
-        Volatile.Write(ref _painted, 1);
-        PaintedVersion = _cycle.Version;
 
         if (Interlocked.Exchange(ref _announced, 1) == 0)
         {

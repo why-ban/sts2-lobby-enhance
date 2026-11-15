@@ -43,8 +43,6 @@ internal sealed class PoolCycle
 
     private int _failed;
 
-    private int _version;
-
     /// <summary>First few failure reasons, so "failed=2" never has to be taken on faith.</summary>
     private readonly List<string> _errors = new();
 
@@ -66,21 +64,6 @@ internal sealed class PoolCycle
             lock (_gate)
             {
                 return _failed;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Bumped every time rows are added. The refresh uses it to tell "the stage already shows this round's final
-    /// list" (the pump painted after the last answer) from "it shows a half filled one".
-    /// </summary>
-    internal int Version
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _version;
             }
         }
     }
@@ -154,7 +137,6 @@ internal sealed class PoolCycle
             }
 
             _rows.Add(new Row(room, origin, latencyMs));
-            _version++;
         }
     }
 

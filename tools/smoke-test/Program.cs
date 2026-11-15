@@ -63,6 +63,7 @@ string[] expectedFixIds =
     ("new-protocol-only",  "LanConnectLobbyOverlay",           "RefreshProtocolProfileOptionAvailability"),
     ("room-version-filter", "LanConnectLobbyOverlay",           "GetFilteredRooms"),
     ("touch-chat-scroll",   "LanConnectRichMessageView",        "_Ready"),
+    ("touch-chat-scroll",   "LanConnectRichMessageView",        "RaiseReferencePressed"),
     ("chat-server-switch",  "LanConnectBasicChatPanel",         "UpdateAvailability"),
     ("announcement-source", "LobbyApiClient",                   "GetAnnouncementsAsync"),
     ("server-pool-refresh", "LanConnectLobbyOverlay",           "RefreshRoomsAsync"),
