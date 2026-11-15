@@ -42,7 +42,8 @@ public sealed class FixRegistryTests
         "announcement-source",
         "server-pool-refresh",
         "server-pool-join",
-        "server-pool-create"
+        "server-pool-create",
+        "lobby-entry-direct"
     ];
 
     private static string ScriptsDirectory =>

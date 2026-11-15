@@ -35,6 +35,10 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 {
     private const string PanelTypeName = "Sts2LanConnect.Scripts.LanConnectBasicChatPanel";
 
+    private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyOverlay";
+
+    private const string AutoRefreshFieldName = "_timeUntilAutoRefresh";
+
     private const string RuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyRuntime";
 
     private const string ConfigTypeName = "Sts2LanConnect.Scripts.LanConnectConfig";
@@ -46,8 +50,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     private const string CreateButtonMethodName = "CreateButton";
 
     private const string ChatStylePropertyName = "ChatVisualStyle";
-
-    private const string MutedColorPropertyName = "TextMutedColor";
 
     private const string RuntimeInstancePropertyName = "Instance";
 
@@ -72,12 +74,16 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// <summary>The node upstream gives the sidebar panel (<c>LanConnectLobbyOverlay.cs:1762</c>).</summary>
     private const string LobbyPanelNodeName = "LobbyServerChatPanel";
 
+    /// <summary>The lobby overlay's node name (<c>LanConnectConstants.LobbyOverlayName</c>, const value).</summary>
+    private const string OverlayNodeName = "LanConnectLobbyOverlay";
+
     /// <summary>Style value of the sidebar panel (<c>LanConnectLobbyOverlay.cs:1763</c>).</summary>
     private const string LobbyStyleName = "LobbySidebar";
 
     private const string SwitchRowNodeName = "LobbyEnhanceChatServerSwitch";
 
-    private const string NameLabelNodeName = "LobbyEnhanceChatServerName";
+    /// <summary>Sits between upstream's title text and the server name: "频道聊天" + this + "魔仙堡".</summary>
+    private const string TitleSeparator = " · ";
 
     /// <summary>Short name limit in the row; the panel is 200 px wide before layout gives it more.</summary>
     private const int MaxNameChars = 8;
@@ -89,15 +95,16 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     private const int RowSeparation = 4;
 
     /// <summary>
-    /// Below this the row goes compact: the status label (ShrinkEnd, clipped to zero) is hidden and so is the
-    /// middle name label, leaving two 24 px arrows. At 200 px - the sidebar's minimum
-    /// (<c>LanConnectLobbyOverlay.cs:1748</c>) - the title, an icon, two arrows and a name cannot all fit, and
-    /// squeezing the title is exactly what the user called "奇形怪状". The target name then lives in the arrows'
-    /// tooltips.
+    /// Below this the status label (ShrinkEnd, clipped to zero) is hidden so the title still has room for
+    /// "频道聊天 · 魔仙堡" plus the two 24 px arrows. The server name lives inside the title text, so it never
+    /// competes with the arrows for space - only the status does.
     /// </summary>
     private const float CompactRowWidth = 260f;
 
     private const string LocalServerLabel = "本服";
+
+    /// <summary>What <see cref="ChatServerCatalog.ShortName"/> says when there is neither a name nor an address.</summary>
+    private const string UnknownServerLabel = "未知服务器";
 
     private const int MaxAttempts = 5;
 
@@ -120,12 +127,22 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     private static string? _observedConfigUrl;
 
+    /// <summary>The suffix this repair last appended to the title, so the next pass can strip it.</summary>
+    private static string _titleSuffix = string.Empty;
+
     private static int _warned;
 
     private static int _nameLookupWarned;
 
     /// <summary>Separate from <see cref="_warned"/> so a shape notice cannot swallow the first real failure.</summary>
     private static int _shapeNoticed;
+
+    /// <summary>Set when a switch settles; consumed once on the next main-thread tick.</summary>
+    private static int _refreshNudgePending;
+
+    private static int _nameLogged;
+
+    private static int _configWarned;
 
     public string Id => "chat-server-switch";
 
@@ -243,6 +260,14 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return;
         }
 
+        if (Interlocked.Exchange(ref _refreshNudgePending, 0) != 0)
+        {
+            // Main thread (a Harmony postfix on the panel), so reaching into the scene tree is safe here. Only the
+            // timer is touched: the lobby's own refresh then re-fetches rooms and announcements from the server
+            // the channel is now attached to.
+            NudgeOverlayAutoRefresh(shape);
+        }
+
         // Before Bind() the panel has no state and its title still says the localized default: nothing to report.
         if (shape.ChatState.GetValue(panel) == null)
         {
@@ -266,6 +291,20 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             _observedConfigUrl = configUrl;
             Volatile.Write(ref _state, SwitchState.Initial);
             ChatServerCatalog.Invalidate();
+            Interlocked.Exchange(ref _refreshNudgePending, 1);
+        }
+
+        SwitchState state = Volatile.Read(ref _state);
+        string localName = ResolveLocalName(configUrl);
+        (string text, string tooltip) = Describe(state, localName, configUrl);
+
+        // The title is written FIRST, before anything else in this method can fail: a real-machine report showed
+        // the arrows present with an empty name, which is exactly what happens when a later step throws after the
+        // widgets exist. The name now rides on the title itself ("频道聊天 · 魔仙堡", arrows furthest right), so a
+        // separate label - which was what went missing on the narrow sidebar - is not involved at all.
+        if (shape.TitleLabel.GetValue(panel) is Label title && GodotObject.IsInstanceValid(title))
+        {
+            ApplyTitle(title, text, tooltip);
         }
 
         float width = panel.Size.X;
@@ -277,17 +316,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             status.Visible = !compact;
         }
 
-        SwitchState state = Volatile.Read(ref _state);
-        widgets.Name.Visible = !compact;
-
-        string localName = ResolveLocalName(configUrl);
-        (string text, string tooltip) = Describe(state, localName, configUrl);
-        if (!string.Equals(widgets.Name.Text, text, StringComparison.Ordinal))
-        {
-            widgets.Name.Text = text;
-        }
-
-        widgets.Name.TooltipText = tooltip;
         bool busy = state.Phase is SwitchPhase.Probing or SwitchPhase.Connecting;
         string target = CurrentTargetLabel(state, localName);
         widgets.Previous.Disabled = busy;
@@ -296,7 +324,70 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         widgets.Next.TooltipText = busy ? "正在切换，请稍候" : "切换到下一台服务器的公共频道 · 当前 " + target;
     }
 
-    /// <summary>Where the public channel points right now; shown in the row and in the arrows' tooltips.</summary>
+    /// <summary>
+    /// Rewrites the title to "频道聊天 · 魔仙堡" without accumulating suffixes: upstream rewrites the title on
+    /// every state change (<c>LanConnectBasicChatPanel.cs:2450-2452</c>, <c>:2292-2294</c>) and this runs after it,
+    /// while our own per-frame tick can also run without upstream having touched the title, so the previously
+    /// applied suffix is stripped first.
+    /// </summary>
+    private static void ApplyTitle(Label title, string name, string tooltip)
+    {
+        title.ClipText = true;
+        if (title.TextOverrunBehavior != TextServer.OverrunBehavior.TrimEllipsis)
+        {
+            title.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
+        }
+
+        string baseText = title.Text;
+        if (_titleSuffix.Length > 0 && baseText.EndsWith(_titleSuffix, StringComparison.Ordinal))
+        {
+            baseText = baseText[..^_titleSuffix.Length];
+        }
+
+        // A blank name would render as a dangling " · ". Every source already falls back, this is the last guard.
+        string shown = string.IsNullOrWhiteSpace(name) ? LocalServerLabel : name.Trim();
+        string suffix = TitleSeparator + shown;
+        string next = baseText + suffix;
+        if (!string.Equals(title.Text, next, StringComparison.Ordinal))
+        {
+            title.Text = next;
+        }
+
+        _titleSuffix = suffix;
+        title.TooltipText = tooltip;
+    }
+
+    /// <summary>
+    /// Zeroes <c>LanConnectLobbyOverlay._timeUntilAutoRefresh</c> (<c>:232</c>, consumed at <c>:736-740</c>) so the
+    /// next frame runs one ordinary refresh. Nothing is fetched from here and no timer of our own is created.
+    /// </summary>
+    private static void NudgeOverlayAutoRefresh(Shape shape)
+    {
+        try
+        {
+            SceneTree? tree = Engine.GetMainLoop() as SceneTree;
+            Node? root = tree?.Root;
+            if (root == null)
+            {
+                return;
+            }
+
+            Node? overlay = root.FindChild(OverlayNodeName, recursive: true, owned: false);
+            if (overlay == null || !shape.OverlayType.IsInstanceOfType(overlay))
+            {
+                return;
+            }
+
+            shape.AutoRefresh.SetValue(overlay, 0d);
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("could not request an immediate lobby refresh: " +
+                     exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
+    /// <summary>Where the public channel points right now; shown in the title and in the arrows' tooltips.</summary>
     private static string CurrentTargetLabel(SwitchState state, string localName)
     {
         if (state.Phase == SwitchPhase.Unavailable)
@@ -304,9 +395,13 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return "频道暂不可用";
         }
 
-        return state.TargetAddress == null
-            ? localName
-            : ChatServerCatalog.ShortName(state.TargetName, state.TargetAddress, MaxNameChars);
+        if (state.TargetAddress == null)
+        {
+            return localName;
+        }
+
+        string name = ChatServerCatalog.ShortName(state.TargetName, state.TargetAddress, MaxNameChars);
+        return string.IsNullOrWhiteSpace(name) ? LocalServerLabel : name;
     }
 
     private static (string Text, string Tooltip) Describe(SwitchState state, string localName, string configUrl)
@@ -337,25 +432,61 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         return (text, detail);
     }
 
+    /// <summary>
+    /// The short name of the server the panel is attached to, for the title's tail.
+    ///
+    /// Three sources, tried in order: the operator name the server list carries, the address host, then the
+    /// literal "本服". The last one is not decoration: a real-machine report showed the name missing entirely, and
+    /// a blank tail is worse than an imprecise one, so this method is total - it always returns something.
+    /// </summary>
     private static string ResolveLocalName(string configUrl)
     {
+        string name;
+        string source;
         try
         {
-            return ChatServerCatalog.TryResolveDisplayName(configUrl, out string displayName)
-                ? ChatServerCatalog.ShortName(displayName, configUrl, MaxNameChars)
-                : ChatServerCatalog.ShortName(null, configUrl, MaxNameChars);
+            if (ChatServerCatalog.TryResolveDisplayName(configUrl, out string displayName) &&
+                !string.IsNullOrWhiteSpace(displayName))
+            {
+                name = ChatServerCatalog.ShortName(displayName, configUrl, MaxNameChars);
+                source = "display name";
+            }
+            else
+            {
+                name = ChatServerCatalog.ShortName(null, configUrl, MaxNameChars);
+                source = name.Length == 0 ? "fallback" : "address host";
+            }
         }
         catch (Exception exception)
         {
             if (Interlocked.Exchange(ref _nameLookupWarned, 1) == 0)
             {
                 Entry.Warn(
-                    "chat-server-switch: the current server's name is unavailable, showing the address instead: " +
+                    "chat-server-switch: the current server's name is unavailable: " +
                     exception.GetType().Name + ": " + exception.Message);
             }
 
-            return ChatServerCatalog.ShortName(null, configUrl, MaxNameChars);
+            name = string.Empty;
+            source = "exception";
         }
+
+        // "未知服务器" is ShortName's answer for "no name and no address"; for the server we are already on, the
+        // honest label is "本服".
+        if (string.IsNullOrWhiteSpace(name) ||
+            string.Equals(name, UnknownServerLabel, StringComparison.Ordinal))
+        {
+            name = LocalServerLabel;
+            source = "local label";
+        }
+
+        if (Interlocked.Exchange(ref _nameLogged, 1) == 0)
+        {
+            Entry.Info(
+                "chat-server-switch: public channel label resolved from " + source + ": '" + name +
+                "' (config base url: '" + configUrl + "').");
+        }
+
+        return name;
     }
 
     /// <summary>
@@ -421,42 +552,19 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
         Button previous = CreateArrowButton(shape, panel, "‹", "切换到上一台服务器的公共频道");
         Button next = CreateArrowButton(shape, panel, "›", "切换到下一台服务器的公共频道");
-
-        Label name = new()
-        {
-            Name = NameLabelNodeName,
-            ClipText = true,
-            VerticalAlignment = VerticalAlignment.Center,
-            CustomMinimumSize = Vector2.Zero,
-            SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter,
-            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis
-        };
-        name.AddThemeFontSizeOverride("font_size", 12);
-        if (shape.MutedColor.GetValue(panel) is Color muted)
-        {
-            name.AddThemeColorOverride("font_color", muted);
-        }
-
         previous.Connect(Button.SignalName.Pressed, Callable.From(() => BeginStep(-1)));
         next.Connect(Button.SignalName.Pressed, Callable.From(() => BeginStep(1)));
 
         var built = new HBoxContainer { Name = SwitchRowNodeName };
         built.AddThemeConstantOverride("separation", RowSeparation);
         built.AddChild(previous);
-        built.AddChild(name);
         built.AddChild(next);
 
+        // Appended last, so the arrows are the right-most thing in the row. The status label stays where it was
+        // (before them) and keeps shrinking to zero on a narrow panel instead of pushing the arrows out.
         titleRow.AddChild(built);
-        if (shape.StatusLabel.GetValue(panel) is Label status &&
-            GodotObject.IsInstanceValid(status) &&
-            ReferenceEquals(status.GetParent(), titleRow))
-        {
-            // Title, switch row, then the status label: the status keeps shrinking to zero instead of the row
-            // being pushed off the panel.
-            titleRow.MoveChild(built, status.GetIndex());
-        }
 
-        var widgets = new RowWidgets(previous, name, next);
+        var widgets = new RowWidgets(previous, next);
         Rows.Add(built, widgets);
         return widgets;
     }
@@ -508,8 +616,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             object? runtime = shape.RuntimeInstance.GetValue(null);
             if (runtime == null)
             {
-                SetState(new SwitchState(
-                    previous.TargetAddress, previous.TargetName, SwitchPhase.Idle, "大厅运行时还没就绪"));
+                SetState(FailureState(previous, replacedConnection: false, "大厅运行时还没就绪"));
                 Interlocked.Exchange(ref _busy, 0);
                 return;
             }
@@ -519,8 +626,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             string configUrl = ReadConfigBaseUrl(shape);
             if (string.IsNullOrWhiteSpace(netId))
             {
-                SetState(new SwitchState(
-                    previous.TargetAddress, previous.TargetName, SwitchPhase.Idle, "读不到本机 NetId，无法申请频道票据"));
+                SetState(FailureState(previous, replacedConnection: false, "读不到本机 NetId，无法申请频道票据"));
                 Interlocked.Exchange(ref _busy, 0);
                 return;
             }
@@ -536,11 +642,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         {
             Interlocked.Exchange(ref _busy, 0);
             SwitchState previous = Volatile.Read(ref _state);
-            SetState(new SwitchState(
-                previous.TargetAddress,
-                previous.TargetName,
-                SwitchPhase.Idle,
-                exception.GetType().Name + ": " + exception.Message));
+            SetState(FailureState(previous, replacedConnection: false, exception.GetType().Name + ": " + exception.Message));
             WarnOnce("could not start the channel switch: " + exception.GetType().Name + ": " + exception.Message);
         }
     }
@@ -568,9 +670,10 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             IReadOnlyList<CatalogServer> servers = snapshot?.Servers ?? Array.Empty<CatalogServer>();
             if (servers.Count <= 1)
             {
-                // Nothing to switch to. The channel that is up stays up, so this is not "unavailable", it is
-                // "there is only one" - and the tooltip is where that belongs.
-                SetState(new SwitchState(previous.TargetAddress, previous.TargetName, SwitchPhase.Idle,
+                // Every candidate whose /probe did not advertise serverChatVersion == 1 was dropped while the
+                // catalog was built, so "one entry" means "only this server speaks the protocol". The channel
+                // that is up stays up and the row reads 本服.
+                SetState(FailureState(previous, replacedConnection: false,
                     "没有探测到其它支持公共频道协议 v1 的服务器"));
                 return;
             }
@@ -626,19 +729,14 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 return;
             }
 
-            SetState(new SwitchState(
-                previous.TargetAddress,
-                previous.TargetName,
-                replacedConnection ? SwitchPhase.Unavailable : SwitchPhase.Idle,
-                problem ?? "没有找到可用的公共频道服务器"));
+            // Nothing was switched and (unless a connection was already replaced) nothing was lost, so the row
+            // goes back to "本服" and only the tooltip carries the reason.
+            SetState(FailureState(previous, replacedConnection, problem ?? "没有找到可用的公共频道服务器"));
         }
         catch (Exception exception)
         {
-            SetState(new SwitchState(
-                previous.TargetAddress,
-                previous.TargetName,
-                replacedConnection ? SwitchPhase.Unavailable : SwitchPhase.Idle,
-                exception.GetType().Name + ": " + exception.Message));
+            SetState(FailureState(
+                previous, replacedConnection, exception.GetType().Name + ": " + exception.Message));
         }
         finally
         {
@@ -734,6 +832,16 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         }
     }
 
+    /// <summary>
+    /// End state of a walk that did not switch anything. When the previous channel is provably still up (no
+    /// connect was attempted, so the rotating port never replaced the coordinator) the row falls back to 本服;
+    /// only a replaced-and-failed connection earns the "频道暂不可用" wording.
+    /// </summary>
+    private static SwitchState FailureState(SwitchState previous, bool replacedConnection, string problem) =>
+        replacedConnection
+            ? new SwitchState(previous.TargetAddress, previous.TargetName, SwitchPhase.Unavailable, problem)
+            : new SwitchState(null, null, SwitchPhase.Idle, problem);
+
     private static int IndexOfTarget(IReadOnlyList<CatalogServer> servers)
     {
         SwitchState state = Volatile.Read(ref _state);
@@ -764,13 +872,53 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         return wrapped < 0 ? wrapped + count : wrapped;
     }
 
-    private static string ReadConfigBaseUrl(Shape shape) => shape.ConfigBaseUrl.GetValue(null) as string ?? string.Empty;
+    /// <summary>
+    /// The configured lobby base URL, or "" when the getter cannot answer.
+    ///
+    /// Never throws: this used to be the first config read after the switch row was built, and a getter that
+    /// throws (the default URL resolution touches the packaged defaults file) left the row present with an empty
+    /// name - the exact failure a real-machine screenshot showed. A missing URL now costs the name its address
+    /// fallback, nothing else.
+    /// </summary>
+    private static string ReadConfigBaseUrl(Shape shape)
+    {
+        try
+        {
+            return shape.ConfigBaseUrl.GetValue(null) as string ?? string.Empty;
+        }
+        catch (Exception exception)
+        {
+            if (Interlocked.Exchange(ref _configWarned, 1) == 0)
+            {
+                Entry.Warn(
+                    "chat-server-switch: reading the configured lobby server failed, the channel label falls back " +
+                    "to 本服: " + exception.GetType().Name + ": " + exception.Message);
+            }
 
-    private static void SetState(SwitchState next) => Volatile.Write(ref _state, next);
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// The address the public channel is currently attached to, or null when it is on the configured lobby
+    /// server. Read by the announcement repair so the announcement bar can follow the same server instead of
+    /// resolving a second, divergent idea of "current".
+    /// </summary>
+    internal static string? CurrentChatTargetAddress => Volatile.Read(ref _state).TargetAddress;
+
+    private static void SetState(SwitchState next)
+    {
+        Volatile.Write(ref _state, next);
+        if (next.Phase == SwitchPhase.Idle)
+        {
+            // AnnouncementSourceFix reads the settled target from CurrentChatTargetAddress; this flag only asks
+            // the overlay to run one refresh right away instead of waiting out its 8 s timer.
+            Interlocked.Exchange(ref _refreshNudgePending, 1);
+        }
+    }
 
     private static bool IsAlive(RowWidgets widgets) =>
         GodotObject.IsInstanceValid(widgets.Previous) &&
-        GodotObject.IsInstanceValid(widgets.Name) &&
         GodotObject.IsInstanceValid(widgets.Next);
 
     private static void WarnOnce(string message)
@@ -799,11 +947,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         internal static SwitchState Initial { get; } = new(null, null, SwitchPhase.Idle, null);
     }
 
-    private sealed class RowWidgets(Button previous, Label name, Button next)
+    private sealed class RowWidgets(Button previous, Button next)
     {
         internal Button Previous { get; } = previous;
-
-        internal Label Name { get; } = name;
 
         internal Button Next { get; } = next;
     }
@@ -828,8 +974,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
         internal MethodInfo CreateButton = null!;
 
-        internal PropertyInfo MutedColor = null!;
-
         internal PropertyInfo RuntimeInstance = null!;
 
         internal FieldInfo ChatOwner = null!;
@@ -849,6 +993,11 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         internal PropertyInfo StatePresentation = null!;
 
         internal PropertyInfo StateChatEnabled = null!;
+
+        /// <summary>The overlay, reached by node name; only its refresh timer is touched.</summary>
+        internal Type OverlayType = null!;
+
+        internal FieldInfo AutoRefresh = null!;
 
         internal static Shape? TryCapture(Assembly host, List<string> problems)
         {
@@ -871,13 +1020,12 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                     problems)!,
                 CreateButton = ReflectScope.MethodOf(panel, CreateButtonMethodName, 2, problems)!,
                 ChatStyle = ReflectScope.PropertyOf(panel, ChatStylePropertyName, problems)!,
-                MutedColor = ReflectScope.PropertyOf(panel, MutedColorPropertyName, problems)!,
                 RuntimeInstance = ReflectScope.StaticProperty(problems, runtime, RuntimeInstancePropertyName)!,
                 ResolveNetId = ReflectScope.Exact(
                     runtime, ResolveNetIdMethodName, requireStatic: false, Array.Empty<string>(), "System.String",
                     problems)!,
                 RuntimeChat = ReflectScope.PropertyOf(runtime, RuntimeChatPropertyName, problems)!,
-                ConfigBaseUrl = ReflectScope.StaticProperty(problems, config, ConfigBaseUrlPropertyName)!,
+                ConfigBaseUrl = RequireStringStatic(problems, config, ConfigBaseUrlPropertyName)!,
                 DisplayName = ReflectScope.Exact(
                     config, DisplayNameMethodName, requireStatic: true, Array.Empty<string>(), "System.String",
                     problems)!
@@ -941,10 +1089,42 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                              ", expected " + RuntimeTypeName);
             }
 
+            Type? overlay = ReflectScope.HostType(host, OverlayTypeName, problems);
+            if (overlay != null)
+            {
+                shape.OverlayType = overlay;
+                FieldInfo? autoRefresh = ReflectScope.Field(problems, overlay, AutoRefreshFieldName);
+                if (autoRefresh != null)
+                {
+                    if (autoRefresh.FieldType != typeof(double))
+                    {
+                        problems.Add(AutoRefreshFieldName + " is " + autoRefresh.FieldType.FullName +
+                                     ", expected System.Double");
+                    }
+                    else
+                    {
+                        shape.AutoRefresh = autoRefresh;
+                    }
+                }
+            }
+
             // The candidate list is not optional: without it the arrows would have nowhere to go.
             ChatServerCatalog.TryCapture(host, problems);
 
             return shape;
+        }
+
+        /// <summary>A static string property; anything else is a shape change worth reporting.</summary>
+        private static PropertyInfo? RequireStringStatic(List<string> problems, Type owner, string name)
+        {
+            PropertyInfo? property = ReflectScope.StaticProperty(problems, owner, name);
+            if (property != null && property.PropertyType != typeof(string))
+            {
+                problems.Add(name + " is " + property.PropertyType.FullName + ", expected System.String");
+                return null;
+            }
+
+            return property;
         }
 
         private static FieldInfo? RequireField(

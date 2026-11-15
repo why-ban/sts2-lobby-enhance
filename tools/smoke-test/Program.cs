@@ -47,7 +47,8 @@ string[] expectedFixIds =
     "announcement-source",
     "server-pool-refresh",
     "server-pool-join",
-    "server-pool-create"
+    "server-pool-create",
+    "lobby-entry-direct"
 ];
 
 // 每一项修复至少要有这一处 Harmony 接缝被真正打上。id 出现在 applied 里只证明 Apply() 没抛异常，
@@ -63,10 +64,11 @@ string[] expectedFixIds =
     ("room-version-filter", "LanConnectLobbyOverlay",           "GetFilteredRooms"),
     ("touch-chat-scroll",   "LanConnectRichMessageView",        "_Ready"),
     ("chat-server-switch",  "LanConnectBasicChatPanel",         "UpdateAvailability"),
-    ("announcement-source", "LanConnectLobbyOverlay",           "ApplyAnnouncements"),
+    ("announcement-source", "LobbyApiClient",                   "GetAnnouncementsAsync"),
     ("server-pool-refresh", "LanConnectLobbyOverlay",           "RefreshRoomsAsync"),
     ("server-pool-join",    "LanConnectLobbyOverlay",           "BeginJoinRoomAsync"),
-    ("server-pool-create",  "LanConnectLobbyOverlay",           "CreateRoomAsync")
+    ("server-pool-create",  "LanConnectLobbyOverlay",           "CreateRoomAsync"),
+    ("lobby-entry-direct",  "LanConnectServerSelectionStartup", "Show")
 ];
 
 AppDomain.CurrentDomain.AssemblyResolve += (_, eventArgs) =>
@@ -237,6 +239,64 @@ if (applied.Count > expectedFixIds.Length)
     }
 
     idsOk = false;
+}
+
+// ------------------------------------------------- 断言 1b：每项修复必须挂在自己声明的分组里
+//
+// 分组决定回滚边界。把 chat-server-switch 挪进 Pool、或把 server-pool-join 挪进 Chat，id 顺序与接缝断言
+// 全都还是绿的 —— 只有这张表会红。这就是它存在的唯一理由，别删。
+(string FixId, string Group)[] expectedGroups =
+[
+    ("roster-rebaseline", "Roster"),
+    ("load-join-order", "LoadOrder"),
+    ("new-run-button", "NewRun"),
+    ("new-run-save-binding", "NewRun"),
+    ("new-protocol-only", "Modes"),
+    ("room-version-filter", "Filter"),
+    ("touch-chat-scroll", "Touch"),
+    ("chat-server-switch", "Chat"),
+    ("announcement-source", "Announce"),
+    ("server-pool-refresh", "Pool"),
+    ("server-pool-join", "Pool"),
+    ("server-pool-create", "Pool"),
+    ("lobby-entry-direct", "Pool")
+];
+
+Console.WriteLine();
+Console.WriteLine("---- fix to group mapping ----");
+
+var actualGroups = new Dictionary<string, string>(StringComparer.Ordinal);
+if (groups is System.Collections.IEnumerable groupItems)
+{
+    foreach (object? group in groupItems)
+    {
+        if (group is null)
+        {
+            continue;
+        }
+
+        string groupName = GetProperty(group, "Group")?.ToString() ?? "(null)";
+        foreach (string id in GetStringList(group, "Applied"))
+        {
+            actualGroups[id] = groupName;
+        }
+    }
+}
+
+bool groupsOk = true;
+foreach ((string fixId, string expectedGroup) in expectedGroups)
+{
+    string actualGroup = actualGroups.TryGetValue(fixId, out string? found) ? found : "(not applied)";
+    bool ok = string.Equals(expectedGroup, actualGroup, StringComparison.Ordinal);
+    groupsOk &= ok;
+    Console.WriteLine($"  {fixId,-20} expected {expectedGroup,-9} actual {actualGroup,-9} {(ok ? "OK" : "MISMATCH")}");
+}
+
+if (!groupsOk)
+{
+    Console.WriteLine();
+    Console.WriteLine("FAIL: a repair is installed in a different FixGroup than the one it belongs to.");
+    return 8;
 }
 
 if (failed.Count > 0)

@@ -25,11 +25,10 @@ internal sealed class PoolServerFetch
     internal const int UnknownLatency = int.MaxValue;
 
     /// <summary>
-    /// What a failed or timed-out fetch counts as for ranking. Not a measurement: it only has to be worse than a
-    /// real round trip, so that a server which did not answer is never chosen as the "fastest" one. An eight second
-    /// answer is not a real value either, and the next successful round replaces it.
+    /// A failed fetch is not a measurement and must not be written into the latency cache as one: the node's previous
+    /// latency stays, its guard becomes unknown, and the cooldown ladder (PoolServerCatalog) is what keeps it from
+    /// costing the next rounds their ceiling.
     /// </summary>
-    internal const int UnreachablePenaltyMs = 8000;
 }
 
 /// <summary>

@@ -5,7 +5,8 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Makes the chat log scroll with a finger on phones, and turns a 400 ms press into "copy this message".
+/// Makes the chat log scroll with a finger on phones, turns a 400 ms press into "copy this message", and keeps that
+/// long press from also opening the item/combat reference preview.
 ///
 /// Why the phone cannot scroll today (engine level, not styling): every message row is a
 /// <c>LanConnectRichMessageView</c> whose <c>MegaRichTextLabel</c> is built with <c>SelectionEnabled = true</c>
@@ -28,6 +29,13 @@ namespace Sts2LobbyEnhance;
 /// (LanConnectReferenceTapGesture.cs:9), so a press that copies and a press that merely taps are decided by the
 /// same threshold the mod uses everywhere else. No partial selection is implemented on purpose: synthesising the
 /// drag that a text selection needs is a much larger change than this feature is worth.</item>
+/// <item>A press that copied must not also open the reference preview. Upstream decides "tap" purely by travel
+/// distance (<c>LanConnectReferenceTapGesture.cs:54-55</c>), so a motionless 400 ms press is a tap to it, and a
+/// message that carries a reference always activates — for a single reference regardless of where the finger
+/// landed (<c>LanConnectRichMessageView.cs:204-206</c>). <see cref="ReferenceActivationGate"/> closes that: the
+/// gesture arms it, and a prefix on <c>RaiseReferencePressed</c> — the one funnel every activation path goes
+/// through, touch release (:210), meta click (:171) and keyboard/joypad (:252) — skips exactly the one activation
+/// the armed press produced.</item>
 /// <item>The message scroll bar grows to the 44 px touch floor upstream already uses for buttons
 /// (LanConnectHudLegibility.cs:13) through a postfix on <c>ApplyLobbyScrollBarStyle</c>
 /// (LanConnectBasicChatPanel.cs:3022-3036, called at :919). It is a backstop for the sliver that used to be the
@@ -39,8 +47,8 @@ namespace Sts2LobbyEnhance;
 /// refresh would point at a freed node. <c>_Ready</c> runs once per newly inserted row and is therefore the seam
 /// that stays correct across rebuilds; the gesture holds the label only for as long as the label lives.
 ///
-/// Desktop must not change at all: both postfixes return before writing a single property or connecting a single
-/// callback, so text selection and every mouse behaviour stay exactly as upstream built them.
+/// Desktop must not change at all: every patch body returns before writing a single property or connecting a single
+/// callback, so text selection, reference clicks and every mouse behaviour stay exactly as upstream built them.
 ///
 /// The platform gate lives in the patch bodies and not in <see cref="Applies"/> on purpose: the smoke test drives
 /// Applies()/Apply() in a plain .NET process with no Godot native layer, where <c>OS.HasFeature</c> is an access
@@ -53,6 +61,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
     private const string ViewTypeName = "Sts2LanConnect.Scripts.LanConnectRichMessageView";
     private const string ViewReadyMethodName = "_Ready";
     private const string ViewLabelFieldName = "_label";
+    private const string ReferencePressedMethodName = "RaiseReferencePressed";
 
     private const string PanelTypeName = "Sts2LanConnect.Scripts.LanConnectBasicChatPanel";
     private const string ScrollBarStyleMethodName = "ApplyLobbyScrollBarStyle";
@@ -68,6 +77,10 @@ internal sealed class TouchChatScrollFix : ICompatFix
     private const string RichTextLabelTypeName = "Godot.RichTextLabel";
 
     private const string ScrollBarTypeName = "Godot.ScrollBar";
+
+    private const string VoidTypeName = "System.Void";
+
+    private const string StringTypeName = "System.String";
 
     /// <summary>
     /// 44 px — upstream's own minimum touch target (<c>LanConnectHudLegibility.MinTouchTargetPixels</c>,
@@ -86,6 +99,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
     private static int _viewWarned;
     private static int _scrollBarWarned;
+    private static int _referenceWarned;
 
     public string Id => "touch-chat-scroll";
 
@@ -138,11 +152,21 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 priority = Priority.Last
             });
 
+        // Priority.First because "this press was already consumed by the copy" has to be answerable before anything
+        // else decides to open the preview; the prefix has no parameters, so it cannot displace upstream's arguments.
+        harmony.Patch(
+            shape.ReferencePressed,
+            prefix: new HarmonyMethod(typeof(TouchChatScrollFix), nameof(ReferencePressedPrefix))
+            {
+                priority = Priority.First
+            });
+
         Entry.Info(
-            "touch-chat-scroll: patched " + ViewTypeName + "." + ViewReadyMethodName + " and " + PanelTypeName + "." +
-            ScrollBarStyleMethodName + ". On a mobile build the message labels stop capturing the pointer (a drag " +
-            "scrolls the log) and a 400 ms press copies the message; on desktop every patch body returns without " +
-            "touching a property, so selection and dragging stay as upstream built them.");
+            "touch-chat-scroll: patched " + ViewTypeName + "." + ViewReadyMethodName + ", " + PanelTypeName + "." +
+            ScrollBarStyleMethodName + " and " + ViewTypeName + "." + ReferencePressedMethodName + ". On a mobile " +
+            "build the message labels stop capturing the pointer (a drag scrolls the log), a 400 ms press copies the " +
+            "message and does not open the reference preview it would otherwise have opened; on desktop every patch " +
+            "body returns without touching a property, so selection and dragging stay as upstream built them.");
     }
 
     /// <summary>
@@ -202,6 +226,12 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// (LanConnectBasicChatPanel.cs:919, definition :3022-3036). Widening the bar is the backstop for phones where
     /// the drag above is still awkward (very short logs that do not overflow, for instance).
     ///
+    /// <para><b>Only the lobby sidebar style goes through this method.</b> The call sits inside
+    /// <c>if (UsesLobbyStyle)</c> (:917-920), so the in-run HUD style
+    /// (<c>LanConnectChatVisualStyle.DarkOverlay</c>, read at :175) never gets a widened bar. That is expected, not a
+    /// missed edit: the HUD panel draws its own thin bar, and there the drag fix above is what makes the log
+    /// scrollable. Do not "fix" this by widening every scroll bar.</para>
+    ///
     /// The parameter name has to match upstream's (<c>scrollBar</c>), because Harmony binds a patch argument to the
     /// target parameter by name; <see cref="Shape.TryCapture"/> fails the repair rather than binding to nothing.
     /// </summary>
@@ -221,6 +251,35 @@ internal sealed class TouchChatScrollFix : ICompatFix
         {
             WarnOnce(ref _scrollBarWarned, "could not widen the message scroll bar: " + exception.GetType().Name +
                                            ": " + exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Upstream's single funnel for "open the item/combat reference preview" on a message
+    /// (<c>LanConnectRichMessageView.cs:273-280</c>): every activation path ends here, so one guard covers all of
+    /// them. Returns <c>false</c> — skipping the original — for exactly one activation after a long press copied a
+    /// message that could have opened a preview.
+    ///
+    /// Anything else (no armed gate, a desktop build, a throwing body) falls through to <c>true</c>, i.e. upstream's
+    /// behaviour is preserved: a plain tap on a reference still opens it.
+    /// </summary>
+    private static bool ReferencePressedPrefix()
+    {
+        try
+        {
+            if (!Platform.IsMobile)
+            {
+                return true;
+            }
+
+            return !ReferenceActivationGate.TryConsume();
+        }
+        catch (Exception exception)
+        {
+            // Never swallow a real activation because our own guard broke.
+            WarnOnce(ref _referenceWarned, "could not tell whether a long press consumed the reference click: " +
+                                           exception.GetType().Name + ": " + exception.Message);
+            return true;
         }
     }
 
@@ -274,18 +333,56 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
+    /// "The long press that just fired already copied this message, so the reference preview it would have opened
+    /// must not open."
+    ///
+    /// A flag rather than a timestamp on purpose: the press boundary is what makes the state unambiguous. The gesture
+    /// arms it when it copies and clears it on the next press, so the gate can never swallow an activation belonging
+    /// to a *different* press — the later press clears it before it can activate anything — while a press whose copy
+    /// produced no activation (a message with no references at all) leaves nothing behind that matters.
+    ///
+    /// Single-threaded by construction: Godot delivers input and runs both sides of this on the main thread, so no
+    /// interlocking is needed. Written as three named operations because the two call sites are in different files.
+    /// </summary>
+    internal static class ReferenceActivationGate
+    {
+        private static bool _armed;
+
+        /// <summary>Arms the gate for the current press. Called by the gesture right after a successful copy.</summary>
+        internal static void Arm() => _armed = true;
+
+        /// <summary>Forgets any armed gate. Called when a new press starts, before it can activate anything.</summary>
+        internal static void Disarm() => _armed = false;
+
+        /// <summary>True exactly once per armed press, and only for the caller that gets there first.</summary>
+        internal static bool TryConsume()
+        {
+            if (!_armed)
+            {
+                return false;
+            }
+
+            _armed = false;
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Every member this repair touches, resolved once in <see cref="Applies"/> and never again. Metadata only: no
     /// <c>typeof</c> on a host type, nothing invoked while probing, no Godot call.
     /// </summary>
     internal sealed class Shape
     {
-        private const string VoidTypeName = "System.Void";
-
-        private Shape(MethodInfo viewReady, FieldInfo label, MethodInfo scrollBarStyle)
+        private Shape(
+            MethodInfo viewReady,
+            FieldInfo label,
+            MethodInfo scrollBarStyle,
+            MethodInfo referencePressed)
         {
             ViewReady = viewReady;
             Label = label;
             ScrollBarStyle = scrollBarStyle;
+            ReferencePressed = referencePressed;
         }
 
         internal MethodInfo ViewReady { get; }
@@ -294,6 +391,8 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
         internal MethodInfo ScrollBarStyle { get; }
 
+        internal MethodInfo ReferencePressed { get; }
+
         internal static Shape? TryCapture(Assembly host, out string reason)
         {
             var missing = new List<string>();
@@ -301,15 +400,17 @@ internal sealed class TouchChatScrollFix : ICompatFix
             Type? view = ReflectScope.HostType(host, ViewTypeName, missing);
             Type? panel = ReflectScope.HostType(host, PanelTypeName, missing);
 
-            // Arity alone is not enough: the body reads the label as a RichTextLabel (SelectionEnabled lives there,
-            // not on Control), so a re-typed field has to cost this anchor instead of throwing inside the game.
-            MethodInfo? viewReady = ReflectScope.Exact(
+            // DeclaredOnly, not merely "found on this type": a lookup that accepts inherited members resolves
+            // Godot.Node._Ready the moment upstream drops its override, and patching *that* would install this repair
+            // into every node in the game while reporting itself as applied. "No anchor" is the only honest answer.
+            MethodInfo? viewReady = Declared(
+                missing,
                 view,
                 ViewReadyMethodName,
                 requireStatic: false,
-                Array.Empty<string>(),
+                arity: 0,
                 VoidTypeName,
-                missing);
+                firstParameterTypeName: null);
 
             FieldInfo? label = ReflectScope.Field(missing, view, ViewLabelFieldName);
             if (label != null && !InheritsFrom(label.FieldType, RichTextLabelTypeName))
@@ -319,15 +420,27 @@ internal sealed class TouchChatScrollFix : ICompatFix
                     ", expected a Godot.RichTextLabel");
             }
 
-            MethodInfo? scrollBarStyle = ReflectScope.Exact(
+            MethodInfo? scrollBarStyle = Declared(
+                missing,
                 panel,
                 ScrollBarStyleMethodName,
                 requireStatic: true,
-                new[] { ScrollBarTypeName },
+                arity: 1,
                 VoidTypeName,
-                missing);
+                ScrollBarTypeName);
 
             ReflectScope.RequireParameterNames(missing, scrollBarStyle, ScrollBarParameterName);
+
+            // RaiseReferencePressed(string, LanConnectRichMessageReference) — the second parameter is a host type, so
+            // arity plus the string first parameter identifies it without naming that type here.
+            MethodInfo? referencePressed = Declared(
+                missing,
+                view,
+                ReferencePressedMethodName,
+                requireStatic: false,
+                arity: 2,
+                VoidTypeName,
+                StringTypeName);
 
             if (missing.Count > 0)
             {
@@ -336,7 +449,55 @@ internal sealed class TouchChatScrollFix : ICompatFix
             }
 
             reason = string.Empty;
-            return new Shape(viewReady!, label!, scrollBarStyle!);
+            return new Shape(viewReady!, label!, scrollBarStyle!, referencePressed!);
+        }
+
+        /// <summary>
+        /// Resolves a method the type declares itself. <c>DeclaredOnly</c> is the whole point: <c>GetMethods</c> walks
+        /// the base chain, and for lifecycle names like <c>_Ready</c> that silently substitutes
+        /// <c>Godot.Node._Ready</c> — a patch that would then run for every node in the process.
+        /// </summary>
+        private static MethodInfo? Declared(
+            List<string> missing,
+            Type? owner,
+            string name,
+            bool requireStatic,
+            int arity,
+            string returnTypeName,
+            string? firstParameterTypeName)
+        {
+            if (owner == null)
+            {
+                // Already reported by HostType; repeating it here would bury the real reason.
+                return null;
+            }
+
+            MethodInfo[] matches = owner
+                .GetMethods(
+                    (requireStatic ? BindingFlags.Static : BindingFlags.Instance) |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic |
+                    BindingFlags.DeclaredOnly)
+                .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+                .Where(method => method.GetParameters().Length == arity)
+                .Where(method => string.Equals(method.ReturnType.FullName, returnTypeName, StringComparison.Ordinal))
+                .Where(method => firstParameterTypeName == null ||
+                                 string.Equals(
+                                     method.GetParameters()[0].ParameterType.FullName,
+                                     firstParameterTypeName,
+                                     StringComparison.Ordinal))
+                .ToArray();
+
+            if (matches.Length == 1)
+            {
+                return matches[0];
+            }
+
+            string expected = owner.Name + "." + name + "/" + arity + " declared by the type itself";
+            missing.Add(matches.Length == 0
+                ? expected
+                : expected + " is ambiguous (" + matches.Length + " declared overloads)");
+            return null;
         }
 
         private static bool InheritsFrom(Type? type, string baseTypeFullName)

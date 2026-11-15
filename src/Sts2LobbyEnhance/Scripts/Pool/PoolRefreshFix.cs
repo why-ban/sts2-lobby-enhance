@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using Godot;
 using HarmonyLib;
 
@@ -10,24 +9,27 @@ namespace Sts2LobbyEnhance;
 /// Turns the room list into a pool: every known server's rooms, on one stage, with the owning server printed on
 /// each card.
 ///
-/// Three patches, one seam each:
+/// RefreshRoomsAsync is taken over completely (LanConnectLobbyOverlay.cs:3362-3481). It is not wrapped and the
+/// original body never runs: the overlay's own refresh republishes the *current* server's room list, and two
+/// writers on _rooms means the stage flips between the pool and one server on every eight second tick. So the
+/// prefix answers false, hands back a task of its own, and reproduces the method's contract section by section:
 ///
-/// - RefreshRoomsAsync, LanConnectLobbyOverlay.cs:3362. A prefix that takes the call over, starts the fan-out
-///   first, and then runs the untouched original with a re-entry gate so the overlay keeps every piece of
-///   behaviour it already had: status text, announcements (AnnouncementSourceFix rides on that call), the health
-///   indicator, selection repair, the refresh button state and the eight second auto-refresh timer
-///   (LanConnectConstants.cs:50). What we add is the room source: when the original finishes, _rooms is replaced
-///   by the committed pool and the stage is rebuilt.
-///   Taking the method over instead of re-implementing it is deliberate. The alternative is fifteen private
-///   anchors for the UI steps above, and every one of them is a way to break a lobby that upstream gets right.
-/// - _Process, LanConnectLobbyOverlay.cs:725. The repaint pump: the only place the pool touches the scene tree
-///   besides commit, because a Godot tick is the one main-thread guarantee this mod has. Per-server results only
-///   write data; the next frame paints them.
-/// - BuildRoomMetaRow, LanConnectLobbyOverlay.cs:3943. Appends the "来源：{server}" label to the meta row that
-///   already wraps (HFlowContainer), sized and coloured like upstream's own CreateMetaLabel (:3927-3933).
+/// <list type="bullet">
+/// <item>the three guards and their false return (:3367-3371)</item>
+/// <item>PersistSettings, the in-flight flag, the auto-refresh timer (:3373-3376)</item>
+/// <item>the status line and the action buttons (:3377-3382)</item>
+/// <item>the current server's /probe and /announcements, which the pool does not replace (:3388-3407)</item>
+/// <item>the room list itself, which is where the pool goes (:3391-3399)</item>
+/// <item>selection repair and the "did the stage change" decision (:3409-3430)</item>
+/// <item>the lobby-error and generic-error status texts (:3441-3474)</item>
+/// <item>the finally that clears the flag and re-enables the buttons (:3475-3480)</item>
+/// </list>
 ///
-/// Nothing in Applies or Apply touches Godot, the config, the network or the engine: this repair is installed
-/// from a headless harness that only knows reflection.
+/// Two other patches: _Process (:725) is the repaint pump, the one main-thread tick that can touch the scene tree
+/// while the fan-out is streaming in; BuildRoomMetaRow (:3943) appends the source badge.
+///
+/// Nothing in Applies or Apply touches Godot, the config, the network or the engine: this repair is installed from
+/// a headless harness that only knows reflection.
 /// </summary>
 internal sealed class PoolRefreshFix : ICompatFix
 {
@@ -36,15 +38,23 @@ internal sealed class PoolRefreshFix : ICompatFix
     private const string Tag = "[server-pool] ";
 
     /// <summary>
-    /// Re-entry gate for the one path that calls the original RefreshRoomsAsync by reflection. Thread-local is
-    /// enough: the gate only has to hold for the synchronous prologue of the invoke, which runs on this thread.
+    /// Ceiling for the current server's /probe and /announcements. Upstream leaves them on the client's 10 s
+    /// HttpClient timeout, which would let one dead server hold the status line; the failure path is the same.
     /// </summary>
-    [ThreadStatic]
-    private static bool _reentering;
+    private const int CurrentServerQueryBudgetMs = 3000;
 
     private static PoolAnchors? _anchors;
 
-    private static int _warned;
+    /// <summary>
+    /// Warnings already printed, keyed by their call signature. This used to be a single global flag, which made the
+    /// whole group go silent for the rest of the process after its first warning - every other repair in the group
+    /// shares this one exit.
+    /// </summary>
+    private static readonly object WarnGate = new();
+
+    private static readonly HashSet<string> WarnedSignatures = new(StringComparer.Ordinal);
+
+    private const int MaxWarnedSignatures = 32;
 
     /// <summary>The round currently being painted. Read by the _Process postfix, set and cleared on the main thread.</summary>
     internal static PoolRefreshSession? ActiveSession;
@@ -110,71 +120,191 @@ internal sealed class PoolRefreshFix : ICompatFix
             });
 
         Entry.Info(
-            Tag + "the room list is now a pool over every known server; patched " +
+            Tag + "the room list is now a pool over every known server, and RefreshRoomsAsync is taken over " +
+            "completely so the host mod can no longer republish its single server list; patched " +
             PoolAnchors.OverlayTypeName + ".RefreshRoomsAsync (LanConnectLobbyOverlay.cs:3362), ._Process (:725) and " +
             ".BuildRoomMetaRow (:3943). Cross-server join and create-room server choice are separate repairs.");
     }
 
     /// <summary>
-    /// Takes RefreshRoomsAsync over: start the fan-out, run the original unchanged, then republish _rooms from the
-    /// pool once the original is done. Every failure path returns true so the unmodified refresh still runs.
+    /// Answers false and supplies the whole refresh. Every failure path still answers false with a completed task:
+    /// letting the original run would republish one server's rooms and reintroduce exactly the flip this repair
+    /// exists to remove.
     /// </summary>
     // ReSharper disable once InconsistentNaming - Harmony binds these by their exact names.
     public static bool RefreshRoomsPrefix(object? __instance, object?[]? __args, ref Task<bool> __result)
     {
-        PoolRefreshSession? session = null;
         try
         {
             PoolAnchors? anchors = _anchors;
-            if (anchors == null || __instance == null || __args is not { Length: >= 3 } || _reentering)
+            if (anchors == null || __instance == null || __args is not { Length: >= 3 })
             {
                 return true;
             }
 
-            // Upstream's own guard would return false without touching anything, so starting a fan-out for a
-            // refresh that cannot land is pure cost.
-            if (anchors.RefreshInFlight?.GetValue(__instance) is true)
-            {
-                return true;
-            }
-
+            bool userInitiated = __args[0] is bool initiated && initiated;
+            bool allowActionInFlight = __args[1] is bool allow && allow;
             CancellationToken cancellationToken = __args[2] is CancellationToken token ? token : CancellationToken.None;
-            session = new PoolRefreshSession(anchors, __instance, cancellationToken);
-            session.Start();
-            ActiveSession = session;
-
-            Task<bool>? original = InvokeRefresh(anchors, __instance, __args);
-            if (original == null)
-            {
-                Abandon(session);
-                return true;
-            }
-
-            __result = PoolRefreshSession.FollowAsync(original, session);
+            __result = RefreshAsync(anchors, __instance, userInitiated, allowActionInFlight, cancellationToken);
             return false;
-        }
-        catch (TargetInvocationException exception) when (exception.InnerException != null)
-        {
-            // Upstream threw out of its own prologue (a cancelled token, most often). Reproduce that exactly:
-            // swallowing it here would change what the caller sees, and running the body again would double it.
-            Abandon(session);
-            ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
-            return true;
         }
         catch (Exception exception)
         {
-            Abandon(session);
-            WarnOnce(
-                "refresh",
-                "the pooled refresh could not start, so the unmodified refresh ran instead: " +
-                PoolRoomClient.Describe(exception));
-            return true;
+            WarnOnce("refresh", "the pooled refresh could not start: " + Describe(exception));
+            __result = Task.FromResult(false);
+            return false;
         }
     }
 
     /// <summary>
-    /// Repaint pump. Godot only calls this on the main thread, which is why the scene-tree write lives here and not
-    /// in the fan-out's continuations.
+    /// The body of LanConnectLobbyOverlay.RefreshRoomsAsync (:3362-3481) with the pool as the room source.
+    /// Section comments carry the upstream line each block reproduces, so a diff against upstream stays possible.
+    /// </summary>
+    private static async Task<bool> RefreshAsync(
+        PoolAnchors anchors,
+        object overlay,
+        bool userInitiated,
+        bool allowActionInFlight,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // :3368-3371 - the same three short circuits, with the same false.
+        if (ReadBool(anchors.RefreshInFlight!, overlay)
+            || ReadBool(anchors.ServerPickerOpen, overlay)
+            || (ReadBool(anchors.ActionInFlight, overlay) && !allowActionInFlight))
+        {
+            return false;
+        }
+
+        anchors.PersistSettings.Invoke(overlay, null);                                   // :3373
+        anchors.RefreshInFlight!.SetValue(overlay, true);                                // :3374
+        anchors.TimeUntilAutoRefresh.SetValue(overlay, anchors.RefreshIntervalSeconds);   // :3376
+        if (userInitiated || RoomCount(anchors, overlay) == 0)                           // :3377
+        {
+            SetStatus(overlay, "正在刷新大厅列表...");                                     // :3379
+        }
+
+        anchors.UpdateActionButtons!.Invoke(overlay, null);                              // :3382
+
+        PoolRefreshSession? session = null;
+        object? apiClient = null;
+        try
+        {
+            IReadOnlyList<object> previousRooms = Snapshot(anchors, overlay);            // :3386
+            string? selectedRoomId = CurrentSelection(anchors, overlay);                 // :3387
+
+            // :3388-3390 - the current server's probe and announcements. The pool does not replace these: the
+            // announcements belong to the server the player is on, and AnnouncementSourceFix rides on the same call.
+            apiClient = TryCreateConfiguredClient(anchors);
+            Task<double?> probeTask = MeasureRttAsync(anchors, apiClient, cancellationToken);
+            Task<object?> announcementTask = FetchAnnouncementsAsync(anchors, apiClient, cancellationToken);
+
+            // :3391-3393 - the room source, which is the pool instead of one server's list.
+            session = new PoolRefreshSession(anchors, overlay, cancellationToken);
+            ActiveSession = session;
+            session.Start();
+
+            double? measuredProbeRtt = await probeTask.ConfigureAwait(true);
+            object? announcements = await announcementTask.ConfigureAwait(true);
+            await session.Fetch.ConfigureAwait(true);
+
+            anchors.LastLobbyRttMs.SetValue(overlay, measuredProbeRtt ?? -1d);            // :3396
+            anchors.ConsecutiveRefreshFailures.SetValue(overlay, 0);                     // :3397
+
+            if (announcements != null)                                                   // :3400-3407
+            {
+                anchors.ApplyAnnouncements.Invoke(overlay, new[] { announcements });
+            }
+            else
+            {
+                anchors.EnsureAnnouncementFallback.Invoke(overlay, null);
+            }
+
+            IReadOnlyList<object> rooms = PoolRoomStore.Instance.Rooms;
+            WriteRooms(anchors, overlay, rooms);                                         // :3398-3399
+
+            string? nextSelection = ApplySelection(anchors, overlay, rooms, selectedRoomId); // :3409-3416
+
+            // :3418-3420, plus the one thing upstream cannot know about: whether the pump has already put THIS
+            // round's final list on the stage. If it has, both "changed" conditions are already satisfied visually and
+            // the rebuild would be a second full pass over cards the player is looking at. Painted-but-not-current is
+            // the only case that still needs the rebuild on top of upstream's own conditions.
+            bool stageIsCurrent = session.PaintedVersion != 0 && session.PaintedVersion == session.Cycle.Version;
+            bool roomStageChanged = userInitiated
+                                    || !string.Equals(selectedRoomId, nextSelection, StringComparison.Ordinal)
+                                    || (!stageIsCurrent
+                                        && (!AreVisuallyEquivalent(anchors, previousRooms, rooms) || session.Painted));
+            if (roomStageChanged)
+            {
+                anchors.RebuildRoomStage.Invoke(overlay, null);                          // :3423
+            }
+            else
+            {
+                anchors.UpdateHealthIndicator.Invoke(overlay, null);                     // :3427
+                anchors.UpdatePageControls.Invoke(overlay, new object[] { FilteredCount(anchors, overlay) }); // :3428
+                anchors.RefreshSelectedRoomDetails.Invoke(overlay, null);                // :3429
+            }
+
+            // The pool's failure mode is per server, so upstream's catch blocks cannot fire for it. "Every server
+            // was silent" is still a failed refresh, and it is reported with upstream's own wording.
+            if (session.Cycle.Succeeded == 0 && session.Cycle.Failed > 0)
+            {
+                WarnOnce("all-silent", "no lobby server answered: " + session.Cycle.Describe());
+                MarkRefreshFailed(anchors, overlay);
+                SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：所有大厅服务器均未响应\n" + FailureHint(anchors));
+                return false;
+            }
+
+            SetStatus(overlay, string.Empty);                                            // :3434
+            return true;                                                                 // :3435
+        }
+        catch (OperationCanceledException)                                               // :3437-3440
+        {
+            throw;
+        }
+        catch (Exception exception) when (anchors.LobbyServiceExceptionType.IsInstanceOfType(exception))
+        {
+            MarkRefreshFailed(anchors, overlay);                                         // :3443-3447
+            string message = ExceptionMessage(exception);
+            if (userInitiated || RoomCount(anchors, overlay) == 0)                       // :3448-3451
+            {
+                SetStatus(overlay, "大厅服务不可用：" + message);
+            }
+            else
+            {
+                SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：" + message + "\n" + FailureHint(anchors)); // :3454
+            }
+
+            return false;
+        }
+        catch (Exception exception)                                                      // :3458-3474
+        {
+            MarkRefreshFailed(anchors, overlay);
+            string message = ExceptionMessage(exception);
+            if (userInitiated || RoomCount(anchors, overlay) == 0)
+            {
+                SetStatus(overlay, "刷新大厅失败：" + message);
+            }
+            else
+            {
+                SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：" + message + "\n" + FailureHint(anchors));
+            }
+
+            return false;
+        }
+        finally
+        {
+            anchors.RefreshInFlight!.SetValue(overlay, false);                           // :3477
+            anchors.UpdateActionButtons!.Invoke(overlay, null);                          // :3479
+            session?.Finish();
+            (apiClient as IDisposable)?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Repaint pump. Godot only calls this on the main thread, which is why the incremental scene-tree write lives
+    /// here and not in the fan-out's continuations.
     /// </summary>
     public static void ProcessPostfix(object? __instance)
     {
@@ -186,16 +316,16 @@ internal sealed class PoolRefreshFix : ICompatFix
                 return;
             }
 
-            if (!session.TakeDirty())
+            if (!session.TryBeginPaint())
             {
                 return;
             }
 
-            session.Publish();
+            session.PublishPartial();
         }
         catch (Exception exception)
         {
-            WarnOnce("pump", "a partly filled pool could not be drawn: " + PoolRoomClient.Describe(exception));
+            WarnOnce("pump", "a partly filled pool could not be drawn: " + Describe(exception));
         }
     }
 
@@ -231,41 +361,313 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("source-label", "a room card was drawn without its server name: " + PoolRoomClient.Describe(exception));
+            WarnOnce("source-label", "a room card was drawn without its server name: " + Describe(exception));
         }
     }
 
     internal static void WarnOnce(string signature, string message)
     {
-        if (Interlocked.Exchange(ref _warned, 1) != 0)
+        lock (WarnGate)
         {
-            return;
+            if (!WarnedSignatures.Add(signature))
+            {
+                return;
+            }
+
+            if (WarnedSignatures.Count > MaxWarnedSignatures)
+            {
+                WarnedSignatures.Clear();
+                WarnedSignatures.Add(signature);
+            }
         }
 
         Entry.Warn(Tag + signature + ": " + message);
     }
 
-    /// <summary>Sets the overlay's status line when the host mod still has one. Cosmetic, hence optional.</summary>
+    /// <summary>Sets the overlay's status line. Cosmetic, so a host-mod rename costs the line and not the repair.</summary>
     internal static void SetStatus(object overlay, string message)
     {
         try
         {
             _anchors?.SetStatus?.Invoke(overlay, new object?[] { message });
         }
+        catch (Exception exception)
+        {
+            WarnOnce("status", "the status line could not be updated: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    private static void MarkRefreshFailed(PoolAnchors anchors, object overlay)
+    {
+        int failures = ReadInt(anchors.ConsecutiveRefreshFailures, overlay);
+        anchors.ConsecutiveRefreshFailures.SetValue(overlay, failures + 1);
+        anchors.LastLobbyRttMs.SetValue(overlay, -1d);
+        anchors.EnsureAnnouncementFallback.Invoke(overlay, null);
+        anchors.UpdateHealthIndicator.Invoke(overlay, null);
+        WarnOnce("refresh-failed", "a pooled refresh failed; the previous room list is kept");
+    }
+
+    /// <summary>
+    /// LobbyApiClient.CreateConfigured for the current server. A missing or unusable lobby base url throws inside the
+    /// host mod, and that must cost the latency indicator and the announcements, not the whole refresh: the pool does
+    /// not need this client and still runs without it.
+    /// </summary>
+    private static object? TryCreateConfiguredClient(PoolAnchors anchors)
+    {
+        try
+        {
+            return anchors.CreateConfiguredClient.Invoke(null, null);
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("client", "the current server's client could not be built: " + Describe(exception));
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// LobbyApiClient.MeasureProbeRttAsync behind the same budget the pool uses. Null means "no measurement", which
+    /// upstream writes as -1 into the latency indicator.
+    /// </summary>
+    private static async Task<double?> MeasureRttAsync(PoolAnchors anchors, object? client, CancellationToken cancellationToken)
+    {
+        if (client == null)
+        {
+            return null;
+        }
+
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(CurrentServerQueryBudgetMs);
+        try
+        {
+            object? invocation = anchors.MeasureProbeRtt.Invoke(client, new object?[] { budget.Token });
+            if (invocation is not Task task)
+            {
+                return null;
+            }
+
+            await task.ConfigureAwait(true);
+            return task.GetType().GetProperty("Result")?.GetValue(task) as double?;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("probe", "the current server's /probe failed: " + Describe(exception));
+            return null;
+        }
+    }
+
+    /// <summary>LobbyApiClient.GetAnnouncementsAsync, with the null result standing for "use the fallback".</summary>
+    private static async Task<object?> FetchAnnouncementsAsync(
+        PoolAnchors anchors,
+        object? client,
+        CancellationToken cancellationToken)
+    {
+        if (client == null)
+        {
+            return null;
+        }
+
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(CurrentServerQueryBudgetMs);
+        try
+        {
+            object? invocation = anchors.GetAnnouncements.Invoke(client, new object?[] { budget.Token });
+            if (invocation is not Task task)
+            {
+                return null;
+            }
+
+            await task.ConfigureAwait(true);
+            return task.GetType().GetProperty("Result")?.GetValue(task);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("announcements", "the current server's announcements could not be read: " + Describe(exception));
+            return null;
+        }
+    }
+
+    /// <summary>:3398-3399 - _rooms.Clear() then AddRange(pool), through the non-generic list interface.</summary>
+    private static void WriteRooms(PoolAnchors anchors, object overlay, IReadOnlyList<object> rooms)
+    {
+        if (anchors.Rooms.GetValue(overlay) is not IList target)
+        {
+            return;
+        }
+
+        target.Clear();
+        foreach (object room in rooms)
+        {
+            target.Add(room);
+        }
+    }
+
+    /// <summary>:3409-3416 - keep the selection while it is still in the list, otherwise fall back to the first room.</summary>
+    private static string? ApplySelection(PoolAnchors anchors, object overlay, IReadOnlyList<object> rooms, string? selectedRoomId)
+    {
+        string? next = null;
+        if (!string.IsNullOrWhiteSpace(selectedRoomId) && Contains(anchors, rooms, selectedRoomId))
+        {
+            next = selectedRoomId;
+        }
+        else if (rooms.Count > 0)
+        {
+            next = PoolRoomClient.RoomIdOf(anchors, rooms[0]);
+        }
+
+        try
+        {
+            anchors.SelectedRoomId?.SetValue(overlay, next);
+        }
         catch (Exception)
         {
-            // A status line is not worth a second warning.
+            // The stage rebuild clamps the selection anyway (:3618-3621).
         }
+
+        return next;
+    }
+
+    /// <summary>
+    /// :3419 - AreRoomListsVisuallyEquivalent takes IReadOnlyList of LobbyRoomSummary, so both sides are rebuilt into
+    /// that exact type. Matched through reflection because the element type only exists at runtime.
+    /// </summary>
+    private static bool AreVisuallyEquivalent(PoolAnchors anchors, IReadOnlyList<object> previous, IReadOnlyList<object> current)
+    {
+        object? previousList = TypedRoomList(anchors, previous);
+        object? currentList = TypedRoomList(anchors, current);
+        if (previousList == null || currentList == null)
+        {
+            return false;
+        }
+
+        return anchors.AreRoomListsVisuallyEquivalent.Invoke(null, new[] { previousList, currentList }) is true;
+    }
+
+    private static object? TypedRoomList(PoolAnchors anchors, IReadOnlyList<object> rooms)
+    {
+        if (Activator.CreateInstance(typeof(List<>).MakeGenericType(anchors.RoomType)) is not IList list)
+        {
+            return null;
+        }
+
+        foreach (object room in rooms)
+        {
+            list.Add(room);
+        }
+
+        return list;
+    }
+
+    private static IReadOnlyList<object> Snapshot(PoolAnchors anchors, object overlay)
+    {
+        var rooms = new List<object>();
+        if (anchors.Rooms.GetValue(overlay) is IList current)
+        {
+            foreach (object? room in current)
+            {
+                if (room != null)
+                {
+                    rooms.Add(room);
+                }
+            }
+        }
+
+        return rooms;
+    }
+
+    private static int RoomCount(PoolAnchors anchors, object overlay) =>
+        anchors.Rooms.GetValue(overlay) is ICollection rooms ? rooms.Count : 0;
+
+    private static int FilteredCount(PoolAnchors anchors, object overlay)
+    {
+        try
+        {
+            return anchors.GetFilteredRooms.Invoke(overlay, null) is ICollection filtered ? filtered.Count : 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    private static string? CurrentSelection(PoolAnchors anchors, object overlay)
+    {
+        try
+        {
+            if (anchors.GetSelectedRoom.Invoke(overlay, null) is { } room)
+            {
+                return PoolRoomClient.RoomIdOf(anchors, room);
+            }
+        }
+        catch (Exception)
+        {
+            // Falls through to the raw field, which is what upstream falls back to as well (:3387).
+        }
+
+        return anchors.SelectedRoomId?.GetValue(overlay) as string;
+    }
+
+    private static bool Contains(PoolAnchors anchors, IReadOnlyList<object> rooms, string roomId)
+    {
+        foreach (object room in rooms)
+        {
+            if (string.Equals(PoolRoomClient.RoomIdOf(anchors, room), roomId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ReadBool(FieldInfo field, object overlay) => field.GetValue(overlay) is true;
+
+    private static int ReadInt(FieldInfo field, object overlay) => field.GetValue(overlay) as int? ?? 0;
+
+    private static string FailureHint(PoolAnchors anchors) =>
+        anchors.RefreshFailureHint.GetValue(null) as string ?? string.Empty;
+
+    private static string ExceptionMessage(Exception exception)
+    {
+        try
+        {
+            return exception.GetType().GetProperty("Message")?.GetValue(exception) as string ?? exception.Message;
+        }
+        catch (Exception)
+        {
+            return exception.Message;
+        }
+    }
+
+    private static string Describe(Exception exception)
+    {
+        Exception root = exception;
+        while (root is TargetInvocationException { InnerException: not null } wrapped)
+        {
+            root = wrapped.InnerException!;
+        }
+
+        return root.GetType().Name + ": " + root.Message;
     }
 
     private static Label CreateSourceLabel(PoolAnchors anchors, PoolOrigin origin)
     {
-        string text = PoolText.SourceLabelPrefix + origin.ShortName;
+        string text = PoolText.SourceLabelPrefix + origin.ShortName + (origin.IsStale ? PoolText.StaleSuffix : string.Empty);
         Label label = anchors.CreateBodyLabel?.Invoke(null, new object?[] { text }) as Label
                       ?? new Label { Text = text };
         label.AddThemeFontSizeOverride("font_size", 14);
         label.AddThemeColorOverride("font_color", MutedColor(anchors));
-        label.TooltipText = origin.BaseUrl;
+        label.TooltipText = origin.IsStale
+            ? origin.BaseUrl + "\n该服务器当前无响应，这是它上次成功刷新时的房间。"
+            : origin.BaseUrl;
         label.SetMeta(PoolText.SourceMetaKey, origin.BaseUrl);
         return label;
     }
@@ -286,39 +688,15 @@ internal sealed class PoolRefreshFix : ICompatFix
 
         return new Color(0.66f, 0.68f, 0.72f);
     }
-
-    private static Task<bool>? InvokeRefresh(PoolAnchors anchors, object overlay, object?[] args)
-    {
-        bool previous = _reentering;
-        _reentering = true;
-        try
-        {
-            return anchors.RefreshRooms.Invoke(overlay, args) as Task<bool>;
-        }
-        finally
-        {
-            _reentering = previous;
-        }
-    }
-
-    private static void Abandon(PoolRefreshSession? session)
-    {
-        if (session == null)
-        {
-            return;
-        }
-
-        Interlocked.CompareExchange(ref ActiveSession, null, session);
-        session.Cancel();
-    }
 }
 
 /// <summary>
 /// One pooled refresh round, from the fan-out to the scene tree.
 ///
-/// The fan-out starts before the original refresh runs and never blocks it, so the pool costs the overlay nothing
-/// but the extra request per server. Painting is incremental: every server that answers marks the round dirty and
-/// the _Process pump repaints, which is what keeps a single slow node from leaving the stage empty.
+/// The fan-out is the room source of the refresh, and it is incremental: every server that answers marks the round
+/// dirty and the _Process pump repaints, which is what keeps one slow node from leaving the stage empty. The final
+/// write and the stage decision belong to RefreshAsync, because those are the parts of upstream's refresh that also
+/// touch the status line, the selection and the page controls.
 /// </summary>
 internal sealed class PoolRefreshSession
 {
@@ -328,11 +706,14 @@ internal sealed class PoolRefreshSession
 
     private readonly CancellationTokenSource _cancellation;
 
+    /// <summary>One line in the log for the first round of the session, and nothing after it.</summary>
+    private static int _announced;
+
     private int _dirty;
 
-    /// <summary>One line in the log for the first round of the session, and nothing after it: at eight seconds a
-    /// turn anything chattier is noise.</summary>
-    private static int _announced;
+    private int _painted;
+
+    private int _finished;
 
     internal PoolRefreshSession(PoolAnchors anchors, object overlay, CancellationToken cancellationToken)
     {
@@ -346,138 +727,93 @@ internal sealed class PoolRefreshSession
 
     internal Task Fetch { get; private set; } = Task.CompletedTask;
 
-    private string? _selection;
+    /// <summary>How the round went, for the refresh's "every server was silent" decision.</summary>
+    internal PoolCycle Cycle => _cycle;
+
+    /// <summary>True once the pump has written the scene tree during this round.</summary>
+    internal bool Painted => Volatile.Read(ref _painted) != 0;
 
     /// <summary>Starts the fan-out. Runs on the caller's thread and returns immediately.</summary>
     internal void Start()
     {
-        CaptureSelection();
         Fetch = RunAsync();
     }
 
     /// <summary>
-    /// Remembers what was selected before the original refresh runs. Upstream keeps the selection only while the
-    /// selected room is in the list it fetched (:3409-3416), so a room that lives on another server would be dropped
-    /// on every eight second tick; the pool puts it back.
+    /// One frame is 16 ms and a full round can deliver fourteen answers, so painting on every arrival would rebuild
+    /// the card grid up to fourteen times per eight second tick. The gate merges them: a dirty round is painted at most
+    /// once per PaintCoalesceMs, and the dirty flag is left set so the very next frame past the gate paints.
     /// </summary>
-    private void CaptureSelection()
+    private const int PaintCoalesceMs = 120;
+
+    private int _lastPaintTicks = System.Environment.TickCount - PaintCoalesceMs;
+
+    internal int PaintedVersion { get; private set; }
+
+    internal void MarkDirty() => Volatile.Write(ref _dirty, 1);
+
+    internal bool TakeDirty() => Interlocked.Exchange(ref _dirty, 0) != 0;
+
+    /// <summary>True when there is something to paint and the coalescing window has elapsed.</summary>
+    internal bool TryBeginPaint()
     {
-        try
-        {
-            _selection = _anchors.SelectedRoomId?.GetValue(Overlay) as string;
-        }
-        catch (Exception)
-        {
-            _selection = null;
-        }
-    }
-
-    /// <summary>
-    /// Restores the remembered selection only when the current one is not in the pool. A selection the player made
-    /// after the refresh started is always in the pool and is therefore never overwritten.
-    /// </summary>
-    private void RestoreSelection(IReadOnlyList<object> rooms)
-    {
-        System.Reflection.FieldInfo? field = _anchors.SelectedRoomId;
-        if (field == null || string.IsNullOrWhiteSpace(_selection) || Contains(rooms, _selection))
-        {
-            return;
-        }
-
-        string? current;
-        try
-        {
-            current = field.GetValue(Overlay) as string;
-        }
-        catch (Exception)
-        {
-            return;
-        }
-
-        if (Contains(rooms, current))
-        {
-            return;
-        }
-
-        try
-        {
-            field.SetValue(Overlay, _selection);
-        }
-        catch (Exception)
-        {
-            // A lost selection is cosmetic; the stage rebuild clamps it anyway (:3618-3621).
-        }
-    }
-
-    private bool Contains(IReadOnlyList<object> rooms, string? roomId)
-    {
-        if (string.IsNullOrWhiteSpace(roomId))
+        if (Volatile.Read(ref _dirty) == 0)
         {
             return false;
         }
 
-        foreach (object room in rooms)
+        int now = System.Environment.TickCount;
+        if (unchecked(now - _lastPaintTicks) < PaintCoalesceMs)
         {
-            if (string.Equals(PoolRoomClient.RoomIdOf(_anchors, room), roomId, StringComparison.Ordinal))
-            {
-                return true;
-            }
+            return false;
         }
 
-        return false;
+        if (Interlocked.Exchange(ref _dirty, 0) == 0)
+        {
+            return false;
+        }
+
+        _lastPaintTicks = now;
+        return true;
     }
 
-    internal void Cancel()
+    /// <summary>Commits what the round has so far, writes _rooms and redraws. Only ever called from the _Process pump.</summary>
+    internal void PublishPartial()
     {
+        if (Volatile.Read(ref _finished) != 0 || !PoolRoomStore.Instance.Commit(_cycle, _anchors))
+        {
+            return;
+        }
+
+        WriteRooms();
+        _anchors.RebuildRoomStage.Invoke(Overlay, null);
+        Volatile.Write(ref _painted, 1);
+        PaintedVersion = _cycle.Version;
+
+        if (Interlocked.Exchange(ref _announced, 1) == 0)
+        {
+            Entry.Info("[server-pool] first pooled round: " + PoolRoomStore.Instance.LastSummary +
+                       "; every room card now carries the server it came from.");
+        }
+    }
+
+    /// <summary>Clears the pump's session and stops a superseded fan-out.</summary>
+    internal void Finish()
+    {
+        Volatile.Write(ref _finished, 1);
+        Interlocked.CompareExchange(ref PoolRefreshFix.ActiveSession, null, this);
         try
         {
             _cancellation.Cancel();
         }
         catch (Exception)
         {
-            // Already disposed or already cancelled.
+            // Already cancelled or disposed.
         }
     }
 
-    internal void MarkDirty() => Volatile.Write(ref _dirty, 1);
-
-    internal bool TakeDirty() => Interlocked.Exchange(ref _dirty, 0) != 0;
-
-    /// <summary>
-    /// Reproduces the original refresh's result while the pool takes over the room list. The original's task is
-    /// awaited first and its exception is rethrown unchanged: a cancelled refresh still cancels, and the pool only
-    /// publishes when the round upstream reported actually finished.
-    /// </summary>
-    internal static async Task<bool> FollowAsync(Task<bool> original, PoolRefreshSession session)
+    private void WriteRooms()
     {
-        try
-        {
-            bool refreshed = await original.ConfigureAwait(true);
-            session.MarkDirty();
-            session.Publish();
-            if (Interlocked.Exchange(ref _announced, 1) == 0)
-            {
-                Entry.Info("[server-pool] first pooled round: " + PoolRoomStore.Instance.LastSummary +
-                           "; a room list on each card now carries its server.");
-            }
-
-            return refreshed;
-        }
-        finally
-        {
-            Interlocked.CompareExchange(ref PoolRefreshFix.ActiveSession, null, session);
-            session.Cancel();
-        }
-    }
-
-    /// <summary>Publishes what the round has so far and redraws the stage.</summary>
-    internal void Publish()
-    {
-        if (!PoolRoomStore.Instance.Commit(_cycle, _anchors))
-        {
-            return;
-        }
-
         if (_anchors.Rooms.GetValue(Overlay) is not IList target)
         {
             return;
@@ -489,9 +825,6 @@ internal sealed class PoolRefreshSession
         {
             target.Add(room);
         }
-
-        RestoreSelection(rooms);
-        _anchors.RebuildRoomStage.Invoke(Overlay, null);
     }
 
     private async Task RunAsync()
@@ -501,8 +834,8 @@ internal sealed class PoolRefreshSession
             if (PoolServerCatalog.NeedsDiscovery())
             {
                 // Fire and forget on purpose: the extra servers can only help the *next* round, and the discovery
-                // round has its own ceiling. It is not tied to this session's token, which is cancelled the moment
-                // the overlay's refresh finishes.
+                // round has its own ceiling. It is not tied to this session's token, which is cancelled as soon as
+                // the refresh ends.
                 _ = PoolServerCatalog.RefreshDiscoveryAsync(_anchors, CancellationToken.None);
             }
 
@@ -515,6 +848,20 @@ internal sealed class PoolRefreshSession
             var pending = new List<Task<PoolServerFetch>>(servers.Count);
             foreach (PoolServer server in servers)
             {
+                if (PoolServerCatalog.IsCoolingDown(server))
+                {
+                    // A dead node used to cost the round its full 2 s ceiling on every tick. It is out of the round
+                    // until its slot expires, and its last answer stays on the stage marked stale so its rooms do not
+                    // blink out of existence in the meantime.
+                    if (server.LastRooms is { Count: > 0 } staleRooms)
+                    {
+                        _cycle.AcceptStale(_anchors, server, staleRooms);
+                        MarkDirty();
+                    }
+
+                    continue;
+                }
+
                 pending.Add(PoolRoomClient.FetchAsync(_anchors, server, PoolRoomClient.RefreshTimeoutMs, _cancellation.Token));
             }
 
@@ -527,18 +874,13 @@ internal sealed class PoolRefreshSession
                 if (finished.Status == TaskStatus.RanToCompletion)
                 {
                     PoolServerFetch fetch = finished.Result;
-                    PoolServerCatalog.RecordProbe(
-                        fetch.Server,
-                        fetch.Succeeded ? fetch.LatencyMs : PoolServerFetch.UnreachablePenaltyMs,
-                        null,
-                        null,
-                        null);
+                    PoolServerCatalog.RecordRoomsFetch(fetch);
                     _cycle.Accept(_anchors, fetch);
                 }
                 else
                 {
-                    // FetchAsync is written not to throw; a fault here is a bug in this mod, and an unobserved
-                    // task exception would surface as noise in the game log with no repair name on it.
+                    // FetchAsync is written not to throw; a fault here is a bug in this mod, and an unobserved task
+                    // exception would surface as noise in the game log with no repair name on it.
                     _ = finished.Exception;
                 }
 

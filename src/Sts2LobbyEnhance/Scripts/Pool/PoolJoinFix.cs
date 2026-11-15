@@ -29,6 +29,9 @@ internal sealed class PoolJoinFix : ICompatFix
     [ThreadStatic]
     private static bool _reentering;
 
+    /// <summary>Ceiling for the forward switch, matching PoolServerSwitch's switch-back budget.</summary>
+    private const int SwitchTimeoutMs = 10_000;
+
     private static PoolAnchors? _anchors;
 
     /// <summary>
@@ -133,7 +136,9 @@ internal sealed class PoolJoinFix : ICompatFix
 
             if (Interlocked.Exchange(ref _inFlight, 1) != 0)
             {
-                // Already switching for a previous click: this click is a no-op.
+                // Already switching for a previous click: this click is a no-op, said out loud instead of silently
+                // swallowing it.
+                PoolRefreshFix.SetStatus(__instance, "正在切换大厅服务器，请稍候…");
                 __result = Task.CompletedTask;
                 return false;
             }
@@ -175,7 +180,12 @@ internal sealed class PoolJoinFix : ICompatFix
         {
             cancellationToken.ThrowIfCancellationRequested();
             PoolRefreshFix.SetStatus(overlay, "正在切换到房间所在的服务器：" + origin.ShortName + "…");
-            lease = await PoolServerSwitch.SwitchAsync(anchors, origin.BaseUrl, cancellationToken).ConfigureAwait(true);
+            // Own budget, not the caller's token: a click passes CancellationToken.None, and a switch that parks on the
+            // coordinator's gate (LanConnectChatRuntimePorts.cs:1156) would otherwise never return and leave _inFlight
+            // set, turning every later cross-server click into a silent no-op.
+            using var switchBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            switchBudget.CancelAfter(SwitchTimeoutMs);
+            lease = await PoolServerSwitch.SwitchAsync(anchors, origin.BaseUrl, switchBudget.Token).ConfigureAwait(true);
             switched = true;
 
             if (lease != null && PoolServerSwitch.IsLeaseCancelled(anchors, lease))
@@ -200,18 +210,30 @@ internal sealed class PoolJoinFix : ICompatFix
             // (LanConnectLobbyOverlay.cs:4786-4789), and disposing a lease twice is a no-op
             // (LanConnectServerContextLease.Dispose uses Interlocked.Exchange), so our finally is the safety net for
             // the path where the reflective call fails before the original's body ever ran.
+            object targetRoom = fresh ?? room;
             await InvokeJoinAsync(
                     anchors,
                     overlay,
-                    fresh ?? room,
+                    targetRoom,
                     password,
                     cancellationToken,
                     lease,
-                    expectedServer ?? PoolAddress.ToBaseUrl(origin.BaseUrl))
+                    // No trailing slash: upstream compares this against NormalizeAuthority(...) with OrdinalIgnoreCase
+                    // (LanConnectLobbyOverlay.cs:5358-5365), and ".../" never equals that.
+                    expectedServer ?? origin.BaseUrl)
                 .ConfigureAwait(true);
 
             if (!PoolServerSwitch.HasActiveRoomSession(anchors))
             {
+                // A saved-run room with more than one free slot opens the slot picker and returns WITHOUT joining
+                // (:4749-4762). Switching back there would cancel the superseded server generation and void the lease
+                // the player is about to pick a slot with, so this path keeps the context and leaves the address where
+                // it is; the picker's own callback joins through the ordinary flow.
+                if (HasSavedRun(anchors, targetRoom))
+                {
+                    return;
+                }
+
                 await PoolServerSwitch.ReturnToAsync(anchors, originalServer, overlay).ConfigureAwait(true);
             }
         }
@@ -234,6 +256,23 @@ internal sealed class PoolJoinFix : ICompatFix
         {
             PoolServerSwitch.DisposeLease(lease);
             Interlocked.Exchange(ref _inFlight, 0);
+        }
+    }
+
+    /// <summary>
+    /// Whether the room carries a saved run (LanConnectLobbyModels.cs:41). Those are the rooms whose join can legally
+    /// stop at a dialog instead of connecting, which is why the caller must not treat "no session yet" as a failure
+    /// for them.
+    /// </summary>
+    private static bool HasSavedRun(PoolAnchors anchors, object room)
+    {
+        try
+        {
+            return anchors.RoomSavedRun?.GetValue(room) != null;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
@@ -413,7 +452,12 @@ internal static class PoolServerSwitch
         {
             if (anchors.ServerBaseUrlInput?.GetValue(overlay) is LineEdit input)
             {
-                input.Text = anchors.ConfigBaseUrl.GetValue(null) as string ?? string.Empty;
+                // The box mirrors the OVERRIDE, not the resolved address (upstream :6395 writes
+                // LobbyServerBaseUrlOverride). Writing the resolved value there would let the player persist it as an
+                // override by pressing the box's own apply button.
+                input.Text = (anchors.ConfigBaseUrlOverride?.GetValue(null) as string)
+                             ?? anchors.ConfigBaseUrl.GetValue(null) as string
+                             ?? string.Empty;
             }
 
             anchors.UpdateNetworkSummary?.Invoke(overlay, null);
@@ -431,6 +475,20 @@ internal static class PoolServerSwitch
         {
             object? runtime = anchors.RuntimeInstance?.GetValue(null);
             return runtime != null && anchors.RuntimeActiveRoomSession?.GetValue(runtime) is true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The hosted half of "a room session is live" (upstream :267, :4450-4455).</summary>
+    internal static bool HasActiveHostedRoom(PoolAnchors anchors)
+    {
+        try
+        {
+            object? runtime = anchors.RuntimeInstance?.GetValue(null);
+            return runtime != null && anchors.RuntimeHasActiveHostedRoom?.GetValue(runtime) is true;
         }
         catch (Exception)
         {

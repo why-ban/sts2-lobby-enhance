@@ -17,6 +17,14 @@ namespace Sts2LobbyEnhance;
 /// <c>lan_connect_copy_text</c> (LanConnectRichMessageView.cs:84); <c>RichTextLabel.GetParsedText()</c> is only a
 /// fallback in case that meta ever stops being written.
 ///
+/// A press that copied must not also open the item/combat reference preview. To upstream a motionless 400 ms press is
+/// still a tap (it decides by travel only, LanConnectReferenceTapGesture.cs:54-55), and a message carrying a
+/// reference activates on it — for a single reference wherever the finger landed
+/// (LanConnectRichMessageView.cs:204-206). So a successful copy arms
+/// <see cref="TouchChatScrollFix.ReferenceActivationGate"/>, and the prefix this fix puts on
+/// <c>RaiseReferencePressed</c> eats exactly that one activation. The gate is cleared when the next press starts, so it
+/// can never swallow an activation that belongs to a different press.
+///
 /// This is deliberately a plain class and not a <c>Node</c>: Godot only dispatches <c>_Ready</c>/<c>_Process</c> to
 /// C# classes that went through its source generator (script classes), and a class that a mod instantiates by hand
 /// has no generated dispatch. Everything time-based here therefore rides on engine objects that do — a
@@ -44,6 +52,12 @@ internal sealed class LongPressCopyGesture
     private const string CopyTextMetaName = "lan_connect_copy_text";
 
     /// <summary>
+    /// How many reference spans the message carries (LanConnectRichMessageView.cs:86). A message without one can
+    /// never raise the preview, so arming the gate for it would only risk eating a later, unrelated activation.
+    /// </summary>
+    private const string ReferenceCountMetaName = "lan_connect_reference_count";
+
+    /// <summary>
     /// A no-vibration acknowledgement: Android silently ignores vibration without the VIBRATE permission, so a
     /// device without it would copy with no sign at all.
     /// </summary>
@@ -56,6 +70,9 @@ internal sealed class LongPressCopyGesture
     private readonly RichTextLabel _label;
     private readonly CanvasItem? _row;
     private readonly Color _rowModulate;
+
+    /// <summary>Whether this message can open the reference preview at all; decides if a copy has to arm the gate.</summary>
+    private readonly bool _raisesReference;
 
     private int? _touchIndex;
     private Vector2 _origin;
@@ -72,6 +89,7 @@ internal sealed class LongPressCopyGesture
         _label = label;
         _row = row;
         _rowModulate = row != null && GodotObject.IsInstanceValid(row) ? row.Modulate : DefaultModulate;
+        _raisesReference = ReadReferenceCount(label) > 0;
     }
 
     /// <summary>
@@ -143,6 +161,10 @@ internal sealed class LongPressCopyGesture
         _pressedAt = Time.GetTicksMsec();
         _cancelled = false;
         _copied = false;
+
+        // This press has not copied anything yet, so it must not inherit the previous press's suppression.
+        // Clearing here (before anything can activate) is what bounds the gate to one press.
+        TouchChatScrollFix.ReferenceActivationGate.Disarm();
         ArmHoldTimer(++_press);
     }
 
@@ -216,6 +238,15 @@ internal sealed class LongPressCopyGesture
         }
 
         DisplayServer.ClipboardSet(text);
+
+        // Only after the copy actually happened, and only for a message that could raise the preview. The
+        // timer path fires this while the finger is still down, i.e. strictly before the release that would
+        // trigger the activation, which is what makes the suppression reliable rather than lucky.
+        if (_raisesReference)
+        {
+            TouchChatScrollFix.ReferenceActivationGate.Arm();
+        }
+
         Pulse();
     }
 
@@ -237,6 +268,22 @@ internal sealed class LongPressCopyGesture
         }
 
         return _label.GetParsedText();
+    }
+
+    /// <summary>
+    /// Upstream publishes how many spans carry a reference (LanConnectRichMessageView.cs:86); zero means no
+    /// activation can follow this press at all. Read once per row instead of per press: the meta is written in
+    /// the view's constructor and never changes.
+    /// </summary>
+    private static int ReadReferenceCount(RichTextLabel label)
+    {
+        Node? view = label.GetParent();
+        if (view == null || !GodotObject.IsInstanceValid(view) || !view.HasMeta(ReferenceCountMetaName))
+        {
+            return 0;
+        }
+
+        return view.GetMeta(ReferenceCountMetaName, default).AsInt32();
     }
 
     /// <summary>

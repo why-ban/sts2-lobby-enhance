@@ -599,7 +599,7 @@ namespace Sts2LobbyEnhance;
                 string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 return new ProbeOutcome(
                     Reachable: true,
-                    Supported: ReadServerChatVersion(body) == 1,
+                    Supported: ReadServerChatSupported(body),
                     Milliseconds: (int)stopwatch.ElapsedMilliseconds,
                     At: DateTimeOffset.UtcNow);
             }
@@ -610,10 +610,21 @@ namespace Sts2LobbyEnhance;
         }
 
         /// <summary>
-        /// <c>capabilities.serverChatVersion</c> out of a <c>/probe</c> body (lobby-service/src/app.ts:484-512).
-        /// Returns -1 when the body is not the shape we expect, which reads as "not supported".
+        /// Decides "does this server speak public channel v1" with exactly the test the client itself applies:
+        /// <c>probe.Ok &amp;&amp; probe.Capabilities != null &amp;&amp; probe.Capabilities.SupportsTextServerChat</c>
+        /// (<c>LanConnectServerChatClient.cs:181</c>, where <c>SupportsTextServerChat</c> is
+        /// <c>ServerChatVersion == 1</c>, <c>LanConnectLobbyModels.cs:179</c>).
+        ///
+        /// The strictness is not pedantry. <c>LobbyProbeResponse.Ok</c> is a plain <c>bool</c> that defaults to
+        /// false (<c>LanConnectLobbyModels.cs:127-132</c>), so a body without an <c>"ok"</c> field deserialises to
+        /// "not ok" on the client. A lenient check here would let such a body through, the client would then call
+        /// <c>MarkPermanentStop(Unsupported)</c> (<c>:183-188</c>), and the reconnect loop returns instead of
+        /// retrying (<c>:1048-1059</c>) - one wrong switch kills the public channel for the rest of the process.
+        /// Anything short of all three conditions is therefore "not supported".
+        ///
+        /// The body shape is <c>lobby-service/src/app.ts:484-512</c>.
         /// </summary>
-        private static int ReadServerChatVersion(string body)
+        private static bool ReadServerChatSupported(string body)
         {
             try
             {
@@ -621,18 +632,19 @@ namespace Sts2LobbyEnhance;
                 JsonElement root = document.RootElement;
                 if (root.ValueKind != JsonValueKind.Object)
                 {
-                    return -1;
+                    return false;
                 }
 
-                if (root.TryGetProperty("ok", out JsonElement ok) && ok.ValueKind == JsonValueKind.False)
+                // A missing "ok" reads as false on the client, so it must read as false here.
+                if (!root.TryGetProperty("ok", out JsonElement ok) || ok.ValueKind != JsonValueKind.True)
                 {
-                    return -1;
+                    return false;
                 }
 
                 if (!root.TryGetProperty("capabilities", out JsonElement capabilities) ||
                     capabilities.ValueKind != JsonValueKind.Object)
                 {
-                    return -1;
+                    return false;
                 }
 
                 foreach (string name in new[] { "serverChatVersion", "ServerChatVersion" })
@@ -641,15 +653,15 @@ namespace Sts2LobbyEnhance;
                         value.ValueKind == JsonValueKind.Number &&
                         value.TryGetInt32(out int version))
                     {
-                        return version;
+                        return version == 1;
                     }
                 }
 
-                return -1;
+                return false;
             }
             catch (Exception)
             {
-                return -1;
+                return false;
             }
         }
     }

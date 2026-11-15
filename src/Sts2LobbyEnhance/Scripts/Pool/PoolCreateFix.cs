@@ -104,8 +104,9 @@ internal sealed class PoolCreateFix : ICompatFix
             });
 
         Entry.Info(
-            "[server-pool] hosting now starts on the lowest-latency server whose create guard allows it; patched " +
-            PoolAnchors.OverlayTypeName + ".CreateRoomAsync (LanConnectLobbyOverlay.cs:4401).");
+            "[server-pool] hosting now starts on the lowest-latency server that can host the dialog's protocol " +
+            "profile and whose create guard allows it; a server whose /probe cannot confirm the profile is never " +
+            "chosen. Patched " + PoolAnchors.OverlayTypeName + ".CreateRoomAsync (LanConnectLobbyOverlay.cs:4401).");
     }
 
     // ReSharper disable once InconsistentNaming - Harmony binds these by their exact names.
@@ -119,16 +120,26 @@ internal sealed class PoolCreateFix : ICompatFix
                 return true;
             }
 
-            // A live room session would be destroyed by the switch (:1160-1163) and a switch already in flight
-            // owns the context; both mean "run upstream untouched".
+            // A live room session would be destroyed by the switch (LanConnectChatRuntimePorts.cs:1160-1163) and a
+            // switch already in flight owns the context; both mean "run upstream untouched".
             if (PoolServerSwitch.HasActiveRoomSession(anchors) || PoolServerSwitch.SwitchInProgress(anchors))
+            {
+                return true;
+            }
+
+            // Upstream rejects the create for free in these three cases before it ever contacts a server
+            // (LanConnectLobbyOverlay.cs:4403-4455). Switching first would take the player off their server - leaving
+            // the room, dropping the public channel and rewriting config.json - for a create that is then refused
+            // anyway. Let upstream report its own error instead.
+            if (!CheapCreateChecksPass(anchors, __instance))
             {
                 return true;
             }
 
             if (Interlocked.Exchange(ref _inFlight, 1) != 0)
             {
-                // Already choosing a server: the second click is a no-op rather than a second switch.
+                // Already choosing a server: the second click is a no-op rather than a second switch, said out loud.
+                PoolRefreshFix.SetStatus(__instance, "正在选择大厅服务器，请稍候…");
                 __result = Task.CompletedTask;
                 return false;
             }
@@ -146,13 +157,49 @@ internal sealed class PoolCreateFix : ICompatFix
         }
     }
 
+    /// <summary>
+    /// The three refusals upstream makes before it talks to any server (LanConnectLobbyOverlay.cs:4403-4408 empty room
+    /// name, :4443-4448 a multiplayer continue save, :4450-4455 an already hosted room). All three are reads; a missing
+    /// anchor means "cannot tell" and the pre-check passes, because blocking a legitimate create is worse than an
+    /// unnecessary switch.
+    /// </summary>
+    private static bool CheapCreateChecksPass(PoolAnchors anchors, object overlay)
+    {
+        try
+        {
+            if (anchors.RoomNameInput?.GetValue(overlay) is Godot.LineEdit nameInput
+                && string.IsNullOrWhiteSpace(nameInput.Text))
+            {
+                return false;
+            }
+
+            if (anchors.SaveManagerInstance?.GetValue(null) is { } saves
+                && anchors.SaveManagerHasMultiplayerRun?.GetValue(saves) is true)
+            {
+                return false;
+            }
+
+            if (PoolServerSwitch.HasActiveHostedRoom(anchors))
+            {
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("create-precheck", "the create pre-checks could not be read: " + PoolRoomClient.Describe(exception));
+            return true;
+        }
+    }
+
     private static async Task CreateOnBestServerAsync(PoolAnchors anchors, object overlay)
     {
         try
         {
             try
             {
-                PoolRefreshFix.SetStatus(overlay, "正在选择延迟最低且可建房的服务器…");
+                PoolRefreshFix.SetStatus(overlay, "正在选择延迟最低、支持该协议且可建房的大厅服务器…");
                 await SwitchToBestServerAsync(anchors, overlay).ConfigureAwait(true);
             }
             catch (Exception exception)
@@ -162,6 +209,16 @@ internal sealed class PoolCreateFix : ICompatFix
 
             // The original always runs: a room hosted on the wrong (but working) server beats no room at all.
             await InvokeCreateAsync(anchors, overlay).ConfigureAwait(true);
+
+            // Diagnostic only. A create that ends without a live room on a server whose capabilities said it could
+            // host is the one case the pre-flight cannot decide on its own (the frozen selection is validated inside
+            // the host flow), so it is worth one log line with the server's name attached.
+            if (!PoolServerSwitch.HasActiveRoomSession(anchors))
+            {
+                Entry.Info(
+                    "[server-pool] create finished without a live room; server=" +
+                    PoolServerCatalog.CurrentBaseUrl(anchors) + ".");
+            }
         }
         finally
         {
@@ -179,18 +236,28 @@ internal sealed class PoolCreateFix : ICompatFix
             return;
         }
 
-        using var probeBudget = new CancellationTokenSource(ProbeTimeoutMs + 500);
+        // Probing both the metrics and the protocol capabilities: the second one is what keeps us off a server
+        // that will freeze a protocol the client cannot accept.
+        using var probeBudget = new CancellationTokenSource(ProbeTimeoutMs + 800);
         await ProbeStaleAsync(anchors, servers, probeBudget.Token).ConfigureAwait(true);
+
+        (string? profile, int version) = ResolveOwnProfile(anchors, overlay);
+        if (profile == null)
+        {
+            // Without knowing which profile the dialog is about to request there is nothing to verify against, and
+            // switching blind is what produced the mobile "LAN 协议版本不匹配" reports.
+            WarnOnce(
+                "profile",
+                "the create dialog's protocol profile could not be resolved, so the room stays on the current server");
+            return;
+        }
 
         List<PoolServer> allowed = servers
             .Where(server => server.LatencyMs.HasValue)
             .Where(server => string.Equals(server.GuardStatus, "allow", StringComparison.OrdinalIgnoreCase))
+            .Where(server => PoolServerCatalog.SupportsProfile(server, profile, version))
             .OrderBy(server => server.LatencyMs!.Value)
             .ToList();
-        if (allowed.Count == 0)
-        {
-            return;
-        }
 
         string current = PoolServerCatalog.CurrentBaseUrl(anchors);
         PoolServer? currentServer = servers.FirstOrDefault(server => PoolAddress.Same(server.BaseUrl, current));
@@ -201,7 +268,24 @@ internal sealed class PoolCreateFix : ICompatFix
             return;
         }
 
-        if (string.Equals(currentServer.GuardStatus, "allow", StringComparison.OrdinalIgnoreCase))
+        bool currentCapable = PoolServerCatalog.SupportsProfile(currentServer, profile, version);
+        Entry.Info(
+            "[server-pool] create profile=" + profile + " v" + version + "; " + allowed.Count + " of " +
+            servers.Count + " servers can host it (current " + currentServer.BaseUrl + " " +
+            (currentCapable ? "can" : "cannot") + ").");
+
+        if (allowed.Count == 0)
+        {
+            // Nothing can host this profile: stay where the player is. A room that fails to publish is worse than a
+            // room on a slow server, so no switch is the answer, not the least-bad switch.
+            WarnOnce(
+                "no-capable-server",
+                "no known server advertises the protocol profile this room needs, so it is created on the current " +
+                "server instead of switching");
+            return;
+        }
+
+        if (currentCapable)
         {
             if (!currentServer.LatencyMs.HasValue)
             {
@@ -237,6 +321,10 @@ internal sealed class PoolCreateFix : ICompatFix
                         " (latency " + candidate.LatencyMs + " ms, create guard " + candidate.GuardStatus + ").");
                     return;
                 }
+
+                // The switch reported success but the config still points elsewhere: treat it as "we are now on that
+                // server" for the rest of the loop instead of comparing every later candidate against a stale value.
+                current = PoolServerCatalog.CurrentBaseUrl(anchors);
             }
             catch (Exception exception)
             {
@@ -249,8 +337,62 @@ internal sealed class PoolCreateFix : ICompatFix
     }
 
     /// <summary>
-    /// Probes the servers whose latency/guard cache is stale, all at once and without letting one slow node hold the
-    /// dialog. A server that does not answer keeps a null latency and simply drops out of the candidate list.
+    /// The canonical profile this create is going to ask for, derived the way upstream derives it: the dialog's
+    /// selected protocol id (LanConnectLobbyOverlay.cs:6664-6669) into LanConnectProtocolProfile
+    /// (:6780-6787), then to its canonical wire string. The LAN protocol version is the same value
+    /// LanConnectProtocolOffer.CreateCurrent() puts in the offer: LanConnectConstants.TailLanProtocolVersion when the
+    /// tail runtime is available, 0 otherwise (LanConnectProtocolOffer.cs:13-51).
+    ///
+    /// Nothing here creates a protocol offer: CreateCurrent() reads the game's message registry and native bus id and
+    /// has no business running in a patch body before the create does.
+    /// </summary>
+    private static (string? Profile, int Version) ResolveOwnProfile(PoolAnchors anchors, object overlay)
+    {
+        try
+        {
+            if (anchors.GetSelectedCreateProtocolId == null
+                || anchors.ProtocolProfileFromCreateId == null
+                || anchors.ProfileToCanonical == null)
+            {
+                return (null, 0);
+            }
+
+            if (anchors.GetSelectedCreateProtocolId.Invoke(overlay, null) is not int protocolId)
+            {
+                return (null, 0);
+            }
+
+            object? profile = anchors.ProtocolProfileFromCreateId.Invoke(null, new object?[] { protocolId });
+            if (profile == null)
+            {
+                return (null, 0);
+            }
+
+            string? canonical = anchors.ProfileToCanonical.Invoke(null, new object?[] { profile }) as string;
+            if (string.IsNullOrWhiteSpace(canonical))
+            {
+                return (null, 0);
+            }
+
+            int version = 0;
+            if (string.Equals(canonical, PoolServerCatalog.TailProfileCanonical, StringComparison.OrdinalIgnoreCase)
+                && anchors.TailRuntimeAvailable?.GetValue(null) is true)
+            {
+                version = anchors.TailLanProtocolVersion;
+            }
+
+            return (canonical, version);
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("profile", "resolving the create dialog's protocol profile failed: " + PoolRoomClient.Describe(exception));
+            return (null, 0);
+        }
+    }
+
+    /// <summary>
+    /// Probes the servers whose latency/guard/protocol cache is stale, all at once and without letting one slow node
+    /// hold the dialog. A server that does not answer keeps a null latency and simply drops out of the candidates.
     /// </summary>
     private static async Task ProbeStaleAsync(
         PoolAnchors anchors,
@@ -258,7 +400,9 @@ internal sealed class PoolCreateFix : ICompatFix
         CancellationToken cancellationToken)
     {
         List<Task> pending = servers
-            .Where(server => !PoolServerCatalog.IsProbeFresh(server))
+            // A node in failure cooldown is not a candidate anyway and asking it would cost the dialog its budget.
+            .Where(server => !PoolServerCatalog.IsCoolingDown(server))
+            .Where(PoolServerCatalog.NeedsProbe)
             .Select(server => PoolServerCatalog.ProbeAsync(anchors, server, ProbeTimeoutMs, cancellationToken))
             .ToList();
         if (pending.Count == 0)

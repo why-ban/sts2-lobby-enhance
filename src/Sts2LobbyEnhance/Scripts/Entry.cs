@@ -127,6 +127,18 @@ public static class Entry
     {
         GroupReport group = report.GroupFor(fix.Group);
 
+        // A group that already rolled back must not grow new patches. Without this gate the repairs that come
+        // after the failing one still install into the same Harmony instance, and the announcement at startup
+        // ("every patch of this group was removed") becomes a lie: part of the group is live again, with no
+        // way to tell from the log which part.
+        if (group.RolledBack)
+        {
+            group.Skipped.Add($"{fix.Id}: its group '{GroupName(fix.Group)}' was rolled back earlier, so this " +
+                              "repair was left out rather than reinstalling into a rolled-back group");
+            report.Skipped.Add(fix.Id);
+            return;
+        }
+
         string reason;
         bool applies;
         try
@@ -416,5 +428,6 @@ internal static class CompatFixes
         yield return new PoolRefreshFix();
         yield return new PoolJoinFix();
         yield return new PoolCreateFix();
+        yield return new LobbyEntryDirectFix();
     }
 }

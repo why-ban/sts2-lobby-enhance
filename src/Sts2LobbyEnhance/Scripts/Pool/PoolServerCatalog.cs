@@ -29,6 +29,7 @@ internal sealed class PoolAnchors
     internal const string BuildInfoTypeName = "Sts2LanConnect.Scripts.LanConnectBuildInfo";
     internal const string MetricsClientTypeName = "Sts2LanConnect.Scripts.LanConnectPeerMetricsClient";
     internal const string LeaseTypeName = "Sts2LanConnect.Scripts.LanConnectServerContextLease";
+    internal const string ConstantsTypeName = "Sts2LanConnect.Scripts.LanConnectConstants";
 
     internal Type Overlay = null!;
 
@@ -57,6 +58,68 @@ internal sealed class PoolAnchors
 
     /// <summary>LanConnectLobbyOverlay.RebuildRoomStage(), LanConnectLobbyOverlay.cs:3543</summary>
     internal MethodInfo RebuildRoomStage = null!;
+
+    // ---- the pieces of RefreshRoomsAsync this repair now reproduces (:3362-3481) ----
+
+    /// <summary>LanConnectLobbyOverlay.PersistSettings() (:3373)</summary>
+    internal MethodInfo PersistSettings = null!;
+
+    /// <summary>LanConnectLobbyOverlay.UpdateHealthIndicator() (:3427)</summary>
+    internal MethodInfo UpdateHealthIndicator = null!;
+
+    /// <summary>LanConnectLobbyOverlay.UpdatePageControls(int filteredCount) (:3428)</summary>
+    internal MethodInfo UpdatePageControls = null!;
+
+    /// <summary>LanConnectLobbyOverlay.RefreshSelectedRoomDetails() (:3429)</summary>
+    internal MethodInfo RefreshSelectedRoomDetails = null!;
+
+    /// <summary>LanConnectLobbyOverlay.GetFilteredRooms() (:3562)</summary>
+    internal MethodInfo GetFilteredRooms = null!;
+
+    /// <summary>LanConnectLobbyOverlay.GetSelectedRoom() (:3387)</summary>
+    internal MethodInfo GetSelectedRoom = null!;
+
+    /// <summary>LanConnectLobbyOverlay.AreRoomListsVisuallyEquivalent(IReadOnlyList, IReadOnlyList), static (:3419)</summary>
+    internal MethodInfo AreRoomListsVisuallyEquivalent = null!;
+
+    /// <summary>LanConnectLobbyOverlay.ApplyAnnouncements(IReadOnlyList of LobbyAnnouncementItem) (:3503)</summary>
+    internal MethodInfo ApplyAnnouncements = null!;
+
+    /// <summary>LanConnectLobbyOverlay.EnsureAnnouncementFallback() (:3406)</summary>
+    internal MethodInfo EnsureAnnouncementFallback = null!;
+
+    /// <summary>LobbyApiClient.CreateConfigured(), LanConnectLobbyApiClient.cs:52</summary>
+    internal MethodInfo CreateConfiguredClient = null!;
+
+    /// <summary>LobbyApiClient.GetAnnouncementsAsync(CancellationToken), LanConnectLobbyApiClient.cs:115</summary>
+    internal MethodInfo GetAnnouncements = null!;
+
+    /// <summary>LobbyApiClient.MeasureProbeRttAsync(CancellationToken), LanConnectLobbyApiClient.cs:121</summary>
+    internal MethodInfo MeasureProbeRtt = null!;
+
+    /// <summary>LanConnectLobbyOverlay._serverPickerOpen (:229 area), upstream's refresh short circuit (:3368)</summary>
+    internal FieldInfo ServerPickerOpen = null!;
+
+    /// <summary>LanConnectLobbyOverlay._actionInFlight, upstream's refresh short circuit (:3368)</summary>
+    internal FieldInfo ActionInFlight = null!;
+
+    /// <summary>LanConnectLobbyOverlay._timeUntilAutoRefresh (:3376)</summary>
+    internal FieldInfo TimeUntilAutoRefresh = null!;
+
+    /// <summary>LanConnectLobbyOverlay._lastLobbyRttMs (:3396, :3444)</summary>
+    internal FieldInfo LastLobbyRttMs = null!;
+
+    /// <summary>LanConnectLobbyOverlay._consecutiveRefreshFailures (:3397, :3443)</summary>
+    internal FieldInfo ConsecutiveRefreshFailures = null!;
+
+    /// <summary>LanConnectLobbyOverlay.RefreshFailureSwitchHint, appended to the failure status (:3454)</summary>
+    internal FieldInfo RefreshFailureHint = null!;
+
+    /// <summary>LanConnectConstants.LobbyRefreshIntervalSeconds (:3376), read as a constant so a bump follows upstream</summary>
+    internal double RefreshIntervalSeconds;
+
+    /// <summary>LobbyServiceException - the refresh failure branch is chosen by this type (:3441)</summary>
+    internal Type LobbyServiceExceptionType = null!;
 
     internal ConstructorInfo ApiClientCtor = null!;
 
@@ -113,6 +176,9 @@ internal sealed class PoolAnchors
 
     internal PropertyInfo? RuntimeActiveRoomSession;
 
+    /// <summary>LanConnectLobbyRuntime.HasActiveHostedRoom (:267) - upstream's create refusal at :4450</summary>
+    internal PropertyInfo? RuntimeHasActiveHostedRoom;
+
     internal PropertyInfo? RuntimeSwitchInProgress;
 
     /// <summary>LanConnectLobbyRuntime.SwitchLobbyServerWithContextAsync(string, CancellationToken), LanConnectLobbyRuntime.cs:1876</summary>
@@ -126,6 +192,41 @@ internal sealed class PoolAnchors
 
     /// <summary>LanConnectBuildInfo.GetGameVersion(), LanConnectBuildInfo.cs:25 - the local version the pool sorts by</summary>
     internal MethodInfo? GetGameVersion;
+
+    // ---- protocol capability anchors, used to refuse a server that cannot host our profile ----
+
+    /// <summary>LobbyApiClient.GetProbeAsync(CancellationToken), LanConnectLobbyApiClient.cs:142</summary>
+    internal MethodInfo? GetProbe;
+
+    /// <summary>LobbyProbeResponse.Capabilities, LanConnectLobbyModels.cs:127-132</summary>
+    internal PropertyInfo? ProbeCapabilities;
+
+    /// <summary>LobbyProbeCapabilities.SupportedProtocolProfiles, LanConnectLobbyModels.cs:138</summary>
+    internal PropertyInfo? CapabilitiesProfiles;
+
+    /// <summary>LobbyProbeCapabilities.LanProtocolMin, LanConnectLobbyModels.cs:140</summary>
+    internal PropertyInfo? CapabilitiesLanMin;
+
+    /// <summary>LobbyProbeCapabilities.LanProtocolMax, LanConnectLobbyModels.cs:142</summary>
+    internal PropertyInfo? CapabilitiesLanMax;
+
+    /// <summary>LobbyProbeCapabilities.TailV1MinimumClientVersion, LanConnectLobbyModels.cs:146</summary>
+    internal PropertyInfo? CapabilitiesTailMinimumClient;
+
+    /// <summary>LanConnectLobbyOverlay.GetSelectedCreateProtocolId() (:6664)</summary>
+    internal MethodInfo? GetSelectedCreateProtocolId;
+
+    /// <summary>LanConnectLobbyOverlay.ProtocolProfileFromCreateId(int), static (:6780 area)</summary>
+    internal MethodInfo? ProtocolProfileFromCreateId;
+
+    /// <summary>LanConnectProtocolProfileExtensions.ToCanonical(LanConnectProtocolProfile), static</summary>
+    internal MethodInfo? ProfileToCanonical;
+
+    /// <summary>LanConnectTailRuntimeSupport.IsAvailable, static - the ceiling of our own LAN protocol offer</summary>
+    internal PropertyInfo? TailRuntimeAvailable;
+
+    /// <summary>LanConnectConstants.TailLanProtocolVersion, the value LanConnectProtocolOffer.CreateCurrent() puts in our offer</summary>
+    internal int TailLanProtocolVersion;
 
     /// <summary>LanConnectLobbyOverlay._refreshInFlight - upstream's own in-flight guard, read before we start a round.</summary>
     internal FieldInfo? RefreshInFlight;
@@ -143,8 +244,23 @@ internal sealed class PoolAnchors
 
     internal PropertyInfo? TextMutedColor;
 
-    /// <summary>LanConnectLobbyOverlay._serverBaseUrlInput (:331) - repainted after a switch, like upstream does</summary>
+    /// <summary>LanConnectLobbyOverlay._serverBaseUrlInput (:141) - repainted after a switch, like upstream does</summary>
     internal FieldInfo? ServerBaseUrlInput;
+
+    /// <summary>LanConnectLobbyOverlay._roomNameInput - the create dialog's name box, read for the cheap pre-check</summary>
+    internal FieldInfo? RoomNameInput;
+
+    /// <summary>LanConnectConfig.LobbyServerBaseUrlOverride (:155) - what the "HTTP override" box mirrors</summary>
+    internal PropertyInfo? ConfigBaseUrlOverride;
+
+    /// <summary>LobbyRoomSummary.SavedRun (:41) - a saved-run room may open a slot dialog and never join</summary>
+    internal PropertyInfo? RoomSavedRun;
+
+    /// <summary>MegaCrit.Sts2.Core.Saves.SaveManager.Instance (game type, decompiled 0.113:72)</summary>
+    internal PropertyInfo? SaveManagerInstance;
+
+    /// <summary>SaveManager.HasMultiplayerRunSave (game type, decompiled 0.113:114)</summary>
+    internal PropertyInfo? SaveManagerHasMultiplayerRun;
 
     internal static PoolAnchors? TryCapture(Assembly host, PoolAnchorScope scope, out string reason)
     {
@@ -196,6 +312,7 @@ internal sealed class PoolAnchors
                     RoomTypeName)!;
                 anchors.Rooms = ReflectScope.Field(missing, anchors.Overlay, "_rooms")!;
                 anchors.RebuildRoomStage = ReflectScope.InstanceMethod(missing, anchors.Overlay, "RebuildRoomStage")!;
+                anchors.CaptureRefreshPrologue(missing, host);
                 break;
 
             case PoolAnchorScope.Join:
@@ -214,6 +331,7 @@ internal sealed class PoolAnchors
             case PoolAnchorScope.Create:
                 anchors.CreateRoom = ReflectScope.InstanceMethod(missing, anchors.Overlay, "CreateRoomAsync")!;
                 anchors.RequireSwitch(missing, host);
+                anchors.CaptureProtocolAnchors(missing, host);
                 break;
 
             default:
@@ -258,6 +376,7 @@ internal sealed class PoolAnchors
         anchors.RuntimeInstance = ReflectScope.StaticProperty(new List<string>(), runtime, "Instance");
         anchors.RuntimeSwitchInProgress = OptionalProperty(runtime, "IsLobbyServerSwitchInProgress");
         anchors.RuntimeActiveRoomSession = OptionalProperty(runtime, "HasActiveRoomSession");
+        anchors.RuntimeHasActiveHostedRoom = OptionalProperty(runtime, "HasActiveHostedRoom");
         anchors.LeaseToken = OptionalProperty(
             host.GetType(LeaseTypeName, throwOnError: false, ignoreCase: false),
             "Token");
@@ -278,6 +397,16 @@ internal sealed class PoolAnchors
         anchors.TextMutedColor = ReflectScope.StaticProperty(new List<string>(), anchors.Overlay, "TextMutedColor");
         anchors.ServerBaseUrlInput = anchors.Overlay
             .GetField("_serverBaseUrlInput", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        anchors.RoomNameInput = anchors.Overlay
+            .GetField("_roomNameInput", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        anchors.ConfigBaseUrlOverride = ReflectScope.StaticProperty(new List<string>(), config, "LobbyServerBaseUrlOverride");
+        anchors.RoomSavedRun = OptionalProperty(anchors.RoomType, "SavedRun");
+
+        // Game-side types are looked up by full name, so a game update costs this pre-check and not the repair.
+        Type? saveManager = ReflectScope.FindType("MegaCrit.Sts2.Core.Saves.SaveManager");
+        anchors.SaveManagerInstance = OptionalProperty(saveManager, "Instance");
+        anchors.SaveManagerHasMultiplayerRun = saveManager?
+            .GetProperty("HasMultiplayerRunSave", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
         // The return type is part of the contract, not a detail: the refresh prefix hands its own Task back through
         // Harmony's __result, so a Task the host mod no longer produces would silently start the original twice.
@@ -303,6 +432,31 @@ internal sealed class PoolAnchors
             missing.Add(RuntimeTypeName + ".HasActiveRoomSession");
         }
 
+        // The refresh takeover reproduces the whole method, so the four members it shares with the other scopes
+        // (kept optional there on purpose) are load bearing here.
+        if (scope == PoolAnchorScope.Refresh)
+        {
+            if (anchors.RefreshInFlight == null)
+            {
+                missing.Add(OverlayTypeName + "._refreshInFlight");
+            }
+
+            if (anchors.SelectedRoomId == null)
+            {
+                missing.Add(OverlayTypeName + "._selectedRoomId");
+            }
+
+            if (anchors.SetStatus == null)
+            {
+                missing.Add(OverlayTypeName + ".SetStatus(string)");
+            }
+
+            if (anchors.UpdateActionButtons == null)
+            {
+                missing.Add(OverlayTypeName + ".UpdateActionButtons()");
+            }
+        }
+
         if (missing.Count > 0)
         {
             reason = "missing: " + string.Join(", ", missing);
@@ -323,6 +477,135 @@ internal sealed class PoolAnchors
     /// is called on every request (:49, :124, :132), so a client built without a sink cannot be used from a
     /// headless harness and would flood the game log.
     /// </summary>
+    /// <summary>
+    /// The rest of RefreshRoomsAsync that this repair reproduces: the guard fields, the status/health updates and the
+    /// current server's probe + announcement calls. Every one of them is required for the refresh scope, because a
+    /// half-reproduced refresh is worse than no takeover at all.
+    /// </summary>
+    private void CaptureRefreshPrologue(List<string> missing, Assembly host)
+    {
+        PersistSettings = ReflectScope.InstanceMethod(missing, Overlay, "PersistSettings")!;
+        UpdateHealthIndicator = ReflectScope.InstanceMethod(missing, Overlay, "UpdateHealthIndicator")!;
+        UpdatePageControls = ReflectScope.InstanceMethod(missing, Overlay, "UpdatePageControls", "System.Int32")!;
+        RefreshSelectedRoomDetails = ReflectScope.InstanceMethod(missing, Overlay, "RefreshSelectedRoomDetails")!;
+        GetFilteredRooms = ReflectScope.InstanceMethod(missing, Overlay, "GetFilteredRooms")!;
+        GetSelectedRoom = ReflectScope.InstanceMethod(missing, Overlay, "GetSelectedRoom")!;
+        EnsureAnnouncementFallback = ReflectScope.InstanceMethod(missing, Overlay, "EnsureAnnouncementFallback")!;
+        AreRoomListsVisuallyEquivalent = FindReadOnlyListMethod(Overlay, "AreRoomListsVisuallyEquivalent", requireStatic: true, "LobbyRoomSummary", missing)!;
+        ApplyAnnouncements = FindReadOnlyListMethod(Overlay, "ApplyAnnouncements", requireStatic: false, "LobbyAnnouncementItem", missing)!;
+
+        Type? apiClient = ReflectScope.HostType(host, ApiClientTypeName, missing);
+        CreateConfiguredClient = ReflectScope.StaticMethod(missing, apiClient, "CreateConfigured")!;
+        GetAnnouncements = ReflectScope.InstanceMethod(missing, apiClient, "GetAnnouncementsAsync", "System.Threading.CancellationToken")!;
+        MeasureProbeRtt = ReflectScope.InstanceMethod(missing, apiClient, "MeasureProbeRttAsync", "System.Threading.CancellationToken")!;
+
+        ServerPickerOpen = ReflectScope.Field(missing, Overlay, "_serverPickerOpen")!;
+        ActionInFlight = ReflectScope.Field(missing, Overlay, "_actionInFlight")!;
+        TimeUntilAutoRefresh = ReflectScope.Field(missing, Overlay, "_timeUntilAutoRefresh")!;
+        LastLobbyRttMs = ReflectScope.Field(missing, Overlay, "_lastLobbyRttMs")!;
+        ConsecutiveRefreshFailures = ReflectScope.Field(missing, Overlay, "_consecutiveRefreshFailures")!;
+        RefreshFailureHint = ReflectScope.StaticField(missing, Overlay, "RefreshFailureSwitchHint")!;
+
+        RefreshIntervalSeconds = ConstantDouble(host, ConstantsTypeName, "LobbyRefreshIntervalSeconds", missing);
+        LobbyServiceExceptionType = ReflectScope.HostType(host, "Sts2LanConnect.Scripts.LobbyServiceException", missing)!;
+    }
+
+    /// <summary>
+    /// What the create repair needs to answer "can this server host the profile we are about to create":
+    /// the probe endpoint, the capability fields inside it, and the two local helpers that turn the dialog's
+    /// selected protocol id into the canonical profile string the service will be asked for.
+    /// </summary>
+    private void CaptureProtocolAnchors(List<string> missing, Assembly host)
+    {
+        Type? apiClient = ReflectScope.HostType(host, ApiClientTypeName, missing);
+        GetProbe = ReflectScope.InstanceMethod(missing, apiClient, "GetProbeAsync", "System.Threading.CancellationToken");
+
+        Type? probeResponse = ReflectScope.HostType(host, "Sts2LanConnect.Scripts.LobbyProbeResponse", missing);
+        ProbeCapabilities = ReflectScope.PropertyOf(probeResponse ?? typeof(object), "Capabilities", missing);
+        Type? capabilities = ProbeCapabilities?.PropertyType;
+        CapabilitiesProfiles = ReflectScope.PropertyOf(capabilities ?? typeof(object), "SupportedProtocolProfiles", missing);
+        CapabilitiesLanMin = ReflectScope.PropertyOf(capabilities ?? typeof(object), "LanProtocolMin", missing);
+        CapabilitiesLanMax = ReflectScope.PropertyOf(capabilities ?? typeof(object), "LanProtocolMax", missing);
+        CapabilitiesTailMinimumClient = ReflectScope.PropertyOf(capabilities ?? typeof(object), "TailV1MinimumClientVersion", missing);
+
+        GetSelectedCreateProtocolId = ReflectScope.InstanceMethod(missing, Overlay, "GetSelectedCreateProtocolId");
+        ProtocolProfileFromCreateId = ReflectScope.StaticMethod(missing, Overlay, "ProtocolProfileFromCreateId", "System.Int32");
+
+        Type? extensions = ReflectScope.HostType(host, "Sts2LanConnect.Scripts.LanConnectProtocolProfileExtensions", missing);
+        ProfileToCanonical = extensions?
+            .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(method => string.Equals(method.Name, "ToCanonical", StringComparison.Ordinal)
+                                      && method.GetParameters().Length == 1);
+        if (ProfileToCanonical == null)
+        {
+            missing.Add("LanConnectProtocolProfileExtensions.ToCanonical(LanConnectProtocolProfile)");
+        }
+
+        TailRuntimeAvailable = ReflectScope.StaticProperty(
+            missing,
+            ReflectScope.HostType(host, "Sts2LanConnect.Scripts.LanConnectTailRuntimeSupport", missing),
+            "IsAvailable");
+        TailLanProtocolVersion = ConstantInt(host, ConstantsTypeName, "TailLanProtocolVersion", missing);
+    }
+
+    /// <summary>
+    /// Finds a method whose single/single-pair parameter is IReadOnlyList&lt;LobbyRoomSummary&gt; (or the announcement
+    /// equivalent). Matched structurally rather than by a spelled-out type name: a generic parameter's FullName embeds
+    /// the assembly identity, which would make the anchor depend on the host assembly's version.
+    /// </summary>
+    private static MethodInfo? FindReadOnlyListMethod(
+        Type? owner,
+        string name,
+        bool requireStatic,
+        string elementTypeName,
+        List<string> missing)
+    {
+        MethodInfo? method = owner?
+            .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(candidate => string.Equals(candidate.Name, name, StringComparison.Ordinal))
+            .Where(candidate => candidate.IsStatic == requireStatic)
+            .FirstOrDefault(candidate => candidate.GetParameters().Length is 1 or 2
+                                         && candidate.GetParameters().All(parameter =>
+                                             IsReadOnlyListOf(parameter.ParameterType, elementTypeName)));
+        if (method == null)
+        {
+            missing.Add(OverlayTypeName + "." + name + "(" + (requireStatic ? "static, " : string.Empty) +
+                        "IReadOnlyList of " + elementTypeName + ")");
+        }
+
+        return method;
+    }
+
+    private static bool IsReadOnlyListOf(Type parameterType, string elementTypeName) =>
+        parameterType.IsGenericType
+        && parameterType.GetGenericTypeDefinition() == typeof(IReadOnlyList<>)
+        && string.Equals(parameterType.GetGenericArguments()[0].Name, elementTypeName, StringComparison.Ordinal);
+
+    private static double ConstantDouble(Assembly host, string typeName, string fieldName, List<string> missing)
+    {
+        object? value = Constant(host, typeName, fieldName, missing);
+        return value is double number ? number : 0d;
+    }
+
+    private static int ConstantInt(Assembly host, string typeName, string fieldName, List<string> missing)
+    {
+        object? value = Constant(host, typeName, fieldName, missing);
+        return value is int number ? number : 0;
+    }
+
+    private static object? Constant(Assembly host, string typeName, string fieldName, List<string> missing)
+    {
+        Type? type = ReflectScope.HostType(host, typeName, missing);
+        FieldInfo? field = type?.GetField(fieldName, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        if (field == null)
+        {
+            missing.Add(typeName + "." + fieldName);
+            return null;
+        }
+
+        return field.GetRawConstantValue();
+    }
+
     private static ConstructorInfo? CaptureApiClientCtor(Assembly host, List<string> missing)
     {
         Type? client = ReflectScope.HostType(host, ApiClientTypeName, missing);
@@ -431,7 +714,40 @@ internal sealed class PoolServer
 
     internal int? RoomCount { get; set; }
 
+    /// <summary>
+    /// When /peers/metrics last answered. Deliberately NOT written by a /rooms fetch: the two probes answer
+    /// different questions, and sharing one stamp is what let a failed room fetch masquerade as "probed a moment
+    /// ago" and keep GuardStatus at the seed default "allow".
+    /// </summary>
     internal DateTimeOffset ProbedAt { get; set; }
+
+    /// <summary>Consecutive /rooms failures, for the cooldown backoff. Reset by the first success.</summary>
+    internal int ConsecutiveFailures { get; set; }
+
+    /// <summary>While this is in the future the server is skipped entirely: no request, no wait.</summary>
+    internal DateTimeOffset CooldownUntil { get; set; }
+
+    /// <summary>
+    /// The rooms this server returned last time it answered. While it is cooling down those rows are still shown,
+    /// marked stale, so one dead node cannot make its rooms vanish from the stage for minutes.
+    /// </summary>
+    internal IReadOnlyList<object>? LastRooms { get; set; }
+
+    /// <summary>
+    /// capabilities.supportedProtocolProfiles from GET /probe (LanConnectLobbyModels.cs:138), or null when the
+    /// server did not answer. Null is not "supports everything": it means the server could not be asked, and the
+    /// create repair treats it as unusable so a silent node can never be the one a room is published to.
+    /// </summary>
+    internal IReadOnlyList<string>? SupportedProfiles { get; set; }
+
+    internal int? LanProtocolMin { get; set; }
+
+    internal int? LanProtocolMax { get; set; }
+
+    /// <summary>capabilities.tailV1MinimumClientVersion: the server knows the tail v1 generation exists.</summary>
+    internal string? TailMinimumClientVersion { get; set; }
+
+    internal DateTimeOffset CapabilitiesAt { get; set; }
 
     internal string ShortName(int max) => PoolAddress.ShortName(DisplayName, BaseUrl, max);
 }
@@ -454,6 +770,12 @@ internal static class PoolServerCatalog
 
     /// <summary>How long a measured latency / create guard is trusted.</summary>
     internal const int ProbeTtlSeconds = 180;
+
+    /// <summary>How long a server's protocol capabilities are trusted before /probe is asked again.</summary>
+    internal const int CapabilityTtlSeconds = 300;
+
+    /// <summary>The canonical tail profile (LanConnectProtocolProfileExtensions.TailCanonical).</summary>
+    internal const string TailProfileCanonical = "tail_v1";
 
     /// <summary>Longest one discovery round may take before it gives up and tries again next tick.</summary>
     internal const int DiscoveryBudgetMs = 1500;
@@ -487,7 +809,21 @@ internal static class PoolServerCatalog
             List<PoolServer>? seeded = BuildFromSeeds(anchors);
             if (seeded is { Count: > 0 })
             {
-                Replace(seeded, carryProbe: false, discovered: false);
+                // Merge, never replace: the seed list knows nothing about the Cloudflare-discovered servers, and a
+                // wholesale swap dropped every one of them once per DiscoveryTtlSeconds.
+                List<PoolServer> merged = seeded;
+                lock (Gate)
+                {
+                    foreach (PoolServer known in _servers)
+                    {
+                        if (!merged.Exists(candidate => PoolAddress.Same(candidate.BaseUrl, known.BaseUrl)))
+                        {
+                            merged.Add(known);
+                        }
+                    }
+                }
+
+                Replace(merged, carryProbe: true, discovered: false);
             }
         }
 
@@ -602,7 +938,12 @@ internal static class PoolServerCatalog
         }
     }
 
-    internal static void RecordProbe(PoolServer server, int? latencyMs, string? displayName, string? guardStatus, int? rooms)
+    /// <summary>
+    /// A /peers/metrics answer (or the absence of one). This is the create side's cache, and it is allowed to cache a
+    /// failure: a node that does not publish metrics cannot be verified for hosting, so re-asking it on every click
+    /// would only cost the dialog two seconds per try.
+    /// </summary>
+    internal static void RecordMetricsProbe(PoolServer server, int? latencyMs, string? displayName, string? guardStatus, int? rooms)
     {
         if (latencyMs is > 0)
         {
@@ -627,8 +968,128 @@ internal static class PoolServerCatalog
         server.ProbedAt = DateTimeOffset.UtcNow;
     }
 
+    /// <summary>
+    /// The backoff ladder for a node that keeps failing, in seconds. A dead node used to cost the whole round its
+    /// 2 s ceiling; the measured difference (lead research-pool-latency.md) is 2,013-2,110 ms versus 247-333 ms once
+    /// the dead node is out of the round. The refresh cadence stays at the host mod's 8 s; only the nodes in cooldown
+    /// are skipped, and they are retried as soon as their slot expires.
+    /// </summary>
+    private static readonly int[] CooldownSeconds = { 10, 30, 90, 300 };
+
+    internal static bool IsCoolingDown(PoolServer server) => server.CooldownUntil > DateTimeOffset.UtcNow;
+
     internal static bool IsProbeFresh(PoolServer server) =>
         DateTimeOffset.UtcNow - server.ProbedAt <= TimeSpan.FromSeconds(ProbeTtlSeconds);
+
+    /// <summary>
+    /// A /rooms answer. This is the measurement the pool's sort uses and the only signal allowed to move the
+    /// cooldown ladder: it is a real round trip to the endpoint the pool actually needs.
+    /// </summary>
+    internal static void RecordRoomsFetch(PoolServerFetch fetch)
+    {
+        PoolServer server = fetch.Server;
+        if (fetch.Succeeded)
+        {
+            RegisterSuccess(server);
+            if (fetch.LatencyMs is > 0 and < PoolServerFetch.UnknownLatency)
+            {
+                server.LatencyMs = fetch.LatencyMs;
+            }
+
+            server.LastRooms = fetch.Rooms;
+            return;
+        }
+
+        // A failed fetch is not a measurement, and it is not evidence that the node can host: both stamps stay where
+        // they were, the guard becomes unknown, and the node starts (or continues) its cooldown.
+        server.GuardStatus = "unknown";
+        RegisterFailure(server);
+    }
+
+    private static void RegisterSuccess(PoolServer server)
+    {
+        server.ConsecutiveFailures = 0;
+        server.CooldownUntil = default;
+    }
+
+    private static void RegisterFailure(PoolServer server)
+    {
+        int failures = Math.Min(server.ConsecutiveFailures + 1, CooldownSeconds.Length);
+        server.ConsecutiveFailures = failures;
+        int seconds = CooldownSeconds[Math.Min(failures, CooldownSeconds.Length) - 1];
+        server.CooldownUntil = DateTimeOffset.UtcNow.AddSeconds(seconds);
+    }
+
+    internal static bool IsCapabilityFresh(PoolServer server) =>
+        server.CapabilitiesAt != default
+        && DateTimeOffset.UtcNow - server.CapabilitiesAt <= TimeSpan.FromSeconds(CapabilityTtlSeconds);
+
+    /// <summary>Anything the create decision reads is stale: latency, guard, or the protocol capabilities.</summary>
+    internal static bool NeedsProbe(PoolServer server) => !IsProbeFresh(server) || !IsCapabilityFresh(server);
+
+    internal static void RecordCapabilities(
+        PoolServer server,
+        IReadOnlyList<string>? profiles,
+        int? lanProtocolMin,
+        int? lanProtocolMax,
+        string? tailMinimumClientVersion)
+    {
+        server.SupportedProfiles = profiles;
+        server.LanProtocolMin = lanProtocolMin;
+        server.LanProtocolMax = lanProtocolMax;
+        server.TailMinimumClientVersion = tailMinimumClientVersion;
+        server.CapabilitiesAt = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>
+    /// Whether this server can host the profile the create dialog is about to ask for.
+    ///
+    /// The service freezes the room's protocol from the client's offer and its own hardcoded range
+    /// (lobby-service/src/store.ts:1315-1322, protocol-capabilities.ts:71-79: selected is
+    /// min(offerMax, serverMax) and must reach max(offerMin, serverMin)), and the client then validates the frozen
+    /// selection (LanConnectProtocolSelection.cs:54-100). A server whose advertised range cannot meet our offer
+    /// therefore ends as "LAN 协议版本不匹配" after a successful create, which is exactly the failure this check
+    /// exists to avoid. Unknown (never answered / stale) is treated as "cannot host", never as "probably fine".
+    /// </summary>
+    internal static bool SupportsProfile(PoolServer server, string canonicalProfile, int ourVersion)
+    {
+        if (!IsCapabilityFresh(server) || server.SupportedProfiles == null)
+        {
+            return false;
+        }
+
+        bool listed = server.SupportedProfiles.Any(profile =>
+            string.Equals(profile, canonicalProfile, StringComparison.OrdinalIgnoreCase));
+        if (!listed)
+        {
+            return false;
+        }
+
+        if (!string.Equals(canonicalProfile, TailProfileCanonical, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // tail v1 also has to survive the version handshake, and has to be a generation the server knows about.
+        if (string.IsNullOrWhiteSpace(server.TailMinimumClientVersion))
+        {
+            return false;
+        }
+
+        if (ourVersion <= 0)
+        {
+            return true;
+        }
+
+        if (server.LanProtocolMin is not { } serverMin || server.LanProtocolMax is not { } serverMax)
+        {
+            return false;
+        }
+
+        int selected = Math.Min(ourVersion, serverMax);
+        int commonMinimum = Math.Max(ourVersion, serverMin);
+        return selected >= commonMinimum;
+    }
 
     /// <summary>
     /// One server's live snapshot: latency, display name, room count and the create-room guard
@@ -637,6 +1098,95 @@ internal static class PoolServerCatalog
     /// its guard status becomes unknown.
     /// </summary>
     internal static async Task ProbeAsync(
+        PoolAnchors anchors,
+        PoolServer server,
+        int timeoutMs,
+        CancellationToken cancellationToken)
+    {
+        // Both requests are independent and each has its own ceiling, so they run at the same time: the create
+        // dialog should never wait for 4 s on a stale server just because two endpoints had to be asked in sequence.
+        Task metrics = ProbeMetricsAsync(anchors, server, timeoutMs, cancellationToken);
+        Task capabilities = ProbeCapabilitiesAsync(anchors, server, timeoutMs, cancellationToken);
+        await Task.WhenAll(metrics, capabilities).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// capabilities from GET /probe: which canonical protocol profiles the server can host, the LAN protocol range it
+    /// freezes rooms at, and whether it knows the tail v1 generation at all (LanConnectLobbyModels.cs:134-186,
+    /// lobby-service/src/app.ts:484-512). Cached for CapabilityTtlSeconds; a server that does not answer is recorded
+    /// as unusable rather than merely unknown.
+    /// </summary>
+    private static async Task ProbeCapabilitiesAsync(
+        PoolAnchors anchors,
+        PoolServer server,
+        int timeoutMs,
+        CancellationToken cancellationToken)
+    {
+        if (anchors.GetProbe == null || anchors.ProbeCapabilities == null)
+        {
+            return;
+        }
+
+        object? client = null;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(timeoutMs);
+            client = PoolRoomClient.CreateClient(anchors, server.BaseUrl);
+            object? invocation = anchors.GetProbe.Invoke(client, new object?[] { cts.Token });
+            if (invocation is not Task task)
+            {
+                RecordCapabilities(server, null, null, null, null);
+                return;
+            }
+
+            await task.ConfigureAwait(true);
+            object? response = task.GetType().GetProperty("Result")?.GetValue(task);
+            object? capabilities = response == null ? null : anchors.ProbeCapabilities.GetValue(response);
+            if (capabilities == null)
+            {
+                RecordCapabilities(server, null, null, null, null);
+                return;
+            }
+
+            var profiles = new List<string>();
+            if (anchors.CapabilitiesProfiles?.GetValue(capabilities) is IEnumerable declared)
+            {
+                foreach (object? profile in declared)
+                {
+                    if (profile is string text && !string.IsNullOrWhiteSpace(text))
+                    {
+                        profiles.Add(text.Trim());
+                    }
+                }
+            }
+
+            RecordCapabilities(
+                server,
+                profiles,
+                anchors.CapabilitiesLanMin?.GetValue(capabilities) as int?,
+                anchors.CapabilitiesLanMax?.GetValue(capabilities) as int?,
+                anchors.CapabilitiesTailMinimumClient?.GetValue(capabilities) as string);
+        }
+        catch (OperationCanceledException)
+        {
+            RecordCapabilities(server, null, null, null, null);
+        }
+        catch (Exception exception)
+        {
+            RecordCapabilities(server, null, null, null, null);
+            PoolRefreshFix.WarnOnce(
+                "probe-capabilities",
+                "the protocol capabilities of " + server.BaseUrl + " could not be read: " +
+                PoolRoomClient.Describe(exception));
+        }
+        finally
+        {
+            (client as IDisposable)?.Dispose();
+        }
+    }
+
+    private static async Task ProbeMetricsAsync(
         PoolAnchors anchors,
         PoolServer server,
         int timeoutMs,
@@ -671,26 +1221,31 @@ internal static class PoolServerCatalog
                 : null;
             if (metrics == null)
             {
-                RecordProbe(server, latency, null, "unknown", null);
+                // /peers/metrics is optional upstream and its timeout is a normal answer, not an exception
+                // (LanConnectPeerMetricsClient.cs:62-126 never throws). "No metrics" therefore means "cannot verify
+                // the create guard", which is recorded as unknown rather than left at the seed default "allow".
+                RecordMetricsProbe(server, latency, null, "unknown", null);
+                PoolRefreshFix.WarnOnce(
+                    "probe-metrics",
+                    "at least one server does not publish /peers/metrics (" + server.BaseUrl +
+                    "), so it cannot be verified for hosting");
                 return;
             }
 
-            RecordProbe(
+            RecordMetricsProbe(
                 server,
                 latency,
                 anchors.MetricsDisplayName?.GetValue(metrics) as string,
                 anchors.MetricsGuardStatus?.GetValue(metrics) as string,
                 anchors.MetricsRooms?.GetValue(metrics) as int?);
         }
-        catch (OperationCanceledException)
-        {
-            RecordProbe(server, null, null, "unknown", null);
-        }
         catch (Exception exception)
         {
-            RecordProbe(server, null, null, "unknown", null);
+            // No OperationCanceledException branch: the snapshot call is a no-throw contract, so a cancellation and a
+            // timeout both arrive as a null metrics payload above. Anything reaching here is a real defect.
+            RecordMetricsProbe(server, null, null, "unknown", null);
             PoolRefreshFix.WarnOnce(
-                "probe",
+                "probe-metrics-exception",
                 "probing " + server.BaseUrl + " failed: " + PoolRoomClient.Describe(exception));
         }
     }
