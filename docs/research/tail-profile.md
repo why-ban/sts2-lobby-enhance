@@ -207,11 +207,11 @@ sending native extension LobbyJoinResponse seq=2 ...
 | DLL | `NetHostGameService.DisconnectClient` | `get_ConnectedPeers` 返回 |
 |---|---|---|
 | `releases/sts2_lan_connect/sts2_lan_connect.dll`（**发布版 0.6.3**，mvid `6fc377b1`） | `(uint64, NetError, bool)` → **3 参** | `IReadOnlyList`<元素 TypeDef 0x755> |
-| `dist/lobby-port-v0.113/...`（0.113 移植版，mvid `76d9fe3d`） | `(uint64, NetError, bool, string)` → **4 参** | `IReadOnlyList`<元素 TypeDef 0x779> |
+| ~~`dist/lobby-port-v0.113/...`（0.113 移植版，mvid `76d9fe3d`）~~ **该产物已随上游 0.6.4 发布而删除** | `(uint64, NetError, bool, string)` → **4 参** | `IReadOnlyList`<元素 TypeDef 0x779> |
 | 游戏 0.113 `sts2.dll` | `DisconnectClient(ulong, NetError, bool now = false, string? debugReason = null)`（`NetHostGameService.cs:242`） | `IReadOnlyList<NetClientData>`（`:40`） |
 
 结论：**补丁要修的 0.6.3 二进制确实是 3 参 / 旧元素类型**，与 `CompatContract` 的注释
-（"compiled against 0.111"）一致；#3/#4 成立。而 0.113 移植版本身没有这两个断点。
+（"compiled against 0.111"）一致；#3/#4 成立。而 0.113 移植版本身没有这两个断点。（注：该移植版已因上游 0.6.4 原生适配 0.113 而整项删除，此处仅作历史结论保留。）
 
 ### 4.2 "强制 compat" 的 4 层门禁（逐层都过不去）
 
