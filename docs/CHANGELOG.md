@@ -55,8 +55,14 @@
   `MouseFilter = Stop`（`LanConnectRichMessageView.cs:55`）让 Godot 在标签这层吞掉指针事件，外层
   `ScrollContainer` 收不到拖动；同时 `emulate_mouse_from_touch` 默认 true，触摸被合成鼠标，
   `RichTextLabel` 按下即落选区锚点、移动即扩选。
-- 手机端：`SelectionEnabled = false` + `MouseFilter = Pass`（拖动回到滚动容器）；长按 **400 ms** 且位移 < **16 px** 复制整条；
-  滚动条 `CustomMinimumSize` 加宽到 44 px。
+- 手机端：`SelectionEnabled = false` + `MouseFilter = Pass`（拖动回到滚动容器，日志能滑）；
+  长按 **400 ms** 且位移 < **16 px** → 该条消息进入选中态（整条高亮），继续拖动用同一根手指收窄/扩大选区，
+  **松手复制选区文本**并保留高亮；点消息区别处或再按一下退出选中，之后第一次拖动立刻恢复滚动。
+- 选中态的实现要点：`RichTextLabel` 只认鼠标左键落锚点（`rich_text_label.cpp:2636-2674`），
+  而每个 `ScreenDrag` 会被引擎再派发成带左键掩码的 mouse motion（`input.cpp:895-913`），
+  所以进入选中时用 `Viewport.PushInput` 补一次 `DEVICE_ID_INTERNAL` 的合成按压（C# 侧收不到，引擎照常落锚点），
+  选中期间标签回到 `Stop`，容器拿不到 motion 就不会在划选时滚动（`viewport.cpp:2079-2085`、`:2163-2165`）。
+- 滚动条 `CustomMinimumSize` 加宽到 44 px。
 - 总闸是 `OS.HasFeature("mobile")`：**PC 上一行属性都不写、一个回调都不挂**，拖拽仍是框选。
   不用 `DisplayServer.IsTouchscreenAvailable()`——Windows 触屏本也是 true，会把 PC 的框选关掉。
 
