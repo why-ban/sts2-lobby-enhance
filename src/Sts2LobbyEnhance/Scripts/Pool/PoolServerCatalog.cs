@@ -124,6 +124,12 @@ internal sealed class PoolAnchors
     /// <summary>LanConnectLobbyOverlay._currentPageIndex (:236) - saved and clamped around a rebuild</summary>
     internal FieldInfo? CurrentPageIndex;
 
+    /// <summary>LanConnectLobbyOverlay._roomListContainer (:697) - holds the empty card during a cold start</summary>
+    internal FieldInfo? RoomListContainer;
+
+    /// <summary>LanConnectLobbyOverlay._roomListSummaryLabel (:3569) - the "房间 N → M" line above the list</summary>
+    internal FieldInfo? RoomListSummaryLabel;
+
     /// <summary>LobbyServiceException - the refresh failure branch is chosen by this type (:3441)</summary>
     internal Type LobbyServiceExceptionType = null!;
 
@@ -515,6 +521,8 @@ internal sealed class PoolAnchors
         RefreshIntervalSeconds = ConstantDouble(host, ConstantsTypeName, "LobbyRefreshIntervalSeconds", missing);
         RoomsPerPage = ConstantInt(host, ConstantsTypeName, "LobbyRoomsPerPage", missing);
         CurrentPageIndex = OptionalField(Overlay, "_currentPageIndex");
+        RoomListContainer = OptionalField(Overlay, "_roomListContainer");
+        RoomListSummaryLabel = OptionalField(Overlay, "_roomListSummaryLabel");
         LobbyServiceExceptionType = ReflectScope.HostType(host, "Sts2LanConnect.Scripts.LobbyServiceException", missing)!;
     }
 

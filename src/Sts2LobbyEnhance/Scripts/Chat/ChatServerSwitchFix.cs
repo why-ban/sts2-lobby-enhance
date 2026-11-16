@@ -64,8 +64,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// </summary>
     private const string ResetIconName = "refresh-cw";
 
-    private const double ResetSpinSeconds = 0.4d;
-
     /// <summary>Text stand-in for the reset glyph when the Lucide texture cannot be decoded.</summary>
     private const string ResetFallbackGlyph = "⟳";
 
@@ -196,6 +194,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// to call from a pool thread.
     /// </summary>
     private static readonly Queue<string> PendingInfo = new();
+
+    /// <summary>One line when the in-run overlay had to move off the unsupported 频道 tab.</summary>
+    private static int _inRunFallbackLogged;
 
     /// <summary>One line per rendering path, so a real-machine log says which one the button actually used.</summary>
     private static int _iconLoggedTexture;
@@ -345,6 +346,11 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return;
         }
 
+        if (flavor == PanelFlavor.Room)
+        {
+            EnsureInRunChannelUsable(shape);
+        }
+
         // The room overlay only shows a public channel on its 频道 tab; on the 房间 tab the channel is room-scoped
         // and has nothing to do with servers, so the row steps out of the way entirely.
         bool serverChannel = flavor == PanelFlavor.Lobby || IsServerChannel(shape, panel);
@@ -406,7 +412,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         }
 
         bool busy = state.Phase is SwitchPhase.Probing or SwitchPhase.Connecting;
-        string target = CurrentTargetLabel(state, localName, actual, flavor);
+        string target = CurrentTargetLabel(state, localName, actual, flavor, configUrl);
         widgets.Reset.Disabled = busy;
         widgets.Previous.Disabled = busy;
         widgets.Next.Disabled = busy;
@@ -463,10 +469,15 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     private static bool IsCurrentGeneration(int generation) =>
         generation == Volatile.Read(ref _stepGeneration);
 
+    /// <summary>
+    /// One normalisation for every address in this file: the walk's target, the live client's URI and the
+    /// directory's entries are compared through the catalogue's own <c>Normalize</c>, so a trailing slash or a
+    /// case difference can never make the same server look like two.
+    /// </summary>
     private static bool SameAddress(string? left, string? right) =>
         string.Equals(
-            (left ?? string.Empty).Trim().TrimEnd('/'),
-            (right ?? string.Empty).Trim().TrimEnd('/'),
+            ChatServerCatalog.Normalize(left),
+            ChatServerCatalog.Normalize(right),
             StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -656,7 +667,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         SwitchState state,
         string localName,
         string? actual,
-        PanelFlavor flavor)
+        PanelFlavor flavor,
+        string configUrl)
     {
         if (state.Phase == SwitchPhase.Unavailable)
         {
@@ -668,11 +680,56 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return localName;
         }
 
-        string name = SameAddress(actual, state.TargetAddress)
-            ? ChatServerCatalog.ShortName(state.TargetName, actual, NameChars(flavor))
-            : ChatServerCatalog.ShortName(null, actual, NameChars(flavor));
+        // 1. The directory owns names: that is where the operator's display names arrive from.
+        if (ChatServerCatalog.TryLookupDisplayName(actual, configUrl, out string fromDirectory) &&
+            !IsUnknownName(fromDirectory))
+        {
+            return NonEmpty(ChatServerCatalog.ShortName(fromDirectory, actual, NameChars(flavor)), actual, flavor);
+        }
 
-        return string.IsNullOrWhiteSpace(name) ? LocalServerLabel : name;
+        // 2. The name the walk carried, but only for the address it was picked for.
+        if (SameAddress(actual, state.TargetAddress) &&
+            !string.IsNullOrWhiteSpace(state.TargetName) &&
+            !IsUnknownName(state.TargetName))
+        {
+            return NonEmpty(ChatServerCatalog.ShortName(state.TargetName, actual, NameChars(flavor)), actual, flavor);
+        }
+
+        // 3. Nothing but the address is left. Say so once per address: a label stuck on an IP is a directory
+        //    problem, and this line is the only way to tell it apart from a name that simply is not set.
+        LogLabelFallback(actual);
+        return NonEmpty(ChatServerCatalog.ShortName(null, actual, NameChars(flavor)), actual, flavor);
+    }
+
+    private static bool IsUnknownName(string? name) =>
+        string.IsNullOrWhiteSpace(name) ||
+        string.Equals(name.Trim(), UnknownServerLabel, StringComparison.Ordinal);
+
+    private static string NonEmpty(string candidate, string address, PanelFlavor flavor)
+    {
+        if (!string.IsNullOrWhiteSpace(candidate) && !IsUnknownName(candidate))
+        {
+            return candidate;
+        }
+
+        string host = ChatServerCatalog.HostOf(address);
+        return host.Length > 0 ? ChatServerCatalog.ShortName(host, address, NameChars(flavor)) : LocalServerLabel;
+    }
+
+    private static readonly HashSet<string> LabelFallbackLogged = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void LogLabelFallback(string address)
+    {
+        string key = ChatServerCatalog.Normalize(address);
+        lock (LabelFallbackLogged)
+        {
+            if (LabelFallbackLogged.Count > 32 || !LabelFallbackLogged.Add(key))
+            {
+                return;
+            }
+        }
+
+        Entry.Info("chat-server-switch: label fallback: no display name for " + address);
     }
 
     private static (string Text, string Tooltip) Describe(
@@ -694,7 +751,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 break;
         }
 
-        string text = CurrentTargetLabel(state, localName, actual, flavor);
+        string text = CurrentTargetLabel(state, localName, actual, flavor, configUrl);
         string detail = string.IsNullOrWhiteSpace(actual) || SameAddress(actual, configUrl)
             ? $"当前：本服 {configUrl}。点 ‹ › 切换其它服务器的公共频道"
             : $"当前：{actual}。点 ‹ › 切换其它服务器的公共频道";
@@ -814,6 +871,48 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// (<c>LanConnectRoomChatOverlay.cs:686-693</c>, <c>:957-958</c>). The panel's bound state is the selected
     /// channel's, so that is what decides it.
     /// </summary>
+    /// <summary>
+    /// Safety net for the in-run overlay: with the public channel unsupported, the 频道 tab must not stay selected -
+    /// upstream hides that tab (<c>LanConnectRoomChatOverlay.cs:637-640</c>) and, when it is the selected one,
+    /// rebinds to 房间 (<c>:642-646</c>) only after its own early return for "no room". Doing it here as well means
+    /// the window always lands on a channel that has content, whatever order that check runs in.
+    /// </summary>
+    private static void EnsureInRunChannelUsable(Shape shape)
+    {
+        try
+        {
+            object? runtime = shape.RuntimeInstance.GetValue(null);
+            if (runtime == null)
+            {
+                return;
+            }
+
+            object? dual = shape.RuntimeChat.GetValue(runtime);
+            if (dual == null ||
+                shape.DualSelectedChannel.GetValue(dual)?.ToString() != ServerChannelName ||
+                shape.DualServer.GetValue(dual) is not { } server)
+            {
+                return;
+            }
+
+            if (shape.StatePresentation.GetValue(server)?.ToString() != "Unsupported")
+            {
+                return;
+            }
+
+            shape.DualSelect.Invoke(dual, new object?[] { Enum.Parse(shape.DualSelectedChannel.PropertyType, "Room") });
+            if (Interlocked.Exchange(ref _inRunFallbackLogged, 1) == 0)
+            {
+                Entry.Info("chat-server-switch: in-run chat: channel unsupported, fell back to the room tab.");
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("could not fall the in-run chat back to the room tab: " +
+                     exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
     private static bool IsServerChannel(Shape shape, Control panel)
     {
         object? state = shape.ChatState.GetValue(panel);
@@ -872,12 +971,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         Button reset = CreateResetButton(shape, panel, flavor);
         previous.Connect(Button.SignalName.Pressed, Callable.From(() => BeginStep(-1)));
         next.Connect(Button.SignalName.Pressed, Callable.From(() => BeginStep(1)));
-        reset.Connect(Button.SignalName.Pressed, Callable.From(() =>
-        {
-            // Feedback first and independently: the spin is decoration and must survive a failed switch.
-            SpinReset(reset);
-            BeginReset(shape, flavor);
-        }));
+        // No animation of any kind: a press only starts the switch. Visual feedback is the button's own
+        // hover/pressed stylebox.
+        reset.Connect(Button.SignalName.Pressed, Callable.From(() => BeginReset(shape, flavor)));
 
         // [reset][‹][›]: the reset sits left of the arrows, so the row reads [name … ⟳ ‹ ›].
         var built = new HBoxContainer { Name = SwitchRowNodeName };
@@ -922,8 +1018,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         // and a real render came out as a bare button with a 1 px speck. Style is otherwise untouched, so the
         // control still looks like its neighbours.
         TightenContentMargins(button);
-        // Rotate around the middle, not the top-left corner. The tween spins the button, so both renderings turn.
-        button.PivotOffset = new Vector2(size / 2f, size / 2f);
         button.TooltipText = flavor == PanelFlavor.Room
             ? "回到当前服务器的频道"
             : "回到置顶服务器的频道";
@@ -1061,25 +1155,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             style.ContentMarginTop = 0;
             style.ContentMarginRight = 0;
             style.ContentMarginBottom = 0;
-        }
-    }
-
-    /// <summary>One full turn as click feedback. Purely decorative: a failure must not touch the switch.</summary>
-    private static void SpinReset(Button button)
-    {
-        try
-        {
-            if (!GodotObject.IsInstanceValid(button))
-            {
-                return;
-            }
-
-            Tween tween = button.CreateTween();
-            tween.TweenProperty(button, "rotation", Mathf.Tau, ResetSpinSeconds).AsRelative();
-        }
-        catch (Exception)
-        {
-            // Nothing to report: the rotation is feedback, and a missing tween costs only the feedback.
         }
     }
 
@@ -1267,6 +1342,81 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         finally
         {
             Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private static string? ReadActiveRoomId(Shape shape, object runtime)
+    {
+        object? dual = shape.RuntimeChat.GetValue(runtime);
+        return dual == null ? null : shape.DualActiveRoomId.GetValue(dual) as string;
+    }
+
+    private static bool ReadRoomOverlayOpen(Shape shape, object runtime)
+    {
+        object? dual = shape.RuntimeChat.GetValue(runtime);
+        return dual != null && shape.DualRoomOverlayOpen.GetValue(dual) is bool open && open;
+    }
+
+    private static bool IsServerChannelUnsupported(Shape shape, object runtime)
+    {
+        object? dual = shape.RuntimeChat.GetValue(runtime);
+        if (dual == null || shape.DualServer.GetValue(dual) is not { } server)
+        {
+            return false;
+        }
+
+        return string.Equals(
+            shape.StatePresentation.GetValue(server)?.ToString(), "Unsupported", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Puts the in-run room channel back on the coordinator the port just installed.
+    ///
+    /// This is the whole fix for "the in-run overlay vanishes after a channel switch": a replacement coordinator
+    /// starts with a fresh dual state (<c>LanConnectChatRuntimePorts.cs:76</c>), so the room id is gone, and with it
+    /// the overlay's reason to exist. The room's message history is not recoverable (the state object is new), but
+    /// the window, its hotkey and its room binding are.
+    /// </summary>
+    private static void RestoreRoomChannel(
+        Shape shape,
+        object runtime,
+        object port,
+        object? coordinatorBefore,
+        string? roomId,
+        bool roomOverlayWasOpen,
+        bool serverSelectable)
+    {
+        if (string.IsNullOrEmpty(roomId))
+        {
+            // No room was active (lobby, or a player who already left): nothing to restore.
+            return;
+        }
+
+        try
+        {
+            object? coordinatorNow = shape.PortCurrent.GetValue(port);
+            if (coordinatorNow == null || ReferenceEquals(coordinatorNow, coordinatorBefore))
+            {
+                return;
+            }
+
+            shape.CoordinatorEnterRoom.Invoke(coordinatorNow, new object?[] { roomId });
+            if (roomOverlayWasOpen)
+            {
+                // The port swapped the state object, so the "was it open" flag must be re-applied to the new one.
+                object? dual = shape.RuntimeChat.GetValue(runtime);
+                if (dual != null)
+                {
+                    shape.DualShowPreserving.Invoke(dual, new object?[] { serverSelectable });
+                }
+            }
+
+            DeferInfo("in-run chat: room channel restored after the channel switch (roomId=" + roomId + ").");
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("could not restore the in-run room channel: " +
+                     exception.GetType().Name + ": " + exception.Message);
         }
     }
 
@@ -1485,6 +1635,14 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return "服务器地址无法解析：" + address;
         }
 
+        // The room channel lives on the coordinator, and the port replaces the coordinator before it connects
+        // (:811-837). Without capturing it here, the in-run overlay loses ActiveRoomId, hides its root
+        // (LanConnectRoomChatOverlay.cs:613-617) and its hotkey refuses to reopen (:743).
+        object? coordinatorBefore = shape.PortCurrent.GetValue(port);
+        string? roomId = ReadActiveRoomId(shape, runtime);
+        bool roomOverlayWasOpen = ReadRoomOverlayOpen(shape, runtime);
+        bool serverSelectable = !IsServerChannelUnsupported(shape, runtime);
+
         using var timeout = new CancellationTokenSource(ConnectTimeout);
         try
         {
@@ -1500,6 +1658,11 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         {
             Exception reported = exception is TargetInvocationException { InnerException: { } inner } ? inner : exception;
             return "连接失败：" + reported.GetType().Name + ": " + reported.Message;
+        }
+        finally
+        {
+            RestoreRoomChannel(
+                shape, runtime, port, coordinatorBefore, roomId, roomOverlayWasOpen, serverSelectable);
         }
     }
 
@@ -1735,6 +1898,23 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         /// <summary>Port → coordinator → client → base URI: what the channel is <em>actually</em> attached to.</summary>
         internal PropertyInfo PortCurrent = null!;
 
+        /// <summary>
+        /// The in-run room channel, lost on every coordinator replacement: the new coordinator builds a fresh
+        /// dual state (<c>LanConnectChatRuntimePorts.cs:76</c>), so <c>ActiveRoomId</c> is null and the overlay hides
+        /// itself (<c>LanConnectRoomChatOverlay.cs:613-617</c>) and refuses to reopen (<c>:743</c>).
+        /// </summary>
+        internal PropertyInfo DualActiveRoomId = null!;
+
+        internal PropertyInfo DualRoomOverlayOpen = null!;
+
+        internal PropertyInfo DualSelectedChannel = null!;
+
+        internal MethodInfo DualSelect = null!;
+
+        internal MethodInfo DualShowPreserving = null!;
+
+        internal MethodInfo CoordinatorEnterRoom = null!;
+
         internal FieldInfo CoordinatorClient = null!;
 
         internal FieldInfo ClientBaseUri = null!;
@@ -1827,6 +2007,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                     if (current != null)
                     {
                         shape.PortCurrent = current;
+                        shape.CoordinatorEnterRoom = ReflectScope.MethodOf(
+                            current.PropertyType, "EnterRoom", 1, problems)!;
                         FieldInfo? client = ReflectScope.Field(problems, current.PropertyType, CoordinatorClientFieldName);
                         if (client != null)
                         {
@@ -1852,6 +2034,16 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                         }
                     }
                 }
+            }
+
+            if (shape.RuntimeChat != null)
+            {
+                shape.DualActiveRoomId = ReflectScope.PropertyOf(shape.RuntimeChat.PropertyType, "ActiveRoomId", problems)!;
+                shape.DualRoomOverlayOpen = ReflectScope.PropertyOf(shape.RuntimeChat.PropertyType, "RoomOverlayOpen", problems)!;
+                shape.DualSelectedChannel = ReflectScope.PropertyOf(shape.RuntimeChat.PropertyType, "SelectedChannel", problems)!;
+                shape.DualSelect = ReflectScope.MethodOf(shape.RuntimeChat.PropertyType, "Select", 1, problems)!;
+                shape.DualShowPreserving = ReflectScope.MethodOf(
+                    shape.RuntimeChat.PropertyType, "ShowRoomOverlayPreservingSelection", 1, problems)!;
             }
 
             if (shape.RuntimeChat != null)

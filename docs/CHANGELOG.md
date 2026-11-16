@@ -46,6 +46,8 @@
   `MarkPermanentStop(Unsupported)`（`LanConnectServerChatClient.cs:181-189`）且重连循环对该异常直接 return
   （`:1048-1059`），一次误切 = 本次进程内公共频道彻底死掉。预检结果缓存 5 分钟。
 - 候选顺序：当前服 → 置顶服（`LanConnectServerListBootstrap.FeaturedServerAddress`）→ 其余按延迟升序，只保留支持频道的。
+- **复位按钮** `⟳`：大厅侧栏点它回到**置顶服务器**的频道（省得按十几次箭头），局内悬浮窗点它回到**当前大厅服务器**的频道。
+  两个面板目标不同是刻意的：大厅里你在浏览全池，回“家”指置顶服；局内你已经在一台服务器上对局，回“家”指你自己那台。
 
 #### 4. 手机端聊天操作（`touch-chat-scroll`，组 `Touch`）
 

@@ -49,6 +49,12 @@ internal sealed class PoolRefreshFix : ICompatFix
     /// </summary>
     private const int MaxRebuildsPerRound = 3;
 
+    /// <summary>
+    /// Hard ceiling for one pooled round. The per-server fetch already stops at 2 s; this bounds the whole round
+    /// (probe + announcements + fan-out) so the first paint can never wait longer than this.
+    /// </summary>
+    private const int RoundBudgetMs = 2500;
+
     private static int _roundRebuilds;
 
     private static PoolAnchors? _anchors;
@@ -193,6 +199,12 @@ internal sealed class PoolRefreshFix : ICompatFix
             SetStatus(overlay, "正在刷新大厅列表...");                                     // :3379
         }
 
+        if (RoomCount(anchors, overlay) == 0)
+        {
+            // Until the round settles the stage would keep claiming "大厅当前没有房间。".
+            ShowLoadingPlaceholder(anchors, overlay);
+        }
+
         anchors.UpdateActionButtons!.Invoke(overlay, null);                              // :3382
 
         PoolRefreshSession? session = null;
@@ -213,9 +225,24 @@ internal sealed class PoolRefreshFix : ICompatFix
             ActiveSession = session;
             session.Start();
 
-            double? measuredProbeRtt = await probeTask.ConfigureAwait(true);
-            object? announcements = await announcementTask.ConfigureAwait(true);
-            await session.Fetch.ConfigureAwait(true);
+            // One ceiling for the whole round: probe + announcements + fan-out. Whatever has arrived when it expires is
+            // committed below; a still-running fetch is cancelled by the session's own token in the finally.
+            Task round = Task.WhenAll(probeTask, announcementTask, session.Fetch);
+            // When the ceiling wins, nobody awaits the aggregate task: observe it so a fault cannot surface later as an
+            // anonymous unobserved-exception line.
+            _ = round.ContinueWith(
+                static finished => _ = finished.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+            Task budget = Task.Delay(RoundBudgetMs);
+            if (ReferenceEquals(await Task.WhenAny(round, budget).ConfigureAwait(true), budget))
+            {
+                NoteRoundBudgetSpent(session);
+            }
+
+            double? measuredProbeRtt = probeTask.IsCompletedSuccessfully ? probeTask.Result : null;
+            object? announcements = announcementTask.IsCompletedSuccessfully ? announcementTask.Result : null;
 
             anchors.LastLobbyRttMs.SetValue(overlay, measuredProbeRtt ?? -1d);            // :3396
             anchors.ConsecutiveRefreshFailures.SetValue(overlay, 0);                     // :3397
@@ -229,15 +256,20 @@ internal sealed class PoolRefreshFix : ICompatFix
                 anchors.EnsureAnnouncementFallback.Invoke(overlay, null);
             }
 
-            // What is on screen right now: the previous round's list, or the part the cold-start pump has already
-            // drawn. This is the baseline the round has to beat before it is worth touching the scene tree.
+            // What is on screen right now - the previous round's list. This is the baseline the round has to beat
+            // before it is worth touching the scene tree.
             IReadOnlyList<object> previousRooms = Snapshot(anchors, overlay);
             string? selectionBefore = CurrentSelection(anchors, overlay) ?? selectedRoomId;
 
-            // The round is committed exactly once, here. Nothing is written into _rooms while servers are still
-            // answering, which is what used to clamp the page (RebuildRoomStage -> ClampCurrentPage on a short list)
-            // and flash the stage up to a dozen times per round.
+            // The round is committed exactly once, here, after it settled or after its ceiling expired. Nothing is
+            // written into _rooms while servers are still answering: that is what used to clamp the page
+            // (RebuildRoomStage -> ClampCurrentPage on a short list), flash the stage a dozen times per round, and
+            // paint a room count that was true only for the servers that had replied so far.
             IReadOnlyList<object> rooms = session.CommitRound();
+            if (rooms.Count > 0)
+            {
+                session.AnnounceFirstRound();
+            }
 
             int pageBefore = ReadCurrentPage(anchors, overlay);
             WriteRooms(anchors, overlay, rooms);                                         // :3398-3399
@@ -268,7 +300,8 @@ internal sealed class PoolRefreshFix : ICompatFix
             {
                 Entry.Warn(
                     Tag + "the stage was rebuilt " + Volatile.Read(ref _roundRebuilds) + " times in one refresh; " +
-                    "expected 0 (steady state) or at most " + MaxRebuildsPerRound + " (cold start).");
+                    "expected 0 (steady state) or 1 (the first paint of a session); cold start may use up to " +
+                    MaxRebuildsPerRound + ".");
             }
 
             // The pool's failure mode is per server, so upstream's catch blocks cannot fire for it. "Every server
@@ -277,6 +310,13 @@ internal sealed class PoolRefreshFix : ICompatFix
             {
                 WarnOnce("all-silent", "no lobby server answered: " + session.Cycle.Describe());
                 MarkRefreshFailed(anchors, overlay);
+                if (RoomCount(anchors, overlay) == 0)
+                {
+                    // The loading line is only honest while a round is actually running: put the host mod's own empty
+                    // state back so the stage and the failure status agree.
+                    NoteRebuild();
+                    anchors.RebuildRoomStage.Invoke(overlay, null);
+                }
                 SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：所有大厅服务器均未响应\n" + FailureHint(anchors));
                 return false;
             }
@@ -328,8 +368,9 @@ internal sealed class PoolRefreshFix : ICompatFix
     }
 
     /// <summary>
-    /// Repaint pump. Godot only calls this on the main thread, which is why the incremental scene-tree write lives
-    /// here and not in the fan-out's continuations.
+    /// Main-thread pump. It no longer paints rooms: a round is committed and drawn exactly once, when it settles, so
+    /// the stage never shows a half-finished count. What is left is keeping the cold-start text honest while the first
+    /// round is still loading.
     /// </summary>
     public static void ProcessPostfix(object? __instance)
     {
@@ -341,7 +382,7 @@ internal sealed class PoolRefreshFix : ICompatFix
                 return;
             }
 
-            session.PaintColdStartIfNeeded();
+            session.KeepLoadingPlaceholder();
         }
         catch (Exception exception)
         {
@@ -648,6 +689,74 @@ internal sealed class PoolRefreshFix : ICompatFix
         return false;
     }
 
+    /// <summary>Upstream's own empty-pool texts (LanConnectLobbyOverlay.cs:3572, :3579). Matching them is what keeps this
+    /// rewrite to the one state it is meant for.</summary>
+    private const string EmptySummaryPrefix = "大厅当前没有房间";
+
+    private const string EmptyHintPrefix = "刷新大厅后，你也可以在右侧直接创建一个新的公开房间";
+
+    private const string LoadingTitle = "正在加载房间列表…";
+
+    private const string LoadingHint = "正在向所有大厅服务器并发拉取房间，首次打开通常需要 1–2 秒。";
+
+    private static int _budgetLogs;
+
+    /// <summary>
+    /// While the first round is loading the stage has no rooms, and the host mod renders that as "大厅当前没有房间。" -
+    /// a claim, not a loading state. This rewrites exactly that text (and only that text); the round's own paint
+    /// replaces the whole stage a moment later.
+    /// </summary>
+    internal static void ShowLoadingPlaceholder(PoolAnchors anchors, object overlay)
+    {
+        try
+        {
+            if (anchors.RoomListSummaryLabel?.GetValue(overlay) is Label summary
+                && summary.Text.StartsWith(EmptySummaryPrefix, StringComparison.Ordinal))
+            {
+                summary.Text = LoadingTitle;
+            }
+
+            if (anchors.RoomListContainer?.GetValue(overlay) is not Node container)
+            {
+                return;
+            }
+
+            foreach (Node node in container.FindChildren("*", "Label", recursive: true, owned: false))
+            {
+                if (node is not Label label)
+                {
+                    continue;
+                }
+
+                if (label.Text.StartsWith(EmptySummaryPrefix, StringComparison.Ordinal))
+                {
+                    label.Text = LoadingTitle;
+                }
+                else if (label.Text.StartsWith(EmptyHintPrefix, StringComparison.Ordinal))
+                {
+                    label.Text = LoadingHint;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("loading-text", "the loading placeholder could not be written: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    /// <summary>Remembers that a round hit its ceiling, so a recurring slow round cannot flood the log.</summary>
+    private static void NoteRoundBudgetSpent(PoolRefreshSession session)
+    {
+        if (Interlocked.Increment(ref _budgetLogs) > 3)
+        {
+            return;
+        }
+
+        Entry.Info(
+            "[server-pool] the round hit its " + RoundBudgetMs + " ms ceiling; the paint uses the servers that " +
+            "answered until then (" + session.Cycle.Describe() + ").");
+    }
+
     internal static void NoteRebuild() => Interlocked.Increment(ref _roundRebuilds);
 
     /// <summary>Clamps the page to the new list length and writes it back, leaving it alone while it is still valid.</summary>
@@ -769,8 +878,6 @@ internal sealed class PoolRefreshSession
     /// <summary>One line in the log for the first round of the session, and nothing after it.</summary>
     private static int _announced;
 
-    private int _dirty;
-
     private int _finished;
 
     internal PoolRefreshSession(PoolAnchors anchors, object overlay, CancellationToken cancellationToken)
@@ -804,89 +911,34 @@ internal sealed class PoolRefreshSession
         Fetch = RunAsync();
     }
 
+    /// <summary>True while the stage has no rooms at all, i.e. the first round of this session is still loading.</summary>
+    internal bool StageIsEmpty() =>
+        _anchors.Rooms.GetValue(Overlay) is not ICollection rooms || rooms.Count == 0;
+
     /// <summary>
-    /// One frame is 16 ms and a full round can deliver fourteen answers, so painting on every arrival would rebuild
-    /// the card grid up to fourteen times per eight second tick. The gate merges them: a dirty round is painted at most
-    /// once per PaintCoalesceMs, and the dirty flag is left set so the very next frame past the gate paints.
+    /// Nothing is drawn from a partial round any more: the first paint waits for the round to settle so the count on
+    /// screen is never a half-finished one. The pump's remaining job is to keep the loading text where the host mod
+    /// would otherwise print "大厅当前没有房间。" - it only touches labels that still say that.
     /// </summary>
-    private const int PaintCoalesceMs = 120;
-
-    /// <summary>Middleware cap: a cold start may draw at most this often, then waits for the round's own paint.</summary>
-    private const int MaxColdStartPaints = 2;
-
-    private int _coldStartPaints;
-
-    private int _lastPaintTicks = System.Environment.TickCount - PaintCoalesceMs;
-
-    internal void MarkDirty() => Volatile.Write(ref _dirty, 1);
-
-    /// <summary>True when there is something to paint and the coalescing window has elapsed.</summary>
-    internal bool TryBeginPaint()
+    internal void KeepLoadingPlaceholder()
     {
-        if (Volatile.Read(ref _dirty) == 0)
+        if (Volatile.Read(ref _finished) != 0 || !StageIsEmpty())
         {
-            return false;
+            return;
         }
 
-        int now = System.Environment.TickCount;
-        if (unchecked(now - _lastPaintTicks) < PaintCoalesceMs)
-        {
-            return false;
-        }
-
-        if (Interlocked.Exchange(ref _dirty, 0) == 0)
-        {
-            return false;
-        }
-
-        _lastPaintTicks = now;
-        return true;
+        PoolRefreshFix.ShowLoadingPlaceholder(_anchors, Overlay);
     }
 
-    /// <summary>
-    /// Cold start only: while the stage has no rooms at all, draw what has arrived so far instead of leaving the lobby
-    /// blank for the length of a slow round. Once the first list exists the pump stops touching the scene tree - the
-    /// round's epilogue compares and paints once - which is what removes the every-eight-seconds flash and the page
-    /// reset it caused.
-    /// </summary>
-    internal void PaintColdStartIfNeeded()
+    /// <summary>One line in the log for the first round of the session.</summary>
+    internal void AnnounceFirstRound()
     {
-        if (Volatile.Read(ref _finished) != 0)
-        {
-            return;
-        }
-
-        if (Volatile.Read(ref _coldStartPaints) >= MaxColdStartPaints)
-        {
-            // Nothing left to gain: drop the flag so the pump stops considering this round at all.
-            Interlocked.Exchange(ref _dirty, 0);
-            return;
-        }
-
-        if (!TryBeginPaint())
-        {
-            return;
-        }
-
-        if (RoomCountOnStage() != 0 || !PoolRoomStore.Instance.Commit(_cycle, _anchors))
-        {
-            return;
-        }
-
-        WriteRooms();
-        PoolRefreshFix.NoteRebuild();
-        _anchors.RebuildRoomStage.Invoke(Overlay, null);
-        Interlocked.Increment(ref _coldStartPaints);
-
         if (Interlocked.Exchange(ref _announced, 1) == 0)
         {
             Entry.Info("[server-pool] first pooled round: " + PoolRoomStore.Instance.LastSummary +
                        "; every room card now carries the server it came from.");
         }
     }
-
-    private int RoomCountOnStage() =>
-        _anchors.Rooms.GetValue(Overlay) is ICollection rooms ? rooms.Count : 0;
 
     /// <summary>Clears the pump's session and stops a superseded fan-out.</summary>
     internal void Finish()
@@ -947,7 +999,6 @@ internal sealed class PoolRefreshSession
                     if (server.LastRooms is { Count: > 0 } staleRooms)
                     {
                         _cycle.AcceptStale(_anchors, server, staleRooms);
-                        MarkDirty();
                     }
 
                     continue;
@@ -974,8 +1025,6 @@ internal sealed class PoolRefreshSession
                     // exception would surface as noise in the game log with no repair name on it.
                     _ = finished.Exception;
                 }
-
-                MarkDirty();
             }
         }
         catch (OperationCanceledException)

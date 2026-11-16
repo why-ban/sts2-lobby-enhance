@@ -163,6 +163,88 @@ namespace Sts2LobbyEnhance;
         }
 
         /// <summary>
+        /// The display name the directory has for one address, if it has one.
+        ///
+        /// This is the label's first source: the catalogue is where the operator names arrive from (cache, CF
+        /// aggregation, <c>/peers/metrics</c>), so asking it beats trusting the name a walk happened to carry.
+        /// When the address is not in the current snapshot the snapshot is rebuilt - once per
+        /// <see cref="RebuildThrottle"/>, never per frame - because a missing address usually means the snapshot
+        /// predates the server appearing in the CF list.
+        /// </summary>
+        /// <param name="address">Any form of the address; it is normalised before comparing.</param>
+        /// <param name="currentBaseUrl">Only needed to rebuild; pass the configured lobby url.</param>
+        /// <param name="displayName">The name, or empty when the directory has none (or does not know it yet).</param>
+        internal static bool TryLookupDisplayName(string address, string currentBaseUrl, out string displayName)
+        {
+            displayName = string.Empty;
+            string key = Normalize(address);
+            if (key.Length == 0 || _handles == null)
+            {
+                return false;
+            }
+
+            CatalogSnapshot? snapshot;
+            lock (Gate)
+            {
+                snapshot = _snapshot;
+            }
+
+            if (snapshot != null)
+            {
+                foreach (CatalogServer server in snapshot.Servers)
+                {
+                    if (!string.Equals(Normalize(server.Address), key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    displayName = (server.DisplayName ?? string.Empty).Trim();
+                    return displayName.Length > 0;
+                }
+            }
+
+            // Not in the directory we have: ask for a fresh one (throttled), and let the caller fall back for now.
+            RequestRebuild(currentBaseUrl);
+            return false;
+        }
+
+        /// <summary>At most one snapshot rebuild per this window, however often a label asks.</summary>
+        internal static readonly TimeSpan RebuildThrottle = TimeSpan.FromSeconds(30d);
+
+        private static DateTimeOffset _lastRebuildRequest = DateTimeOffset.MinValue;
+
+        /// <summary>
+        /// Drops the cached snapshot and rebuilds it in the background. Throttled so a per-frame label cannot turn
+        /// a missing name into a request storm.
+        /// </summary>
+        internal static void RequestRebuild(string currentBaseUrl)
+        {
+            lock (Gate)
+            {
+                if (DateTimeOffset.UtcNow - _lastRebuildRequest < RebuildThrottle)
+                {
+                    return;
+                }
+
+                _lastRebuildRequest = DateTimeOffset.UtcNow;
+                _snapshot = null;
+            }
+
+            List<(string Address, string Name)> seeds = ReadInitialCandidates();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await GetSnapshotAsync(currentBaseUrl, seeds).ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // The next walk retries; a label that stays on the host name is not worth an error line.
+                }
+            });
+        }
+
+        /// <summary>
         /// Upstream's pinned server (<c>LanConnectServerListBootstrap.FeaturedServerAddress</c>,
         /// <c>LanConnectServerListBootstrap.cs:43</c>), which the chat row's reset button returns to on the lobby
         /// side. Empty when the anchor was never captured.
