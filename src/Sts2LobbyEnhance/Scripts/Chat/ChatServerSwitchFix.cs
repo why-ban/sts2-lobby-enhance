@@ -94,6 +94,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     private const float ArrowSize = 24f;
 
+    // 24 dp is the desktop size the panel draws; a finger needs 44 dp, which is upstream's own touch minimum
+    private const float TouchArrowSize = 44f;
+
     private const float ArrowFontSize = 16f;
 
     private const int RowSeparation = 4;
@@ -1027,7 +1030,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 PanelTypeName + "." + CreateButtonMethodName + " returned no Button for the reset control.");
         }
 
-        float size = ArrowSize;
+        float size = TouchChatScrollFix.Platform.IsMobile ? TouchArrowSize : ArrowSize;
         button.Text = string.Empty;
         button.CustomMinimumSize = new Vector2(size, size);
         button.FocusMode = Control.FocusModeEnum.None;
@@ -1094,7 +1097,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             }
 
             Color color = shape.TextStrong.GetValue(panel) is Color strong ? strong : Colors.White;
-            int pixelSize = Math.Max(12, (int)(ArrowSize * 0.7f));
+            int pixelSize = Math.Max(12, (int)((TouchChatScrollFix.Platform.IsMobile ? TouchArrowSize : ArrowSize) * 0.7f));
             if (shape.IconsGet.Invoke(icons, new object?[] { ResetIconName, pixelSize, color }) is not Texture2D texture)
             {
                 detail = "the loader returned no texture";
@@ -1188,7 +1191,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         }
 
         button.Text = glyph;
-        button.CustomMinimumSize = new Vector2(ArrowSize, ArrowSize);
+        float size = TouchChatScrollFix.Platform.IsMobile ? TouchArrowSize : ArrowSize;
+        button.CustomMinimumSize = new Vector2(size, size);
         button.FocusMode = Control.FocusModeEnum.None;
         button.MouseFilter = Control.MouseFilterEnum.Stop;
         button.AddThemeFontSizeOverride("font_size", (int)ArrowFontSize);
