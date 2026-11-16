@@ -360,7 +360,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         // channel never reached. Reading the live client every frame makes any such race heal on the next frame.
         string localName = ResolveLocalName(configUrl);
         string? actual = ReadLiveTargetAddress(shape) ?? state.TargetAddress;
-        (string text, string tooltip) = Describe(state, localName, configUrl, actual);
+        bool busy = state.Phase is SwitchPhase.Probing or SwitchPhase.Connecting;
+        string target = CurrentTargetLabel(state, localName, actual, configUrl);
+        (string text, string tooltip) = Describe(state, target, configUrl, actual);
 
         // The title is written FIRST, before anything else in this method can fail: a real-machine report showed
         // the arrows present with an empty name, which is exactly what happens when a later step throws after the
@@ -368,7 +370,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         // separate label - which was what went missing on the narrow sidebar - is not involved at all.
         if (shape.TitleLabel.GetValue(panel) is Label title && GodotObject.IsInstanceValid(title))
         {
-            ApplyTitle(title, text, tooltip);
+            ApplyTitle(title, text, tooltip, widgets);
         }
 
         float width = panel.Size.X;
@@ -377,16 +379,29 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         Label? status = shape.StatusLabel.GetValue(panel) as Label;
         if (status != null && GodotObject.IsInstanceValid(status))
         {
-            status.Visible = !compact;
+            bool visible = !compact;
+            if (status.Visible != visible)
+            {
+                status.Visible = visible;
+            }
         }
 
-        bool busy = state.Phase is SwitchPhase.Probing or SwitchPhase.Connecting;
-        string target = CurrentTargetLabel(state, localName, actual, configUrl);
-        widgets.Reset.Disabled = busy;
-        widgets.Previous.Disabled = busy;
-        widgets.Next.Disabled = busy;
-        widgets.Previous.TooltipText = busy ? "正在切换，请稍候" : "切换到上一台服务器的公共频道 · 当前 " + target;
-        widgets.Next.TooltipText = busy ? "正在切换，请稍候" : "切换到下一台服务器的公共频道 · 当前 " + target;
+        // This runs every frame, and none of the setters below compares before it acts (Godot's tooltip setter
+        // refreshes the control's configuration warnings on every write), so only a changed row is written.
+        if (widgets.Busy != busy || !string.Equals(widgets.Target, target, StringComparison.Ordinal))
+        {
+            widgets.Busy = busy;
+            widgets.Target = target;
+            if (widgets.Reset.Disabled != busy)
+            {
+                widgets.Reset.Disabled = busy;
+                widgets.Previous.Disabled = busy;
+                widgets.Next.Disabled = busy;
+            }
+
+            widgets.Previous.TooltipText = busy ? "正在切换，请稍候" : "切换到上一台服务器的公共频道 · 当前 " + target;
+            widgets.Next.TooltipText = busy ? "正在切换，请稍候" : "切换到下一台服务器的公共频道 · 当前 " + target;
+        }
 
         ConsumePendingInfo();
     }
@@ -397,9 +412,13 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// while our own per-frame tick can also run without upstream having touched the title, so the previously
     /// applied suffix is stripped first.
     /// </summary>
-    private static void ApplyTitle(Label title, string name, string tooltip)
+    private static void ApplyTitle(Label title, string name, string tooltip, RowWidgets widgets)
     {
-        title.ClipText = true;
+        if (!title.ClipText)
+        {
+            title.ClipText = true;
+        }
+
         if (title.TextOverrunBehavior != TextServer.OverrunBehavior.TrimEllipsis)
         {
             title.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
@@ -423,8 +442,19 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             title.Text = next;
         }
 
-        title.SetMeta(TitleSuffixMetaKey, suffix);
-        title.TooltipText = tooltip;
+        if (!string.Equals(applied, suffix, StringComparison.Ordinal))
+        {
+            title.SetMeta(TitleSuffixMetaKey, suffix);
+        }
+
+        // Upstream only ever writes this label's Text, so the tooltip it shows is the one written here last.
+        if (!ReferenceEquals(widgets.TitleLabel, title) ||
+            !string.Equals(widgets.TitleTooltip, tooltip, StringComparison.Ordinal))
+        {
+            widgets.TitleLabel = title;
+            widgets.TitleTooltip = tooltip;
+            title.TooltipText = tooltip;
+        }
     }
 
     private static string ReadTitleSuffix(Label title) =>
@@ -630,7 +660,15 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return NonEmpty(ChatServerCatalog.ShortName(fromDirectory, actual, MaxNameChars), actual);
         }
 
-        // 2. The name the walk carried, but only for the address it was picked for.
+        // 2. On the configured lobby server, the name ResolveLocalName already asked the same gatherer for. The
+        //    directory above can miss this address while its snapshot is still being built, and falling through
+        //    would print the IP even though the name is known.
+        if (SameAddress(actual, configUrl))
+        {
+            return localName;
+        }
+
+        // 3. The name the walk carried, but only for the address it was picked for.
         if (SameAddress(actual, state.TargetAddress) &&
             !string.IsNullOrWhiteSpace(state.TargetName) &&
             !IsUnknownName(state.TargetName))
@@ -638,7 +676,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return NonEmpty(ChatServerCatalog.ShortName(state.TargetName, actual, MaxNameChars), actual);
         }
 
-        // 3. Nothing but the address is left. Say so once per address: a label stuck on an IP is a directory
+        // 4. Nothing but the address is left. Say so once per address: a label stuck on an IP is a directory
         //    problem, and this line is the only way to tell it apart from a name that simply is not set.
         LogLabelFallback(actual);
         return NonEmpty(ChatServerCatalog.ShortName(null, actual, MaxNameChars), actual);
@@ -677,7 +715,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     private static (string Text, string Tooltip) Describe(
         SwitchState state,
-        string localName,
+        string target,
         string configUrl,
         string? actual)
     {
@@ -693,7 +731,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 break;
         }
 
-        string text = CurrentTargetLabel(state, localName, actual, configUrl);
+        string text = target;
         string detail = string.IsNullOrWhiteSpace(actual) || SameAddress(actual, configUrl)
             ? $"当前：本服 {configUrl}。点 ‹ › 切换其它服务器的公共频道"
             : $"当前：{actual}。点 ‹ › 切换其它服务器的公共频道";
@@ -1093,11 +1131,15 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 return;
             }
 
+            // Upstream's candidate gatherer reads and rewrites the known-peers cache file, so it is called here, on
+            // the main thread, and the worker only does the network half.
+            List<(string Address, string Name)> seeds = ChatServerCatalog.ReadInitialCandidates();
+
             int generation = Interlocked.Increment(ref _stepGeneration);
             SwitchState previous = Volatile.Read(ref _state);
             SetState(new SwitchState(previous.TargetAddress, previous.TargetName, SwitchPhase.Probing, null));
             Task ignored = Task.Run(
-                () => ResetAsync(shape, runtime, target, netId, playerName, configUrl, generation));
+                () => ResetAsync(shape, runtime, target, netId, playerName, configUrl, seeds, generation));
         }
         catch (Exception exception)
         {
@@ -1118,6 +1160,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         string netId,
         string playerName,
         string configUrl,
+        List<(string Address, string Name)> seeds,
         int generation)
     {
         string address = target;
@@ -1128,7 +1171,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             ProbeOutcome probe = await ChatServerCatalog.ProbeAsync(address).ConfigureAwait(false);
             if (!probe.Reachable || !probe.Supported)
             {
-                List<(string Address, string Name)> seeds = ChatServerCatalog.ReadInitialCandidates();
                 CatalogSnapshot? snapshot = await ChatServerCatalog
                     .GetSnapshotAsync(configUrl, seeds)
                     .ConfigureAwait(false);
@@ -1593,6 +1635,15 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         internal Button Previous { get; } = previous;
 
         internal Button Next { get; } = next;
+
+        /// <summary>The row this instance last painted, so an unchanged frame writes nothing.</summary>
+        internal bool Busy;
+
+        internal string Target = string.Empty;
+
+        internal Label? TitleLabel;
+
+        internal string TitleTooltip = string.Empty;
     }
 
     /// <summary>

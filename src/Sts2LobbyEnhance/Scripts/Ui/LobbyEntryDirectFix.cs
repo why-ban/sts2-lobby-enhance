@@ -129,15 +129,23 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
         try
         {
             Shape? shape = _shape;
-            if (shape == null || onPicked == null)
+            if (shape == null)
             {
                 // Nothing to call instead of the dialog: let upstream show it.
+                WarnSkipped("this repair never captured its anchors");
+                return true;
+            }
+
+            if (onPicked == null)
+            {
+                WarnSkipped("Show was called without a pick callback, so there is nothing to invoke instead of the dialog");
                 return true;
             }
 
             object? overlay = FindOverlay(tree, shape);
             if (overlay == null)
             {
+                WarnSkipped("no '" + OverlayNodeName + "' node in the tree yet");
                 return true;
             }
 
@@ -211,6 +219,26 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
         }
 
         Entry.Warn("lobby-entry-direct: " + message);
+    }
+
+    /// <summary>Reasons already logged, keyed by text so a second distinct miss stays visible.</summary>
+    private static readonly HashSet<string> Skipped = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// One line per distinct reason the picker was not skipped. A silent fallback here is invisible otherwise: the
+    /// install log has already reported this seam as applied.
+    /// </summary>
+    private static void WarnSkipped(string reason)
+    {
+        lock (Skipped)
+        {
+            if (!Skipped.Add(reason))
+            {
+                return;
+            }
+        }
+
+        Entry.Warn("lobby-entry-direct: skipped, upstream's server picker is shown instead - " + reason + ".");
     }
 
     /// <summary>

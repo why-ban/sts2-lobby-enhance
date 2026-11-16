@@ -37,10 +37,6 @@ internal sealed class AnnouncementSourceFix : ICompatFix
 
     private const string ConfigBaseUrlPropertyName = "LobbyServerBaseUrl";
 
-    private const string ConfigReadTokenPropertyName = "LobbyReadAccessToken";
-
-    private const string ConfigCreateTokenPropertyName = "LobbyCreateRoomToken";
-
     /// <summary>Retired clients wait this long before disposal, so an in-flight request can finish first.</summary>
     private static readonly TimeSpan ClientGrace = TimeSpan.FromSeconds(60d);
 
@@ -198,14 +194,15 @@ internal sealed class AnnouncementSourceFix : ICompatFix
             RetireClientLocked();
             DisposeExpiredLocked();
 
-            // A non-null diagnostic sink is mandatory: with null, LobbyApiClient's constructor falls back to
-            // GD.Print and resolves its configuration banner through the engine, which a patch body must not
-            // trigger.
+            // No tokens: the configured client's credentials belong to the lobby server this player is on, and this
+            // client only ever talks to a server the channel was switched to. /announcements needs no auth anyway.
+            // A non-null diagnostic sink is mandatory: with null, LobbyApiClient's constructor falls back to GD.Print
+            // and resolves its configuration banner through the engine, which a patch body must not trigger.
             object? created = shape.ApiClientConstructor.Invoke(new object?[]
             {
                 address,
-                ReadStaticString(shape.ConfigReadToken),
-                ReadStaticString(shape.ConfigCreateToken),
+                null,
+                null,
                 null,
                 (Action<string>)(_ => { }),
                 true
@@ -265,23 +262,6 @@ internal sealed class AnnouncementSourceFix : ICompatFix
         }
     }
 
-    private static string? ReadStaticString(PropertyInfo? property)
-    {
-        if (property == null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return property.GetValue(null) as string;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-
     private static string ReadConfigBaseUrl(Shape shape)
     {
         try
@@ -324,10 +304,6 @@ internal sealed class AnnouncementSourceFix : ICompatFix
 
         internal PropertyInfo ConfigBaseUrl = null!;
 
-        internal PropertyInfo? ConfigReadToken;
-
-        internal PropertyInfo? ConfigCreateToken;
-
         internal static Shape? TryCapture(Assembly host, List<string> problems)
         {
             Type? client = ReflectScope.HostType(host, ApiClientTypeName, problems);
@@ -360,10 +336,6 @@ internal sealed class AnnouncementSourceFix : ICompatFix
                 shape.ApiClientConstructor = constructor;
             }
 
-            // Tokens are optional: /announcements is unauthenticated, so a miss only means "send none".
-            var scratch = new List<string>();
-            shape.ConfigReadToken = ReflectScope.StaticProperty(scratch, config, ConfigReadTokenPropertyName);
-            shape.ConfigCreateToken = ReflectScope.StaticProperty(scratch, config, ConfigCreateTokenPropertyName);
             return shape;
         }
 

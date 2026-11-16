@@ -19,9 +19,9 @@ namespace Sts2LobbyEnhance;
 /// (<c>SyncFilterDialogButtons</c> then <c>ApplyRoomFilterState</c>, :2743-2796), so paging, the scroll offset,
 /// the 「筛选」 button accent and the summary line all move the way they do for every other filter.
 ///
-/// The dialog is a fixed 360 px box (:3164-3170). A further label + chip row does not fit in it, so the postfix
-/// grows the box by <see cref="DialogGrowth"/> px on both sides; without that the new section spills out of the
-/// panel, which is exactly the kind of broken layout this project refuses to ship.
+/// The dialog sizes itself to its content: <c>CreateDialogShell</c> puts the card in a <c>CenterContainer</c>,
+/// which lays it out at its own combined minimum size, so the extra label and chip row grow the box on their own
+/// and no offset has to be touched.
 ///
 /// Everything here is opt-in and reversible: the state starts off (「默认不勾」), the chip is disabled when the
 /// game version cannot be read at all, and <c>ClearRoomFiltersAndSearch</c> clears it with every other filter.
@@ -48,13 +48,6 @@ internal sealed class RoomVersionFilterFix : ICompatFix
 
     /// <summary>The build-info fallback when no version source answers (LanConnectBuildInfo.cs:30).</summary>
     private const string UnknownGameVersion = "UNKNOWN";
-
-    /// <summary>
-    /// Half of the height the new section needs. <c>CreateDialogShell</c> pins the filter dialog to
-    /// <c>OffsetTop = -180 / OffsetBottom = 180</c> (:3166-3169), i.e. a 360 px box; the extra 16 px label,
-    /// 44 px chip row and two 14 px separations do not fit, so both offsets move outwards by this much.
-    /// </summary>
-    private const float DialogGrowth = 43f;
 
     /// <summary>
     /// The user's choice. Deliberately process-wide rather than per overlay instance: <c>RebuildForThemeChange</c>
@@ -231,7 +224,6 @@ internal sealed class RoomVersionFilterFix : ICompatFix
             body.AddChild(sectionLabel);
             body.AddChild(row);
 
-            WidenDialog(body);
             _chip = chip;
 
             Entry.Info(
@@ -349,6 +341,7 @@ internal sealed class RoomVersionFilterFix : ICompatFix
                 return;
             }
 
+            int before = rooms.Count;
             for (int index = rooms.Count - 1; index >= 0; index--)
             {
                 if (!IsSameVersion(shape, rooms[index], localVersion))
@@ -356,6 +349,8 @@ internal sealed class RoomVersionFilterFix : ICompatFix
                     rooms.RemoveAt(index);
                 }
             }
+
+            LogNarrowed(before, rooms.Count, localVersion);
         }
         catch (Exception exception)
         {
@@ -416,6 +411,25 @@ internal sealed class RoomVersionFilterFix : ICompatFix
         {
             WarnOnce("room-version-filter: could not clear the version filter: " + Describe(exception));
         }
+    }
+
+    private static string _narrowedLog = string.Empty;
+
+    /// <summary>
+    /// One line per distinct outcome, so a "I ticked it and the list is still full" report can be told apart from a
+    /// filter that never ran. The room list refreshes on a timer, and the same outcome on every tick is not news.
+    /// </summary>
+    private static void LogNarrowed(int before, int after, string localVersion)
+    {
+        string line = "room-version-filter: version filter " + before + " -> " + after + " rooms (local " +
+                      localVersion + ")";
+        if (string.Equals(_narrowedLog, line, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _narrowedLog = line;
+        Entry.Info(line);
     }
 
     private static bool IsSameVersion(Shape shape, object? room, string localVersion)
@@ -483,42 +497,6 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     // =====================================================================================================
     // Layout
     // =====================================================================================================
-
-    /// <summary>
-    /// Grows the dialog box by <see cref="DialogGrowth"/> on both sides.
-    ///
-    /// <c>CreateDialogShell</c> sizes the filter dialog by anchors, not by content: <c>OffsetTop = -180</c> and
-    /// <c>OffsetBottom = 180</c> (:3166-3169). The section added above is a 16 px label, a 44 px chip row and two
-    /// 14 px body separations (:3116), so the box has to grow or the content overflows the panel.
-    ///
-    /// The margin is found as the nearest <see cref="MarginContainer"/> ancestor of the body instead of by index,
-    /// so a wrapper added by a future theme does not silently disable this.
-    /// </summary>
-    private static void WidenDialog(Node body)
-    {
-        if (NearestMargin(body) is not { } margin)
-        {
-            WarnOnce("room-version-filter: the filter dialog has no MarginContainer ancestor; its height was left " +
-                     "at 360 px and the new section may sit outside the panel.");
-            return;
-        }
-
-        margin.OffsetTop -= DialogGrowth;
-        margin.OffsetBottom += DialogGrowth;
-    }
-
-    private static MarginContainer? NearestMargin(Node node)
-    {
-        for (Node? current = node.GetParent(); current != null; current = current.GetParent())
-        {
-            if (current is MarginContainer margin)
-            {
-                return margin;
-            }
-        }
-
-        return null;
-    }
 
     /// <summary>
     /// The dialog body: first <see cref="VBoxContainer"/> in child order. <c>CreateDialogShell</c> puts nothing
