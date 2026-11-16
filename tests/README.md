@@ -85,7 +85,7 @@ Two details make the result trustworthy:
 If a future game build breaks the patch:
 
 1. Re-run the scan and read `GenuineBreaks`.
-2. Add the new break to `DocumentedBreaks` in `BreakpointRegressionTests` **and** to the tables in
+2. Add the new break to `HistoricalBreaks` in `BreakpointRegressionTests` **and** to the tables in
    `../docs/README.md` and `../docs/CHANGELOG.md`.
 3. Re-derive the fix. The suite will fail until the documentation and the code agree again.
 

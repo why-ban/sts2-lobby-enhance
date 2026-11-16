@@ -228,8 +228,9 @@ try {
         Assert-True     '退出码 0（脚本自己停住，不会被 bat 二次 pause）' ($run.Code -eq 0)
         Assert-True     '生成了 上传结果.txt' (Test-Path (Join-Path $k '上传结果.txt'))
         Assert-Contains '结果文件判定为失败' $res '结果        : 失败'
-        # 失败原因必须是「人话」，不能落到兜底文案。具体是哪一种取决于跑验收这台机器的 Steam 状态
-        # （没登录 / 没许可 / 不是条目作者），所以这里钉的是「已经被翻译过」，不是某个特定句子。
+        # 输入是固定的（假上传器只报 k_EResultAccessDenied），所以要钉到具体那条规则上，
+        # 只钉"不是兜底文案"的话，规则表顺序被调换也照样绿。
+        Assert-Contains    '失败原因落在"没有许可"那条规则' $res '没有《杀戮尖塔 2》'
         Assert-NotContains '失败原因不是兜底文案' $res '没有匹配到已知的错误类型'
         Assert-Contains    '结果文件给出了怎么办' $res '建议        :'
         Assert-Contains '结果文件带上了标题' $res '游戏大厅增强 / Game Lobby Enhance'

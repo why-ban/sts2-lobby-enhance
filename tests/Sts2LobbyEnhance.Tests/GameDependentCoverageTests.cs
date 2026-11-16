@@ -107,7 +107,7 @@ public sealed class GameDependentCoverageTests
 
         if (TestPaths.OfficialModDll is null)
         {
-            missing.Add($"official sts2_lan_connect 0.6.3 DLL not found. {TestPaths.OfficialModHint}");
+            missing.Add($"official sts2_lan_connect DLL not found. {TestPaths.OfficialModHint}");
         }
 
         if (TestPaths.OfficialMod064Dll is null)

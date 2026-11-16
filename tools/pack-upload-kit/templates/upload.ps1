@@ -178,8 +178,8 @@ function Get-Diagnosis {
         }
         @{
             Key     = 'props'
-            Pattern = 'Failed to set (title|description|tags|preview image)'
-            Reason  = '条目的标题 / 简介 / 标签 / 预览图没有写进 Steam。'
+            Pattern = 'Failed to set (title|description|tags|preview image|visibility)'
+            Reason  = '条目的标题 / 简介 / 标签 / 预览图 / 可见性没有写进 Steam。'
             Advice  = @(
                 '多半是 Steam 网络抖动，重新双击 upload.bat 再试一次。'
                 '连续失败就把 上传结果.txt 发回给作者。'

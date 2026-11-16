@@ -18,7 +18,7 @@ string gameDir = args.Length > 0
     ? args[0]
     : @"D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64";
 
-// 宿主模组默认取 **0.6.4**（manifest 的 min_version）：补丁的 5 项锚点是对着它校验的。
+// 宿主模组默认取 **0.6.4**（manifest 的 min_version）：补丁的 15 项锚点是对着它校验的。
 // 覆盖顺序与 tests 一致：命令行 > STS2_LAN_CONNECT_064_DLL > 在工作树里发现 upstream-064 的出货 DLL。
 const string DefaultHostMod064 =
     @"D:\zhuanban\sts2m\work\lobby\upstream-064\src\emptylower-STS2-Game-Lobby-1db4e10\releases\sts2_lan_connect\sts2_lan_connect.dll";
@@ -340,11 +340,10 @@ foreach ((string fixId, string declaringType, string methodName) in requiredSeam
 {
     bool found = patched.Any(method =>
         string.Equals(method.DeclaringType?.Name, declaringType, StringComparison.Ordinal)
-        && (methodName == "*" || string.Equals(method.Name, methodName, StringComparison.Ordinal)));
+        && string.Equals(method.Name, methodName, StringComparison.Ordinal));
 
     seamsOk &= found;
-    string shown = methodName == "*" ? "(any method)" : methodName;
-    Console.WriteLine($"  {fixId,-20} {declaringType}::{shown,-32} {(found ? "PATCHED" : "MISSING")}");
+    Console.WriteLine($"  {fixId,-20} {declaringType}::{methodName,-32} {(found ? "PATCHED" : "MISSING")}");
 }
 
 if (!seamsOk)
@@ -360,9 +359,10 @@ return 0;
 // ---------------------------------------------------------------- helpers
 
 /// <summary>
-/// The 0.6.4 release bundle, discovered the same way <c>tools/contract-check</c> resolves it:
-/// walk up to the work root, then look for <c>lobby/upstream-064/src/&lt;checkout&gt;/releases/...</c>.
-/// The checkout directory name is discovered rather than hard-coded; the bytes are what the run reports.
+/// The 0.6.4 release bundle: walk up to the work root, then look for
+/// <c>lobby/upstream-064/src/&lt;checkout&gt;/releases/...</c>. The checkout name is discovered rather than hard-coded;
+/// the bytes are what the run reports. <c>tools/contract-check</c> takes explicit paths instead, so it shares no
+/// resolution code with this helper.
 /// </summary>
 static string? FindHostMod064()
 {

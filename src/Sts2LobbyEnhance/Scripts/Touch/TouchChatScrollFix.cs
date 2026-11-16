@@ -190,8 +190,8 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
     /// <summary>
     /// Called by upstream while it styles the message scroll bar, inside <c>if (UsesLobbyStyle)</c>: the in-run HUD
-    /// style does not come through here, and that is intended. The HUD panel draws its own thin bar, and there the drag
-    /// fix above is what makes the log scrollable
+    /// style does not come through here, and that is intended. Its bar is hooked from the row path instead, so a press
+    /// on either bar ends a selection
     /// </summary>
     // ReSharper disable once InconsistentNaming
     private static void ScrollBarStylePostfix(ScrollBar scrollBar)
@@ -224,8 +224,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
-    /// Connects one press observer to the nearest enclosing <c>ScrollContainer</c>, once per container. The handler only
-    /// ends a live selection and does not accept the event, so scrolling is untouched
+    /// Hooks the nearest enclosing <c>ScrollContainer</c> and its vertical bar: the container sees presses on the log, the
+    /// bar sees its own (it is STOP, so they never reach the container), and each is guarded by its own meta so the two
+    /// attach paths cannot connect twice. The handler only ends a live selection and does not accept the event
     /// </summary>
     private static void AttachSelectionExitHook(Node from)
     {
