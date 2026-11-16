@@ -1337,7 +1337,7 @@ internal static class PoolServerCatalog
             // timeout both arrive as a null metrics payload above. Anything reaching here is a real defect.
             RecordMetricsProbe(server, null, null, "unknown", null);
             PoolRefreshFix.WarnOnce(
-                "probe-metrics-exception",
+                "probe-metrics-exception:" + server.BaseUrl,
                 "probing " + server.BaseUrl + " failed: " + PoolRoomClient.Describe(exception));
         }
     }
