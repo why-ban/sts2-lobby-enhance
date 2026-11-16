@@ -67,12 +67,18 @@
   所以给 `ApplyAnnouncements`（`:3503`）挂 prefix 改 `__0`——聊天目标与大厅当前服不同时，换成该服缓存的公告列表；
   相同或尚未缓存时原样放行。每台服务器的公告独立拉取、缓存 60 s。
 
-#### 6. 局内折叠提示不再遮挡（`room-chat-hint-passthrough`，组 `Chat`）
+#### 6. 局内折叠提示不再挡鼠标（`room-chat-hint-passthrough`，组 `Chat`）
 
-- 收起聊天时那行「按下 Enter 打开聊天窗口」的提示，原本被包在 `MouseFilter = Stop` 的 `VBoxContainer` 里（`LanConnectRoomChatOverlay.cs:484-485`），
-  整块矩形拦截鼠标，把游戏右上角的设置按钮压掉一半。
-- 现在折叠时把外层三个容器置 `Ignore`、提示挪到气泡下方，展开时恢复原值。Godot 的拾取是先子后父（`viewport.cpp:1848-1864`），
-  所以气泡按钮照样可点。
+- 症状：局内收起聊天后，右上角那行「按下 Enter 打开聊天窗口」压住游戏自己的按钮，点不动。
+- 提示文字本身不是元凶——上游给它 `MouseFilter = Ignore`（`LanConnectRoomChatOverlay.cs:498`）。吃掉点击的是它所在的容器链：
+  列容器 `stack` 被显式设成 `Stop`（`:484-485`），而行 `topRow`（`:489`）与根 `MarginContainer`（`:476`）是 `Pass`
+  （Godot 所有 `Container` 默认 `PASS`，`container.cpp:231-234`）。`Pass` 不等于放行：拾取只取该点最上层、filter 不是 `Ignore` 的那个控件
+  （`viewport.cpp:1835-1877`），随后交付沿它的父链向上走，遇到第一个 `Stop` 就吃掉并 `set_input_as_handled()`
+  （`:1731-1774`，break 在 `:1755-1759`）。点击死在浮层里，后面的游戏按钮连事件都收不到。
+- 折叠时这三个容器一起置 `Ignore`（只撤 `Stop` 没用，拾取会移到行上），展开时按第一帧抓到的原值（实测 `Pass / Stop / Pass`）逐个还原。
+  拾取先递归子节点再判断自身（`:1849-1859` 与 `:1862`），所以气泡按钮在 `Ignore` 父节点下照样能点。
+- 只做电脑端：手机端保持上游原样（`OS.HasFeature("mobile")` 在补丁体第一行判断）。
+- 不动布局：提示文字的位置、宽度、字号一律不改，只改鼠标过滤。
 
 ### 保留（5 项不变）
 
@@ -81,7 +87,7 @@
 ### 说明
 
 - 每个新修复都有自己的 `Shape.TryCapture` 锚点探针；任一锚点缺失就 clean skip 并把缺的成员写进日志，绝不半装。
-- `Applies()` / `Apply()` 里**零 Godot 调用**（平台判断、节点操作全在补丁体内），所以 `tools/smoke-test` 能在无 Godot 的进程里验证全部 12 项。
+- `Applies()` / `Apply()` 里**零 Godot 调用**（平台判断、节点操作全在补丁体内），所以 `tools/smoke-test` 能在无 Godot 的进程里验证全部 14 项。
 - 已知限制：跨服加入会切服（退房 + 重启频道 + 写默认服务器），这是上游 `SwitchLobbyServerAsync` 的语义，我们没有绕开它；
   池刷新沿用上游 8 s 节拍（只在大厅页面可见时跑）。
 

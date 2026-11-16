@@ -5,30 +5,32 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Keeps the collapsed in-run chat hint from eating clicks meant for the game's own top-right buttons, and
-    /// keeps it from sitting on top of them.
-    ///
-    /// Two separate problems, two separate fixes:
-    ///
-    /// 1. **Clicks.** The hint itself is `MouseFilter = Ignore` (<c>LanConnectRoomChatOverlay.cs:498</c>), but its
-    ///    parents are not: `topRow` (<c>:489</c>) and `stack` (<c>:484-485</c>, explicitly `Stop`) cover the
-    ///    same rectangle and swallow the click. When the panel is collapsed those two - and the
-    ///    `MarginContainer` root - are switched to `Ignore`, so the click reaches whatever is behind them.
-    ///    The toggle bubble keeps working: Godot hit-tests children before the node itself, so a parent set to
-    ///    `Ignore` does not hide its children. Evidence is the engine's own picking routine,
-    ///    `Viewport::_gui_find_control_at_pos` (<c>work/lead/_tmp_godot/viewport.cpp:1835-1874</c>): it recurses into
-    ///    every visible child first (<c>:1848-1860</c>) and only then decides about the node itself, where
-    ///    `MOUSE_FILTER_IGNORE` makes it return <c>nullptr</c> for *that node only* (<c>:1862-1864</c>).
-    ///
-    /// 2. **Overlap.** The hint is a sibling of the bubble inside a right-aligned row, so it covers the strip to
-    ///    the left of the bubble - which is where the game's top bar sits. The hint is moved out of that row into
-    ///    the column below it, right-aligned, so the collapsed overlay occupies the same columns as the bubble
-    ///    and the row above it stays free.
-    ///
-    /// Collapsed/expanded is read from <c>_panelFrame.Visible</c> - the flag upstream itself writes from
-    /// <c>chat.RoomOverlayOpen</c> (<c>:650</c>) - never guessed.
-    /// </summary>
+/// <summary>
+/// Desktop only: while the in-run chat is collapsed, its hint strip stops swallowing the mouse clicks that were
+/// meant for the game's own top-right buttons.
+///
+/// The hint label is not the culprit - upstream already ships it as <c>MouseFilter = Ignore</c>
+/// (<c>LanConnectRoomChatOverlay.cs:498</c>). What takes the click is the chain of containers it lives in: the
+/// column holding its row is explicitly <c>Stop</c> (<c>stack</c>, :484-485), and the row (<c>topRow</c>, :489) plus
+/// the root <c>MarginContainer</c> (:476) are <c>Pass</c>, because Godot gives every <c>Container</c>
+/// <c>MOUSE_FILTER_PASS</c> by default (<c>work/lead/_tmp_godot/container.cpp:231-234</c>). <c>Pass</c> is not a
+/// hole: <c>Viewport::_gui_find_control_at_pos</c> returns the topmost control at that point whose filter is not
+/// <c>Ignore</c> (<c>viewport.cpp:1835-1877</c>), and <c>Viewport::_gui_call_input</c> then walks *up* from there,
+/// stopping at the first <c>Stop</c> ancestor (<c>:1731-1774</c>, the break is <c>:1755-1759</c>). The click dies
+/// inside the overlay; the button behind it is never offered the event.
+///
+/// So all three go to <c>Ignore</c> while collapsed - dropping only the <c>Stop</c> would merely move the pick up to
+/// the row - and back to exactly the values upstream chose when the panel is open. Picking recurses into children
+/// before deciding about a node itself (<c>:1849-1859</c> vs <c>:1862</c>), so the toggle bubble keeps its drags
+/// under <c>Ignore</c> parents.
+///
+/// Collapsed/expanded is read from <c>_panelFrame.Visible</c>, the flag upstream writes from
+/// <c>chat.RoomOverlayOpen</c> (:650) - never guessed. The overlay itself is a <c>CanvasLayer</c> (:39), so the
+/// clickable chain starts at <c>_root</c>, its first <c>Control</c>.
+///
+/// Mobile is left exactly as upstream ships it: the obstruction was reported on desktop, where the bubble is hidden
+/// in mouse mode (:1111) and that strip has no other purpose.
+/// </summary>
 internal sealed class RoomChatHintPassthroughFix : ICompatFix
 {
     private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectRoomChatOverlay";
@@ -39,7 +41,10 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
 
     private static int _warned;
 
-    private static readonly ConditionalWeakTable<Control, RowState> States = new();
+    /// <summary>-1 unknown, 0 desktop, 1 mobile.</summary>
+    private static int _mobile = -1;
+
+    private static readonly ConditionalWeakTable<object, FilterState> States = new();
 
     public string Id => "room-chat-hint-passthrough";
 
@@ -84,30 +89,27 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         Shape shape = _shape ?? throw new InvalidOperationException(
             "room-chat-hint-passthrough: Applies() did not capture the overlay shape; refusing to patch blind.");
 
-        // RefreshFromSource runs every frame (its own comment says so, :608-611), so it is the natural place to
-        // keep a two-state property in sync without polling anything ourselves.
+        // _Process -> RefreshFromSource every frame (:252-256). Upstream's own body runs first and sets
+        // _panelFrame.Visible (:650), so a postfix always sees this frame's collapsed state, not last frame's.
         harmony.Patch(
             shape.Refresh,
-            postfix: new HarmonyMethod(typeof(RoomChatHintPassthroughFix), nameof(RefreshPostfix))
-            {
-                priority = Priority.Last
-            });
+            postfix: new HarmonyMethod(typeof(RoomChatHintPassthroughFix), nameof(RefreshPostfix)));
 
         Entry.Info(
-            "room-chat-hint-passthrough: while the in-run chat is collapsed, the hint row and its containers " +
-            "no longer take mouse clicks and the hint sits below the bubble instead of over the top bar.");
+            "room-chat-hint-passthrough: while the in-run chat is collapsed its hint strip is click-through " +
+            "(root/column/row = Ignore); opening the panel restores upstream's own filters. Mobile untouched.");
     }
 
     // ReSharper disable once UnusedParameter.Local — Harmony binds by name.
-    private static void RefreshPostfix(object __instance)
+    private static void RefreshPostfix(object? __instance)
     {
         Shape? shape = _shape;
-        if (shape == null || __instance is not Control overlay)
+        if (shape == null || __instance is not Node overlay)
         {
             return;
         }
 
-        if (!GodotObject.IsInstanceValid(overlay) || !overlay.IsInsideTree())
+        if (MobilePlatform() || !GodotObject.IsInstanceValid(overlay) || !overlay.IsInsideTree())
         {
             return;
         }
@@ -118,15 +120,15 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         }
         catch (Exception exception)
         {
-            // Cosmetic: the hint keeping its original behaviour is never worse than a broken overlay.
-            WarnOnce("could not adjust the collapsed chat hint: " +
+            // Cosmetic: leaving the hint as upstream ships it is never worse than a broken overlay.
+            WarnOnce("could not free the collapsed chat hint: " +
                      exception.GetType().Name + ": " + exception.Message);
         }
     }
 
-    private static void Sync(Shape shape, Control overlay)
+    private static void Sync(Shape shape, Node overlay)
     {
-        if (shape.Hint.GetValue(overlay) is not Label hint || !GodotObject.IsInstanceValid(hint))
+        if (shape.Root.GetValue(overlay) is not Control root || !GodotObject.IsInstanceValid(root))
         {
             return;
         }
@@ -136,67 +138,68 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
             return;
         }
 
-        RowState? state = States.GetValue(overlay, _ => new RowState());
-
-        // Answer the "is it collapsed" question with the flag upstream itself maintains (:650 writes
-        // _panelFrame.Visible from chat.RoomOverlayOpen), not with a guess.
-        bool collapsed = !frame.Visible;
-
-        EnsureBelowBubble(hint, state);
-
-        if (collapsed && !state.FirstCollapseLogged)
-        {
-            state.FirstCollapseLogged = true;
-            Entry.Info(
-                "room-chat-hint-passthrough: collapsed hint is click-through (root/stack/row = Ignore) and " +
-                "parked below the bubble; the expanded state restores upstream's own filters.");
-        }
-
-        state.Collapsed = collapsed;
-
-        // The three containers between the click and the game: the overlay root, the column and the bubble's row.
-        if (hint.GetParent() is not Control column || column.GetParent() is not Control stack)
+        if (shape.Hint.GetValue(overlay) is not Control hint || !GodotObject.IsInstanceValid(hint))
         {
             return;
         }
 
+        // hint -> topRow -> stack -> _root. If upstream ever reshapes this chain, the guard below leaves its
+        // behaviour completely alone instead of half-patching it.
+        if (hint.GetParent() is not Control row || row.GetParent() is not Control column ||
+            !ReferenceEquals(column.GetParent(), root))
+        {
+            return;
+        }
+
+        FilterState state = States.GetValue(overlay, _ => new FilterState());
         if (!state.Captured)
         {
-            // Remember what upstream chose for the expanded state, so restoring it is exact rather than "Stop".
-            state.RootFilter = overlay.MouseFilter;
-            state.ColumnFilter = column.MouseFilter;
-            state.RowFilter = stack.MouseFilter;
+            // Upstream never writes these three, so the first frame we see is the value it chose.
+            state.Root = root.MouseFilter;
+            state.Column = column.MouseFilter;
+            state.Row = row.MouseFilter;
             state.Captured = true;
         }
 
-        overlay.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.RootFilter;
-        column.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.ColumnFilter;
-        stack.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.RowFilter;
+        bool collapsed = !frame.Visible;
+        root.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Root;
+        column.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Column;
+        row.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Row;
+
+        if (collapsed && !state.Logged)
+        {
+            state.Logged = true;
+            Entry.Info(
+                "room-chat-hint-passthrough: collapsed - the hint strip no longer blocks clicks " +
+                "(root/column/row = Ignore, restored to " + state.Root + "/" + state.Column + "/" + state.Row +
+                " when the panel is open).");
+        }
     }
 
     /// <summary>
-    /// Moves the hint out of the bubble's row and into the column below it, once per overlay, right-aligned. After
-    /// this the collapsed overlay occupies exactly the bubble's columns, so the hint cannot sit on the top bar.
+    /// The only platform read here, cached because it crosses into the engine. Unknown resolves to mobile: then the
+    /// fix simply never runs and upstream behaviour stands unchanged.
     /// </summary>
-    private static void EnsureBelowBubble(Label hint, RowState state)
+    private static bool MobilePlatform()
     {
-        if (state.Moved || hint.GetParent() is not HBoxContainer row)
+        int cached = Volatile.Read(ref _mobile);
+        if (cached >= 0)
         {
-            return;
+            return cached == 1;
         }
 
-        if (row.GetParent() is not VBoxContainer stack)
+        int resolved;
+        try
         {
-            return;
+            resolved = OS.HasFeature("mobile") ? 1 : 0;
+        }
+        catch
+        {
+            resolved = 1;
         }
 
-        row.RemoveChild(hint);
-        stack.AddChild(hint);
-        stack.MoveChild(hint, row.GetIndex() + 1);
-
-        hint.SizeFlagsHorizontal = Control.SizeFlags.ShrinkEnd;
-        hint.HorizontalAlignment = HorizontalAlignment.Right;
-        state.Moved = true;
+        Volatile.Write(ref _mobile, resolved);
+        return resolved == 1;
     }
 
     private static void WarnOnce(string message)
@@ -209,23 +212,19 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         Entry.Warn("room-chat-hint-passthrough: " + message);
     }
 
-    /// <summary>Per-overlay bookkeeping: the structural move happens once, the log line once.</summary>
-    private sealed class RowState
+    /// <summary>Per-overlay bookkeeping: the captured filters and the one log line.</summary>
+    private sealed class FilterState
     {
-        internal bool Moved;
-
-        internal bool Collapsed;
-
-        internal bool FirstCollapseLogged;
-
         internal bool Captured;
 
+        internal bool Logged;
+
         /// <summary>Upstream's filters for the expanded state, restored verbatim.</summary>
-        internal Control.MouseFilterEnum RootFilter;
+        internal Control.MouseFilterEnum Root;
 
-        internal Control.MouseFilterEnum ColumnFilter;
+        internal Control.MouseFilterEnum Column;
 
-        internal Control.MouseFilterEnum RowFilter;
+        internal Control.MouseFilterEnum Row;
     }
 
     /// <summary>
@@ -234,6 +233,8 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
     internal sealed class Shape
     {
         internal MethodInfo Refresh = null!;
+
+        internal FieldInfo Root = null!;
 
         internal FieldInfo Hint = null!;
 
@@ -256,6 +257,7 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
                     Array.Empty<string>(),
                     "System.Void",
                     problems)!,
+                Root = RequireField(problems, overlay, "_root", "MarginContainer")!,
                 Hint = RequireField(problems, overlay, "_fadeHint", "Label")!,
                 PanelFrame = RequireField(problems, overlay, "_panelFrame", "PanelContainer")!
             };
