@@ -600,14 +600,15 @@ internal sealed class CreateServerPickerSection
         }
     }
 
-    // The chosen row's display name, never its address while the pool knows one. 自动（延迟最低） names the server it
-    // resolved to and keeps its own wording only while the pool cannot say which one that is
+    // The chosen row's display name, never its address while the pool knows one. 自动 keeps the word in front of the
+    // name it resolved to, so the header still says whether the room will follow the latency pick, and falls back to
+    // its own wording only while the pool cannot say which server that is
     private string SelectionLabel(CreateServerPickerState state)
     {
         if (state.BaseUrl == null)
         {
-            PoolServer? chosen = AutoTarget();
-            return chosen?.ShortName(NameMaxLength) ?? AutoLabel;
+            string? name = AutoTarget()?.ShortName(NameMaxLength);
+            return string.IsNullOrEmpty(name) ? AutoLabel : "自动 · " + name;
         }
 
         return ServerFor(state.BaseUrl)?.ShortName(NameMaxLength) ?? PoolAddress.ShortName(null, state.BaseUrl, NameMaxLength);
