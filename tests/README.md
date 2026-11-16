@@ -6,7 +6,7 @@ dotnet test tests
 ```
 
 Requires the .NET 9 SDK. The suite never starts the game and never touches Steam; it reads the shipped
-binaries as data. **59 cases in 8 classes.**
+binaries as data. **59 cases in 9 classes.**
 
 ## What it checks
 
@@ -16,21 +16,24 @@ binaries as data. **59 cases in 8 classes.**
 | `GameApiShapeTests` | 9 | What 0.113 actually changed, read from `sts2.dll` metadata: the six old shapes are gone and the new ones are present. Game-side facts only — no remaining fix binds to them. | game |
 | `BuiltPatchTests` | 2 | The patch DLL itself resolves completely against 0.113 and declares `[ModInitializer("Init")]`. | built patch (+ game for the scan) |
 | `GameOverLayoutTests` | 12 | The pure geometry of `GameOverLayout.cs` (linked-compiled, i.e. the shipping file): injected rects stay inside both viewports, never overlap, the two buttons keep a 16 px gap, the caption follows the button, and the client layout has no button. This is the only class that runs everywhere. | nothing |
-| `ReleasePackageTests` | 13 | The Workshop workspace is uploadable: `image.png` is a square PNG under 1 MiB, `workshop.json` is valid and depends on item `3749766330`, `content/` holds only this project's files, the packaged DLL is byte-identical to the current build, **the release zip in `dist/` is byte-identical to `content/`**, and the documentation set is complete. | nothing (some cases need `dist/`, `image.png`, the built patch or the upstream licence — see below) |
-| `TailRosterContractTests` | 4 | The tail-roster epoch reset (`TailRoster`) contract against the shipped 0.6.3 binary: the five reflection anchors the reset depends on. | game + official DLL |
+| `ReleasePackageTests` | 14 | The Workshop workspace is uploadable: `image.png` is a square PNG under 1 MiB, `workshop.json` is valid and depends on item `3749766330`, `content/` holds only this project's files, the packaged DLL is byte-identical to the current build, **the release zip in `dist/` is byte-identical to `content/`**, and the documentation set is complete. | nothing (some cases need `dist/`, `image.png`, the built patch or the upstream licence — see below) |
+| `TailRosterContractTests` | 4 | The tail-roster epoch reset (`TailRoster`) contract against the shipped **0.6.4** binary: the five reflection anchors the reset depends on. | game + official 0.6.4 DLL |
+| `RosterEpochRegressionTests` | 4 | Why the roster must be rebaselined: an authority that accepted the old epoch rejects the new one, `Reset` makes the next epoch acceptable again, repeating the bytes still passes, and the host peer id survives the reset. Drives the real host types with the real serializers. | game + official 0.6.4 DLL |
 | `FixRegistryTests` | 1 | The **inventory** of repairs: `CompatFixes.Build()` yields exactly the expected ids in the expected order (so deleting a line cannot stay green). | nothing (source-level) |
-| `GameDependentCoverageTests` | 1 | The anti-false-green gate: fails when the inputs that make the 22 game-dependent cases skip are missing, so a green run always means they executed. | nothing (probes the inputs) |
+| `GameDependentCoverageTests` | 1 | The anti-false-green gate: fails when an input that makes one of the 30 game-dependent cases skip is missing, and fails when fewer than 30 of them actually ran, so a green run always means they executed. | nothing (probes the inputs) |
 
 ## Missing inputs: skipped *and* reported
 
-`GameDependentCoverageTests` is the reason a missing input can no longer be silent. 26 of the
-cases need the game DLL and/or an official LAN Connect DLL and call `Assert.Skip` when it is absent; a skip
-still exits 0, so "57 passed" on a machine without the game used to prove nothing. The gate:
+`GameDependentCoverageTests` is the reason a missing input can no longer be silent. 30 of the
+cases need the game DLL, an official LAN Connect DLL, the built patch, the packaging workspace or a release
+zip, and call `Assert.Skip` when it is absent; a skip still exits 0, so a green run on a machine without
+them used to prove nothing. The gate:
 
-* checks every input that can trigger one of those skips (`TestRunLedger.ExpectedGameDependentTestCount` = 26)
+* checks every input that can trigger one of those skips (`TestRunLedger.ExpectedGameDependentTestCount` = 30)
   and **fails**, listing the missing inputs, when any of them is absent;
-* counts the game-dependent cases that actually reached their assertions in this run
-  (`TestRunLedger`) and reports the number.
+* counts the game-dependent cases that actually reached their assertions in this run (`TestRunLedger`, one
+  entry per case including each theory row) and fails unless the count is exactly 30. The fact may run before
+  the cases it counts, so it waits for them (bounded at 60 s) instead of asserting the runner's order.
 
 Set `STS2_ALLOW_MISSING_GAME_INPUTS=1` to downgrade a missing input to a skip (for a developer
 without the game). The skip message still lists every missing input, so the exception is never silent.
@@ -38,7 +41,7 @@ without the game). The skip message still lists every missing input, so the exce
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `STS2_GAME_DATA_DIR` | auto-detected Steam libraries | folder containing `sts2.dll` |
-| `STS2_LAN_CONNECT_DLL` | `../lobby/STS2-Game-Lobby/releases/sts2_lan_connect/sts2_lan_connect.dll` | official 0.6.3 DLL (roster references) |
+| `STS2_LAN_CONNECT_DLL` | the 0.6.4 bundle under `../lobby/upstream-064/src/*/releases/...` | official DLL (0.6.3 is out of support since 2.0.0, so this slot resolves to 0.6.4 too) |
 | `STS2_LAN_CONNECT_064_DLL` | `../lobby/upstream-064/src/*/releases/sts2_lan_connect/sts2_lan_connect.dll` | official 0.6.4 DLL (the build this mod requires) |
 | `STS2_COMPANION_ROOT` | two levels above this file | companion project root |
 | `STS2_PACKAGING_DIR` | `<companion>/packaging` | Workshop workspace to validate |
@@ -51,7 +54,7 @@ A file that *is* present but wrong (a different official build, a stale DLL in `
 
 `FixRegistryTests` reads the patch's **source**; it does not build or run it. It can prove that a repair
 was not deleted, renamed or reordered. `TailRosterContractTests` goes one step further and reflects over
-the shipped 0.6.3 binary, but it only reads metadata — no member is invoked. Neither can prove the patch
+the shipped 0.6.4 binary, but it only reads metadata — no member is invoked. Neither can prove the patch
 behaves correctly in a game.
 
 Runtime evidence lives in `tools/smoke-test`, which loads the shipped

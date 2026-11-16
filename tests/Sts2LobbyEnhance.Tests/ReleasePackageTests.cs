@@ -361,13 +361,13 @@ public sealed class ReleasePackageTests
     /// The folder holding the release packages: <c>&lt;repo&gt;/dist</c>, i.e. two levels above the
     /// companion project (work/companion -&gt; work -&gt; repo). <c>null</c> when it does not exist.
     /// </summary>
-    private static string? ReleaseDirectory()
+    internal static string? ReleaseDirectory()
     {
         string expected = ExpectedReleaseDirectory();
         return Directory.Exists(expected) ? expected : null;
     }
 
-    private static string ExpectedReleaseDirectory()
+    internal static string ExpectedReleaseDirectory()
     {
         string? workDirectory = Path.GetDirectoryName(TestPaths.CompanionRoot);
         string? repositoryRoot = workDirectory is null ? null : Path.GetDirectoryName(workDirectory);

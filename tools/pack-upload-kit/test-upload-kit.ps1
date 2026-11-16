@@ -7,29 +7,26 @@
     这个包里跑的是别人（帮忙代传的朋友）的电脑，出问题我们看不到现场，所以这里把
     每一条已知失败路径都真的跑一遍，断言脚本给出的「原因」和「怎么办」是人话、是对的。
 
-    覆盖 5 个场景：
-      1. 干净解压 + 真实 Steam（失败必须被翻译成人话，而不是「未知错误」）
+    覆盖 6 个场景：
+      1. 干净解压 + 上传器返回 AccessDenied（失败必须被翻译成人话，而不是「未知错误」）
       2. 解压不完整（缺 content\LICENSE → 必须点名缺哪个文件，且不去连 Steam）
       3. 文件被改坏（image.png 多一个字节 → 必须报哈希不符，且不去连 Steam）
       4. visibility 被改成 private（必须在上传前拦住）
       5. 假上传器模拟成功（必须打印条目链接、写对 上传结果.txt）
       6. 覆盖解压造成的「新脚本 + 旧内容」混合版本（必须拦住，不许上传）
 
-    场景 1 会真的调用 Steam 接口。它删掉 workspace\mod_id.txt 复现「首次上传」路径，所以只会尝试
-    新建条目、不会对线上条目 3839101755 发写请求；失败原因随本机 Steam 状态而变（没登录 / 没许可 /
-    不是条目作者），断言只要求「被翻译成人话」。
-    不想碰 Steam 就加 -SkipLive。
+    这个脚本**从不联系 Steam**：需要上传器输出时一律换成假上传器（-Fail 产出与真实 AccessDenied 同样的
+    文本）。以前场景 1 会真跑上传器、并且先删掉 workspace\mod_id.txt 来复现「首次上传」，那等于在一个有许可的
+    账号上真的新建一个工坊条目、再把条目 ID 随临时目录一起删掉；现在那条路径不存在了，场景 1 还额外断言
+    workspace\mod_id.txt 没有被删、也没有被改写。
 
 .PARAMETER Zip
     要验收的 zip，默认 dist\sts2-lobby-enhance-upload-kit.zip。
 
-.PARAMETER SkipLive
-    跳过场景 1（唯一会真的和 Steam 通信的一个）。
 #>
 [CmdletBinding()]
 param(
-    [string] $Zip = '',
-    [switch] $SkipLive
+    [string] $Zip = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -123,9 +120,11 @@ function Update-Checksums {
     [System.IO.File]::WriteAllText((Join-Path $Kit 'CHECKSUMS.txt'), (($lines -join $sep) + $sep), (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# 造一个假的 ModUploader.exe：打印成功日志、写出 mod_id.txt。用来验收「成功分支」。
+# 造一个假的 ModUploader.exe。默认产出成功日志并写出 mod_id.txt；-Fail 产出与真实 AccessDenied 一样的文本。
+# 两种情况都不连 Steam —— 验收脚本不允许有能力真的改动线上条目。
 function New-MockUploader {
-    $src = Join-Path $tmpBase 'mock'
+    param([switch]$Fail)
+    $src = Join-Path $tmpBase ('mock-' + $(if ($Fail) { 'fail' } else { 'ok' }))
     New-Item -ItemType Directory -Path $src -Force | Out-Null
     $csproj = @'
 <Project Sdk="Microsoft.NET.Sdk">
@@ -139,7 +138,8 @@ function New-MockUploader {
   </PropertyGroup>
 </Project>
 '@
-    $program = @'
+    $failLiteral = if ($Fail) { 'true' } else { 'false' }
+    $program = @"
 using System;
 using System.IO;
 
@@ -147,12 +147,25 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        bool fail = $failLiteral;
         string ws = null;
         for (int i = 0; i < args.Length - 1; i++)
         {
             if (args[i] == "-w" || args[i] == "--workspace") { ws = args[i + 1]; }
         }
         if (ws == null) { Console.WriteLine("mock: no -w"); return 2; }
+
+        if (fail)
+        {
+            File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "mod-uploader.log"),
+                "Initializing Steam\n" +
+                "Logged in as user 'MockTester'.\n" +
+                "Creating new workshop item...\n" +
+                "Failed to create workshop item! Result: k_EResultAccessDenied\n");
+
+            Console.WriteLine("Failed to create workshop item! Result: k_EResultAccessDenied");
+            return 1;
+        }
 
         const string id = "3761234567";
         File.WriteAllText(Path.Combine(ws, "mod_id.txt"), id);
@@ -167,13 +180,13 @@ internal static class Program
         return 0;
     }
 }
-'@
+"@
     [System.IO.File]::WriteAllText((Join-Path $src 'ModUploader.csproj'), $csproj, (New-Object System.Text.UTF8Encoding($false)))
     [System.IO.File]::WriteAllText((Join-Path $src 'Program.cs'), $program, (New-Object System.Text.UTF8Encoding($false)))
 
     $out = Join-Path $src 'out'
     & dotnet publish (Join-Path $src 'ModUploader.csproj') -c Release -o $out -v:q --nologo | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw '假上传器编译失败，场景 5 跳过不了，直接失败。' }
+    if ($LASTEXITCODE -ne 0) { throw '假上传器编译失败，验收无法继续。' }
     return $out
 }
 
@@ -197,27 +210,19 @@ try {
 
     # ---------------------------------------------------------------- 1
     #
-    # 场景 1 要求 Steam 正在运行：它验证的是「上传器真的连上 Steam 之后，失败被翻译成人话」。
-    # Steam 不在时不能硬跑——脚本会（正确地）停在「Steam 没有运行」，那不是要验的路径，
-    # 继续断言只会产生一堆假失败。明确跳过并说明原因，比伪装成通过或伪装成失败都诚实。
-    $steamRunning = [bool](Get-Process -Name steam -ErrorAction SilentlyContinue)
-    if (-not $SkipLive -and -not $steamRunning) {
-        Write-Host ''
-        Write-Host '=== 1. 干净解压 + 真实 Steam ===' -ForegroundColor Cyan
-        Write-Host '  SKIP  Steam 没有运行。场景 1 需要真实 Steam 才能验证「连上 Steam 后的失败翻译」，' -ForegroundColor Yellow
-        Write-Host '        跳过它不会掩盖任何东西：其余 5 个场景不依赖 Steam。要跑全量请先打开 Steam。' -ForegroundColor Yellow
-        $SkipLive = $true
-    }
-
-    if (-not $SkipLive) {
-        Write-Host ''
-        Write-Host '=== 1. 干净解压 + 真实 Steam（失败必须被翻译成人话） ===' -ForegroundColor Cyan
-        $k = New-Kit 'clean'
-        # 删掉条目 ID 才能复现「首次上传」路径：否则本机会去尝试更新真实条目 3839101755。
-        # 这一步本来就会被 Steam 拒（没有许可），但没必要真的对线上条目发写请求。
-        Remove-Item -LiteralPath (Join-Path $k 'workspace\mod_id.txt') -Force -ErrorAction SilentlyContinue
-        # mod_id.txt 也在 CHECKSUMS.txt 里，删掉它必须重算哈希，否则会先被自检拦住
-        Update-Checksums $k
+    # 验的是「上传器报错之后，失败被翻译成人话」。上传器换成会返回 AccessDenied 的假上传器：
+    # 真上传器在这条路径上会新建一个工坊条目，而脚本随后把临时目录整个删掉，条目 ID 也就丢了。
+    Write-Host ''
+    Write-Host '=== 1. 干净解压 + 上传器 AccessDenied（失败必须被翻译成人话） ===' -ForegroundColor Cyan
+    $failOut = New-MockUploader -Fail
+    $env:LOBBY_ENHANCE_KIT_SKIP_STEAM = '1'
+    $k = New-Kit 'clean'
+    Remove-Item -LiteralPath (Join-Path $k 'ModUploader') -Recurse -Force
+    New-Item -ItemType Directory -Path (Join-Path $k 'ModUploader') -Force | Out-Null
+    Copy-Item -Path (Join-Path $failOut '*') -Destination (Join-Path $k 'ModUploader') -Force
+    # 条目 ID 必须原样保留：以前这里先删掉它来复现「首次上传」，那等于允许脚本真的新建条目
+    Assert-True '跑之前条目 ID 还在' (Test-Path (Join-Path $k 'workspace\mod_id.txt'))
+    Update-Checksums $k
         $run = Invoke-Kit $k
         $res = Get-ResultText $k
         Assert-True     '退出码 0（脚本自己停住，不会被 bat 二次 pause）' ($run.Code -eq 0)
@@ -239,8 +244,10 @@ try {
         $reasonText = ([string]$reasonLine -split ':', 2)[1].Trim()
         $probe = $reasonText.Substring(0, [Math]::Min(10, $reasonText.Length))
         Assert-Contains '窗口里也打印了原因' $run.Text $probe
-        Assert-Contains '窗口里指明了要发回哪个文件' $run.Text '请把这个文件发回给作者'
-    }
+    Assert-Contains '窗口里指明了要发回哪个文件' $run.Text '请把这个文件发回给作者'
+    $keptId = ([System.IO.File]::ReadAllText((Join-Path $k 'workspace\mod_id.txt'), [System.Text.Encoding]::UTF8)).Trim()
+    Assert-True '条目 ID 没有被删、也没有被改写' ($keptId -eq '3839101755')
+    $env:LOBBY_ENHANCE_KIT_SKIP_STEAM = $null
 
     # ---------------------------------------------------------------- 2
     Write-Host ''

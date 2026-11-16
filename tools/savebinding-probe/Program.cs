@@ -24,7 +24,7 @@ string gameDir = args.Length > 0
 
 string hostDll = args.Length > 1
     ? args[1]
-    : @"D:\zhuanban\sts2m\work\lobby\STS2-Game-Lobby\releases\sts2_lan_connect\sts2_lan_connect.dll";
+    : @"D:\SteamLibrary\steamapps\workshop\content\2868840\3749766330\sts2_lan_connect.dll";
 
 AppDomain.CurrentDomain.AssemblyResolve += (_, eventArgs) =>
 {
@@ -39,6 +39,20 @@ if (!File.Exists(hostDll))
 {
     Console.WriteLine("SKIP: the official sts2_lan_connect.dll was not found.");
     return 3;
+}
+
+// 0.6.3 从 2.0.0 起就不在支持范围，对着旧二进制跑出来的 OK 没有意义
+const string PinnedHostSha256 = "E9644876FF9F563E7784AE21C10F2B67C6EEBE2FAB53C8106D0D6AE1D3814AE9";
+using (FileStream stream = File.OpenRead(hostDll))
+using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+{
+    string actual = Convert.ToHexString(sha.ComputeHash(stream));
+    if (!string.Equals(actual, PinnedHostSha256, StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine($"HOST MISMATCH: expected the pinned 0.6.4 build {PinnedHostSha256}, got {actual}.");
+        Console.WriteLine("这个探针只在 0.6.4 上有意义；换台机器请把 hostDll 路径作为第二个参数传进来。");
+        return 4;
+    }
 }
 
 if (File.Exists(Path.Combine(gameDir, "sts2.dll")))

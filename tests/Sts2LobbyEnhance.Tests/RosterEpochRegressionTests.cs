@@ -343,7 +343,7 @@ internal sealed class RosterLab : IDisposable
     /// <summary>One roster member: exactly what a carrier holds (id, real slot, bit length, carrier bytes).</summary>
     internal readonly record struct Carrier(ulong PlayerId, byte RealSlotId, uint BitLength, byte[] Bytes);
 
-    internal static RosterLab Open([System.Runtime.CompilerServices.CallerMemberName] string testName = "")
+    internal static RosterLab Open()
     {
         string? gameDirectory = TestPaths.GameDirectory;
         if (gameDirectory is null)
@@ -363,7 +363,7 @@ internal sealed class RosterLab : IDisposable
 
         // Past the skip guards, so this case really asserts something. Recording here (instead of in each
         // test) is what keeps TestRunLedger honest: a new case in this class cannot forget to report.
-        TestRunLedger.Record(testName);
+        TestRunLedger.Record();
 
         return new RosterLab(game, host);
     }

@@ -5,18 +5,14 @@ namespace Sts2LobbyEnhance.Tests;
 /// <summary>
 /// The anti-false-green gate: a green <c>dotnet test</c> must mean the game-dependent cases actually ran.
 ///
-/// 22 of the suite's cases skip themselves when the game DLL, the official DLL, the built patch or the
-/// packaging workspace is missing (<see cref="TestRunLedger"/>). Without this file, "47 passed" on a
-/// machine without Slay the Spire 2 means 22 of them never asserted anything.
+/// 30 of the suite's cases skip themselves when the game DLL, the official DLL, the built patch or the
+/// packaging workspace is missing (<see cref="TestRunLedger"/>). Without this file a green run on a machine
+/// without Slay the Spire 2 would mean those 30 never asserted anything.
 ///
-/// The gate has two halves, and only the second one depends on test ordering:
-///   1. <b>Input probe</b> (order-independent). Every input that makes one of those cases skip is checked
-///      here. If all of them are present, none of the 22 can take its skip branch, whatever order the
-///      runner picks.
-///   2. <b>Execution count</b> (order-dependent). <see cref="TestRunLedger.ExecutedCount"/> is compared
-///      with the hard-coded threshold. When this fact happens to run last it reports the full number;
-///      when it runs first the count is legitimately small, so it is reported and not asserted — the
-///      probe above is what carries the guarantee in that case.
+///   1. <b>Input probe</b>. Every input that makes one of those cases skip is checked here.
+///   2. <b>Execution count</b>. <see cref="TestRunLedger.ExecutedCount"/> must equal the hard-coded
+///      threshold. This fact may run before the cases it counts, so it waits for them (bounded) instead of
+///      asserting whatever order the runner happened to pick.
 ///
 /// Set <c>STS2_ALLOW_MISSING_GAME_INPUTS=1</c> to downgrade a missing input to a skip (for a developer
 /// without the game). The skip message lists every missing input, so the exception is never silent.
@@ -70,15 +66,26 @@ public sealed class GameDependentCoverageTests
                 $"确实要在没有游戏/构建产物的机器上跑，请设置 {AllowMissingInputsVariable}=1（skip 消息会列出全部缺失项）。");
         }
 
-        // All inputs are present, so nothing in the 22 can skip. The count can then only be *below* the
-        // threshold because this fact ran before the others; it must never be above it. An increase means
-        // a game-dependent case was added without bumping ExpectedGameDependentTestCount.
-        Assert.True(
-            executed <= expected,
-            $"记录到 {executed} 个游戏依赖型用例，但阈值 ExpectedGameDependentTestCount 只有 {expected}。" +
-            "新增了游戏依赖型用例就必须同步 tests/.../TestRunLedger.cs 的阈值，否则「22 个都跑过」这句话就不成立了。");
+        // Every input is present, so none of them may skip. This fact can still run before the cases it
+        // counts, so wait for the rest of the run (bounded) instead of asserting the runner's ordering.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (TestRunLedger.ExecutedCount < expected && clock.Elapsed < TimeSpan.FromSeconds(60))
+        {
+            Thread.Sleep(50);
+        }
 
-        _output.WriteLine($"all inputs present; the {expected} game-dependent cases cannot skip in this run.");
+        int finalCount = TestRunLedger.ExecutedCount;
+        _output.WriteLine($"game-dependent cases executed: {finalCount}/{expected}");
+        foreach (string name in TestRunLedger.ExecutedNames)
+        {
+            _output.WriteLine("  ran: " + name);
+        }
+
+        Assert.True(
+            finalCount == expected,
+            finalCount < expected
+                ? $"只有 {finalCount}/{expected} 个游戏依赖型用例真的执行了断言：有输入存在却仍有用例跳过。"
+                : $"执行了 {finalCount} 个游戏依赖型用例，超过阈值 {expected}：新增用例请同步 tests/.../TestRunLedger.cs 的阈值。");
     }
 
     /// <summary>
@@ -136,6 +143,18 @@ public sealed class GameDependentCoverageTests
             {
                 missing.Add($"{name} is missing from {Path.GetDirectoryName(path)}.");
             }
+        }
+
+        // The release-package test skips when dist/ is empty or absent, and the gate runs pack-release before
+        // dotnet test precisely so it never has to. Listing it here turns "silently skipped" into a named
+        // missing input instead.
+        if (ReleasePackageTests.ReleaseDirectory() is not { } releaseDirectory)
+        {
+            missing.Add($"dist/ is missing ({ReleasePackageTests.ExpectedReleaseDirectory()}); run tools/pack-release/pack-release.ps1 before dotnet test.");
+        }
+        else if (Directory.GetFiles(releaseDirectory, "sts2-lobby-enhance-v*.zip").Length == 0)
+        {
+            missing.Add($"no sts2-lobby-enhance-v*.zip in {releaseDirectory}; run tools/pack-release/pack-release.ps1 before dotnet test.");
         }
 
         string? workDirectory = Path.GetDirectoryName(TestPaths.CompanionRoot);

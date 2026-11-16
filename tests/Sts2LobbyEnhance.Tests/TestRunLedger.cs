@@ -1,57 +1,81 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
+using System.Diagnostics;
+using System.Reflection;
+using Xunit;
 
 namespace Sts2LobbyEnhance.Tests;
 
 /// <summary>
-/// Counts how many game-dependent tests actually reached their assertions in *this* process.
+/// Counts how many game-dependent cases actually reached their assertions in this process.
 ///
-/// Why this exists: 22 of the suite's cases need the game DLL and/or the official 0.6.3 DLL, and each of
-/// them calls <c>Assert.Skip</c> when its input is absent. A skip is reported as "skipped", and
-/// <c>dotnet test</c> still exits 0 — so a green run on a machine without the game proved nothing about
-/// the six documented breaks. That is the test-layer twin of "the log says it worked but it did not".
-/// <see cref="GameDependentCoverageTests"/> turns that into a failure.
+/// The suite skips a case when the game DLL or the official mod DLL is missing, and a skipped case still
+/// exits 0, so a green run on a machine without the game proves nothing. `GameDependentCoverageTests`
+/// turns that into a failure by comparing this count against
+/// `ExpectedGameDependentTestCount`.
 ///
-/// The counter is fed by the helpers every game-dependent test goes through, not by the tests
-/// themselves, so a test cannot forget to report:
-///   * <see cref="OfficialModScan.Require064"/> — the 12 BreakpointRegressionTests cases;
-///   * <see cref="GameApiShapeTests"/>'s OpenGame() — the 9 game-API cases;
-///   * <see cref="BuiltPatchTests"/>'s RequireGameDirectory() — the 1 patch-scan case;
-///   * <see cref="TailRosterContractTests"/>'s RequireHostType() — the 4 roster-contract cases;
-///   * <see cref="RosterLab.Open"/> — the 4 roster-epoch regression cases.
+/// The name comes from the stack: every skip guard calls `Record()` from a helper, so
+/// `[CallerMemberName]` would record the helper's name and collapse whole classes into one entry.
 /// </summary>
 internal static class TestRunLedger
 {
     /// <summary>
-    /// How many game-dependent cases the suite is expected to execute.
-    ///
-    /// 22 come from the 2026-11-13 infrastructure audit ("完全依赖游戏/官方 DLL 的 22 个用例"):
-    /// 12 in BreakpointRegressionTests + 9 in GameApiShapeTests + 1 in BuiltPatchTests.
-    /// 4 more were added afterwards and skip under exactly the same conditions:
-    /// TailRosterContractTests (needs the game directory *and* the official 0.6.3 DLL).
-    /// 4 more came with the P0 offline reproduction: RosterEpochRegressionTests (same two inputs, and it
-    /// additionally loads the real game serializers).
-    /// Total 30.
-    ///
-    /// Hard-coded on purpose: adding or deleting a game-dependent case has to be a deliberate edit here,
-    /// and <see cref="GameDependentCoverageTests"/> fails when the count drifts upward.
+    /// How many game-dependent cases the suite executes when every input is present. Hard-coded on purpose:
+    /// adding or removing such a case has to be a deliberate edit here, and the coverage test fails when the
+    /// count drifts in either direction.
     /// </summary>
     internal const int ExpectedGameDependentTestCount = 30;
 
     private static readonly ConcurrentDictionary<string, byte> Executed = new(StringComparer.Ordinal);
 
-    /// <summary>Number of distinct game-dependent tests that got past their skip guards.</summary>
+    /// <summary>Number of distinct game-dependent cases that got past their skip guards.</summary>
     internal static int ExecutedCount => Executed.Count;
 
     internal static IReadOnlyList<string> ExecutedNames =>
         Executed.Keys.Order(StringComparer.Ordinal).ToList();
 
-    /// <summary>Called by a skip-guard helper once the guard has been passed.</summary>
-    internal static void Record([CallerMemberName] string testName = "")
+    /// <summary>Called by a skip guard once the guard has been passed.</summary>
+    internal static void Record()
     {
-        if (!string.IsNullOrEmpty(testName))
+        string? name = CurrentCaseName();
+        if (name != null)
         {
-            Executed.TryAdd(testName, 0);
+            Executed.TryAdd(name, 0);
         }
+    }
+
+    private static string? CurrentCaseName()
+    {
+        // xUnit reports the case (a theory row counts separately), which is the granularity the threshold is
+        // expressed in. The stack is only a fallback for a run without an ambient test context.
+        string? display = Xunit.TestContext.Current.Test?.TestDisplayName;
+        if (!string.IsNullOrEmpty(display))
+        {
+            return display;
+        }
+
+        return CurrentTestName();
+    }
+
+    private static string? CurrentTestName()
+    {
+        // Skip Record itself and its caller so a helper frame is never mistaken for the case.
+        foreach (StackFrame frame in new StackTrace(1, fNeedFileInfo: false).GetFrames())
+        {
+            MethodBase? method = frame.GetMethod();
+            if (method == null)
+            {
+                continue;
+            }
+
+            if (method.GetCustomAttributes(typeof(FactAttribute), inherit: true).Length == 0 &&
+                method.GetCustomAttributes(typeof(TheoryAttribute), inherit: true).Length == 0)
+            {
+                continue;
+            }
+
+            return method.DeclaringType?.Name + "." + method.Name;
+        }
+
+        return null;
     }
 }
