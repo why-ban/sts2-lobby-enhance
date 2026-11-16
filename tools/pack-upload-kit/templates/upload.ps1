@@ -152,7 +152,7 @@ function Get-Diagnosis {
         @{
             Key     = 'not-owner'
             Pattern = 'k_EItemUpdateStatusInvalid'
-            Reason  = 'Steam 不允许这个账号更新工坊条目 3839101755 —— 通常是因为当前登录的账号不是该条目的作者。'
+            Reason  = 'Steam 不允许这个账号更新这个工坊条目 —— 通常是因为当前登录的账号不是该条目的作者。'
             Advice  = @(
                 '换回当初上传这个条目的那个 Steam 账号（条目作者），再双击一次 upload.bat。'
                 '创意工坊条目不能转让作者，换账号只会得到这个错误。'
