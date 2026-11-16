@@ -79,8 +79,11 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// </summary>
     private const float SlideInDistance = 140f;
 
-    /// <summary>Mirror of <c>StartRunLobby.ClientResponseTimeout</c>: the host drops us after ten seconds.</summary>
-    private const int JoinResponseTimeoutMs = 15000;
+    /// <summary>
+    /// Ten seconds, the budget <c>StartRunLobby.ClientResponseTimeout</c> gives a client. The player waits on the
+    /// main menu for the host's answer, so a longer deadline buys nothing
+    /// </summary>
+    private const int JoinResponseTimeoutMs = 10000;
 
     private const int MainMenuWaitFrames = 180;
 
@@ -141,6 +144,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// filter the other modes use, so an unpatched client is never put on the ten-second lobby-join timeout.
     /// </summary>
     private static bool _filterDailyAdmit;
+    private static INetGameService? _filterDailyAdmitService;
     private static long _filterDailyAdmitDeadline;
 
     public string Id => "new-run-button";
@@ -195,8 +199,11 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     public void Apply(Harmony harmony)
     {
         // Applies() resolved and cached these; reaching Apply without them is a host-contract violation, not a build
-        // problem, so it must not be silently tolerated. The shape itself is only needed at runtime, not here.
+        // problem, so it must not be silently tolerated.
         PatchTargets targets = _targets;
+        Shape shape = _shape
+            ?? throw new InvalidOperationException(
+                "new-run-button: Apply ran without a captured shape; Applies must be consulted first.");
 
         // _Ready still owns the *client* hint (the client must know whether to wait for the host while it sits
         // on the first page of the screen).
@@ -267,6 +274,13 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         Entry.Info(
             "new-run-button: game-over screen patched (host button / client hint), session teardown kept alive, " +
             "handshake mod list captured.");
+
+        if (shape.SetSelectedGameMode == null)
+        {
+            Entry.Warn(
+                $"new-run-button: {CustomRunScreenTypeName}._gameModeDropdown / SetSelectedGameMode did not " +
+                "resolve, so a rebuilt custom lobby starts in the dropdown's own default mode.");
+        }
     }
 
     // =====================================================================================================
@@ -552,8 +566,11 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// Withdraws the injected controls. Called when the session the button depends on ends, and again when the
     /// player presses a button that has already become stale — the field report was 29 presses of a button that
     /// logged a warning and did nothing the player could see.
+    ///
+    /// <paramref name="captionText"/> is why the button is gone. It goes into the caption because that label is
+    /// the only thing left on the screen once the button disappears
     /// </summary>
-    private static void WithdrawHostControls()
+    private static void WithdrawHostControls(string captionText)
     {
         NReturnToMainMenuButton? button = _injectedButton;
         _injectedButton = null;
@@ -582,8 +599,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             {
                 if (GodotObject.IsInstanceValid(caption))
                 {
-                    // Keep the caption: it is the only thing that can tell the player why the button vanished.
-                    caption.Text = DisconnectedCaption;
+                    // The caption stays visible on purpose: it is the only thing that can tell the player why
+                    // the button vanished.
+                    caption.Text = captionText;
                 }
             }
             catch (Exception exception)
@@ -645,7 +663,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         Entry.Info(
             $"new-run-button: the session ended ({info.GetReason()}); withdrawing the restart button and " +
             "re-wording the client hint.");
-        WithdrawHostControls();
+        WithdrawHostControls(DisconnectedCaption);
 
         // No-op when the screen has no hint label (host screen, or the client hint was never injected).
         SetHintText(BuildClientHint(sessionAlive: false));
@@ -1057,6 +1075,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             if (screenKind == ScreenKind.Daily)
             {
                 _filterDailyAdmit = true;
+                _filterDailyAdmitService = host;
                 _filterDailyAdmitDeadline = System.Environment.TickCount64 + DailyAdmitFilterWindowMs;
             }
 
@@ -1088,7 +1107,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         catch (Exception exception)
         {
             Entry.Error($"new-run-button: host restart failed: {exception}");
-            _filterDailyAdmit = false;
+            DisarmDailyFilter();
             // IsInProgress flips to false inside RunManager.CleanUp's finally. If it is still true the run was never
             // torn down, so the host is still on the game-over screen with a live session and the right recovery is
             // to leave everything alone; otherwise the only honest state is the one the main-menu button produces.
@@ -1158,8 +1177,10 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     /// <summary>
     /// Best effort: preselect the base game mode of a custom run so the rebuilt custom lobby starts in the same
-    /// mode. The dropdown only needs to be set before <c>InitializeMultiplayerAsHost</c> reads it; if the widget
-    /// is not ready yet the host can still pick the mode in the screen, so a failure here must never abort.
+    /// mode. The dropdown only needs to be set before <c>InitializeMultiplayerAsHost</c> reads it, and the host
+    /// can still pick the mode in the screen, so a failure here must never abort. The two anchors are optional
+    /// (a miss is reported once in <see cref="Apply"/>), and the success line is only written when the setter
+    /// really ran.
     /// </summary>
     private static void TryPreselectCustomGameMode(NCustomRunScreen screen, GameMode? gameMode)
     {
@@ -1168,14 +1189,24 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             return;
         }
 
+        FieldInfo? dropdownField = _shape?.GameModeDropdown;
+        MethodInfo? setter = _shape?.SetSelectedGameMode;
+        if (dropdownField == null || setter == null)
+        {
+            return;
+        }
+
         try
         {
-            FieldInfo? field = typeof(NCustomRunScreen).GetField(
-                "_gameModeDropdown",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            object? dropdown = field?.GetValue(screen);
-            MethodInfo? setter = dropdown?.GetType().GetMethod("SetSelectedGameMode", BindingFlags.Instance | BindingFlags.Public);
-            setter?.Invoke(dropdown, new object?[] { mode });
+            if (dropdownField.GetValue(screen) is not { } dropdown)
+            {
+                Entry.Warn(
+                    "new-run-button: the custom run screen has no game-mode dropdown instance, so the rebuilt " +
+                    "lobby keeps the dropdown's default mode.");
+                return;
+            }
+
+            setter.Invoke(dropdown, new object?[] { mode });
             Entry.Info($"new-run-button: custom lobby preselected game mode {mode}.");
         }
         catch (Exception exception)
@@ -1211,14 +1242,25 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
         if (System.Environment.TickCount64 > _filterDailyAdmitDeadline)
         {
-            _filterDailyAdmit = false;
+            DisarmDailyFilter();
             Entry.Warn(
                 "new-run-button: the daily admission filter expired; falling back to the game's own admission.");
             return true;
         }
 
+        // The flag belongs to the one daily screen the restart pushed. Any other lobby (the player left that
+        // screen before the time server answered, then hosted again) keeps the game's own admission.
+        if (!ReferenceEquals(__instance.NetService, _filterDailyAdmitService))
+        {
+            DisarmDailyFilter();
+            Entry.Info(
+                "new-run-button: the daily admission filter belonged to another session; the game's own " +
+                "admission runs.");
+            return true;
+        }
+
         // Disarm before filtering: AdmitPatchedPeers may call this very method for the all-patched case.
-        _filterDailyAdmit = false;
+        DisarmDailyFilter();
 
         try
         {
@@ -1238,12 +1280,18 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         {
             // Keep the filter disarmed (already done above) so a later call cannot re-enter the same failure,
             // and let the game admit everyone: that is what it would have done without this patch.
-            _filterDailyAdmit = false;
+            DisarmDailyFilter();
             Entry.Error(
                 "new-run-button: the filtered daily admission failed, falling back to the game's own " +
                 $"admission: {Describe(exception)}");
             return true;
         }
+    }
+
+    private static void DisarmDailyFilter()
+    {
+        _filterDailyAdmit = false;
+        _filterDailyAdmitService = null;
     }
 
     /// <summary>
@@ -1580,7 +1628,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         });
 
         Entry.Info("new-run-button: host asked the room to reassemble; join request sent, tearing the run down.");
-        SetHintText("正在返回准备页…");
         TaskHelper.RunSafely(ClientReassembleAsync(service));
     }
 
@@ -1814,7 +1861,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// </summary>
     private static void RejectRestart(string message)
     {
-        WithdrawHostControls();
+        // Same reason in both places: a stale caption next to a popup that contradicts it is how the screen
+        // ends up telling the player two different stories.
+        WithdrawHostControls(message);
         ShowInfo(message);
     }
 
@@ -2132,7 +2181,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         // the shape: if it is gone we simply do not install.
         RequireLobbyField(ReflectScope.GameType(CharacterSelectScreenTypeName, problems), problems);
         RequireLobbyField(ReflectScope.GameType(DailyRunScreenTypeName, problems), problems);
-        RequireLobbyField(ReflectScope.GameType(CustomRunScreenTypeName, problems), problems);
+        Type? customScreen = ReflectScope.GameType(CustomRunScreenTypeName, problems);
+        RequireLobbyField(customScreen, problems);
         RequireLobbyField(ReflectScope.GameType(BlitzScreenTypeName, problems), problems);
         RequireLobbyField(ReflectScope.GameType(DreadScreenTypeName, problems), problems);
         ReflectScope.GameType(MegaLabelTypeName, problems);
@@ -2172,6 +2222,22 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             }
         }
 
+        // Optional: preselecting the finished custom run's mode. Losing either anchor costs that preselection
+        // only, so neither joins the required set; Apply reports the loss once.
+        var preselectProblems = new List<string>();
+        FieldInfo? gameModeDropdown = ReflectScope.Field(preselectProblems, customScreen, "_gameModeDropdown");
+        MethodInfo? setSelectedGameMode = gameModeDropdown == null
+            ? null
+            : ReflectScope.InstanceMethod(
+                preselectProblems,
+                gameModeDropdown.FieldType,
+                "SetSelectedGameMode",
+                GameModeTypeName);
+        if (setSelectedGameMode == null)
+        {
+            gameModeDropdown = null;
+        }
+
         if (problems.Count > 0
             || getMaxPlayers == null
             || buildSaveKey == null
@@ -2209,7 +2275,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             getMaxPlayers,
             buildSaveKey,
             removeBinding,
-            unregisterHotkeys);
+            unregisterHotkeys,
+            gameModeDropdown,
+            setSelectedGameMode);
 
         targets = new PatchTargets(
             ready,
@@ -2280,7 +2348,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     /// <summary>
     /// Every reflection anchor the runtime path uses, filled in by <see cref="TryCapture"/> only after all of them
-    /// resolved. Nothing here can be null once <see cref="Apply"/> installed the repair.
+    /// resolved. Nothing here is null once <see cref="Apply"/> installed the repair, except the two custom-run
+    /// anchors that only cost the mode preselection.
     /// </summary>
     private sealed class Shape
     {
@@ -2297,7 +2366,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             MethodInfo getEffectiveMaxPlayers,
             MethodInfo buildSaveKey,
             MethodInfo removeSaveRoomBinding,
-            MethodInfo unregisterHotkeys)
+            MethodInfo unregisterHotkeys,
+            FieldInfo? gameModeDropdown,
+            MethodInfo? setSelectedGameMode)
         {
             MainMenuButton = mainMenuButton;
             ResultField = resultField;
@@ -2310,6 +2381,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             BuildSaveKey = buildSaveKey;
             RemoveSaveRoomBinding = removeSaveRoomBinding;
             UnregisterHotkeys = unregisterHotkeys;
+            GameModeDropdown = gameModeDropdown;
+            SetSelectedGameMode = setSelectedGameMode;
         }
 
         internal FieldInfo MainMenuButton { get; }
@@ -2334,6 +2407,12 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     /// <summary><c>NButton.UnregisterHotkeys()</c>; drops the hotkey a duplicated button re-registered</summary>
         internal MethodInfo UnregisterHotkeys { get; }
+
+        /// <summary><c>NCustomRunScreen._gameModeDropdown</c>; optional, a miss only costs the mode preselection</summary>
+        internal FieldInfo? GameModeDropdown { get; }
+
+        /// <summary><c>NCustomGameModeDropdown.SetSelectedGameMode(GameMode)</c>; optional, same as above</summary>
+        internal MethodInfo? SetSelectedGameMode { get; }
 
         // Resolution lives in TryCapture: it collects every missing anchor instead of throwing on the first one, and
         // it resolves game types by name so a rename cannot break the probe itself.

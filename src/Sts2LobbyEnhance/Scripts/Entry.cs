@@ -301,11 +301,10 @@ public static class Entry
             "inactive; the rest of the mod is not.");
         Error(
             "removing a group's patches is NOT the same as undoing them. Harmony hooks are gone, but state a " +
-            "repair had already written into this process stays until the process restarts — the reflection " +
-            "handles every remaining repair captures at startup (NewRunFromGameOverFix, NewRunSaveBindingFix, " +
-            "RosterRebaselineFix, LoadJoinOrderFix, NewProtocolOnlyFix), the game-over nodes " +
-            "NewRunFromGameOverFix injects, and the reassemble / disconnect-suppression flags it raises are the " +
-            "known cases. Restart the game for a clean state.");
+            "repair had already written into this process stays until the process restarts: every repair in " +
+            "this mod caches its anchors in static fields, and the game-over nodes, the reassemble flag and " +
+            "the disconnect-suppression flag the new-run button's repair set are still in place. Restart the " +
+            "game for a clean state.");
     }
 
     internal static void Info(string message)
