@@ -7,15 +7,10 @@ using System.Text.Json;
 namespace Sts2LobbyEnhance;
 
     /// <summary>
-    /// One lobby server as this mod sees it: where to connect, what to call it, how far away it is, and whether
-    /// its <c>/probe</c> advertises the public channel protocol this client speaks.
+    /// One lobby server as this mod sees it. <c>PingMs</c> is the <c>/probe</c> round trip in milliseconds, or -1
+    /// when the probe never answered; <c>ChatSupported</c> means the probe advertised
+    /// <c>capabilities.serverChatVersion == 1</c>.
     /// </summary>
-    /// <param name="Address">Normalized base URL, no trailing slash.</param>
-    /// <param name="DisplayName">Operator name from the server list, empty when nobody reported one.</param>
-    /// <param name="PingMs">Measured <c>/probe</c> round trip, -1 when the probe never answered.</param>
-    /// <param name="ChatSupported">The probe advertised <c>capabilities.serverChatVersion == 1</c>.</param>
-    /// <param name="IsCurrent">This is the lobby server the client is configured against.</param>
-    /// <param name="IsFeatured">This is upstream's pinned server (<c>FeaturedServerAddress</c>).</param>
     internal sealed record CatalogServer(
         string Address,
         string DisplayName,
@@ -24,7 +19,7 @@ namespace Sts2LobbyEnhance;
         bool IsCurrent,
         bool IsFeatured);
 
-    /// <summary>An immutable candidate list, rebuilt at most every <see cref="ChatServerCatalog.SnapshotLifetime"/>.</summary>
+    /// <summary>A candidate list that is never mutated once built.</summary>
     internal sealed class CatalogSnapshot
     {
         internal CatalogSnapshot(List<CatalogServer> servers)
@@ -43,13 +38,12 @@ namespace Sts2LobbyEnhance;
     /// The candidate server list the chat switch walks, plus the <c>/probe</c> answer it refuses to switch
     /// without.
     ///
-    /// Why the preflight exists at all: connecting to a lobby that does not advertise server chat
-    /// <c>v1</c> makes the client call <c>MarkPermanentStop(Unsupported)</c> (<c>LanConnectServerChatClient.cs:181-189</c>)
-    /// and the reconnect loop treats that exception as fatal and returns (<c>:1048-1059</c>), so one wrong
-    /// target kills the public channel for the rest of the process. A two-second GET is cheap next to that.
+    /// Why the preflight exists: connecting to a lobby that does not advertise server chat <c>v1</c> makes the client
+    /// call <c>MarkPermanentStop(Unsupported)</c>, and the reconnect loop treats that as fatal and returns, so one
+    /// wrong target kills the public channel for the rest of the process. A two-second GET is cheap next to that.
     ///
-    /// Everything here is plain .NET: no Godot call, no node. It runs on a worker thread while the panel keeps
-    /// painting, which is why it may not touch anything the scene tree owns.
+    /// Everything here is plain .NET, no Godot call and no node: it runs on a worker thread while the panel keeps
+    /// painting, so it may not touch anything the scene tree owns.
     /// </summary>
     internal static class ChatServerCatalog
     {
@@ -69,12 +63,11 @@ namespace Sts2LobbyEnhance;
 
         /// <summary>
         /// How long a resolved display name is kept. <c>GatherInitialCandidates</c> rewrites the known-peers cache
-        /// file (<c>LanConnectServerListBootstrap.cs:47-49</c>), so the name is asked for at most this often, not
-        /// once per frame.
+        /// file, so the name is asked for at most this often instead of on every frame.
         /// </summary>
         private static readonly TimeSpan NameLifetime = TimeSpan.FromMinutes(5d);
 
-        /// <summary>Probe answers and the built snapshot are both kept this long (spec: five minutes).</summary>
+        /// <summary>Probe answers and the built snapshot are both kept this long.</summary>
         internal static readonly TimeSpan SnapshotLifetime = TimeSpan.FromMinutes(5d);
 
         private static readonly object Gate = new();
@@ -245,9 +238,8 @@ namespace Sts2LobbyEnhance;
         }
 
         /// <summary>
-        /// Upstream's pinned server (<c>LanConnectServerListBootstrap.FeaturedServerAddress</c>,
-        /// <c>LanConnectServerListBootstrap.cs:43</c>), which the chat row's reset button returns to on the lobby
-        /// side. Empty when the anchor was never captured.
+        /// Upstream's pinned server (<c>LanConnectServerListBootstrap.FeaturedServerAddress</c>), which the chat row's
+        /// reset button returns to. Empty when the anchor was never captured.
         /// </summary>
         internal static string FeaturedAddress
         {
@@ -275,10 +267,9 @@ namespace Sts2LobbyEnhance;
         /// The cached/seed half of the candidate list, read on the calling thread.
         /// </summary>
         /// <remarks>
-        /// <c>GatherInitialCandidates</c> reads <em>and rewrites</em> the known-peers cache file
-        /// (<c>LanConnectServerListBootstrap.cs:45-85</c>), so it is called from the main thread only: the pool
-        /// repair and the server picker both run it there, and a worker-thread call would race them on a file
-        /// neither of us owns. The network half of the build stays off-thread.
+        /// <c>GatherInitialCandidates</c> reads <em>and rewrites</em> the known-peers cache file, so it is called
+        /// from the main thread only: the pool repair and the server picker both run it there, and a worker-thread
+        /// call would race them on a file neither of us owns. The network half of the build stays off-thread.
         /// </remarks>
         internal static List<(string Address, string Name)> ReadInitialCandidates()
         {
@@ -304,9 +295,9 @@ namespace Sts2LobbyEnhance;
         /// <summary>
         /// Returns the candidate list, building it on a worker thread when the cache is cold or older than
         /// <see cref="SnapshotLifetime"/>. Returns null when the anchors were never captured.
+        /// <paramref name="currentBaseUrl"/> is the configured lobby server and always ends up as entry 0;
+        /// <paramref name="seeds"/> has to come from <see cref="ReadInitialCandidates"/> on the main thread.
         /// </summary>
-        /// <param name="currentBaseUrl">The lobby server the client is configured against; always entry 0.</param>
-        /// <param name="seeds">Main-thread output of <see cref="ReadInitialCandidates"/>.</param>
         internal static async Task<CatalogSnapshot?> GetSnapshotAsync(
             string currentBaseUrl,
             List<(string Address, string Name)> seeds)
@@ -357,8 +348,8 @@ namespace Sts2LobbyEnhance;
         }
 
         /// <summary>
-        /// One server's <c>/probe</c> answer, cached for <see cref="SnapshotLifetime"/>. Never throws: an
-        /// unreachable server is an answer, not an error.
+        /// One server's <c>/probe</c> answer, cached for <see cref="SnapshotLifetime"/>. An unreachable server is an
+        /// answer, not an error.
         /// </summary>
         internal static async Task<ProbeOutcome> ProbeAsync(string address)
         {
@@ -405,8 +396,8 @@ namespace Sts2LobbyEnhance;
         }
 
         /// <summary>
-        /// The name shown in the panel and under an announcement: the operator name, else the address host.
-        /// Longer than <paramref name="maxChars"/> is truncated with an ellipsis (one of the dots counts).
+        /// The name shown in the panel: the operator name, else the address host. Longer than
+        /// <paramref name="maxChars"/> is truncated with an ellipsis (one of the dots counts).
         /// </summary>
         internal static string ShortName(string? displayName, string? address, int maxChars)
         {
@@ -451,11 +442,11 @@ namespace Sts2LobbyEnhance;
 
         /// <summary>
         /// Best-effort display name for the server the client is configured against, read from upstream's own
-        /// candidate gatherer. Used by the announcement source line, which has no candidate walk of its own.
+        /// candidate gatherer. Used for the chat panel's title.
         /// </summary>
         /// <remarks>
-        /// The gatherer reads and rewrites the known-peers cache, so the answer is memoised for a minute rather
-        /// than being asked for on every announcement tick.
+        /// The gatherer reads and rewrites the known-peers cache, so the answer is memoised for
+        /// <see cref="NameLifetime"/> instead of being asked for on every frame.
         /// </remarks>
         internal static bool TryResolveDisplayName(string baseUrl, out string displayName)
         {
@@ -706,19 +697,18 @@ namespace Sts2LobbyEnhance;
         }
 
         /// <summary>
-        /// Decides "does this server speak public channel v1" with exactly the test the client itself applies:
-        /// <c>probe.Ok &amp;&amp; probe.Capabilities != null &amp;&amp; probe.Capabilities.SupportsTextServerChat</c>
-        /// (<c>LanConnectServerChatClient.cs:181</c>, where <c>SupportsTextServerChat</c> is
-        /// <c>ServerChatVersion == 1</c>, <c>LanConnectLobbyModels.cs:179</c>).
+        /// Decides "does this server speak public channel v1" by the same three conditions the client applies:
+        /// <c>probe.Ok &amp;&amp; probe.Capabilities != null &amp;&amp; probe.Capabilities.SupportsTextServerChat</c>,
+        /// where the last one is <c>ServerChatVersion == 1</c>.
         ///
         /// The strictness is not pedantry. <c>LobbyProbeResponse.Ok</c> is a plain <c>bool</c> that defaults to
-        /// false (<c>LanConnectLobbyModels.cs:127-132</c>), so a body without an <c>"ok"</c> field deserialises to
-        /// "not ok" on the client. A lenient check here would let such a body through, the client would then call
-        /// <c>MarkPermanentStop(Unsupported)</c> (<c>:183-188</c>), and the reconnect loop returns instead of
-        /// retrying (<c>:1048-1059</c>) - one wrong switch kills the public channel for the rest of the process.
-        /// Anything short of all three conditions is therefore "not supported".
+        /// false, so a body without an <c>"ok"</c> field deserialises to "not ok" on the client; a lenient check here
+        /// would let such a body through, the client would then call <c>MarkPermanentStop(Unsupported)</c>, and the
+        /// reconnect loop returns instead of retrying. Anything short of all three conditions is therefore "not
+        /// supported".
         ///
-        /// The body shape is <c>lobby-service/src/app.ts:484-512</c>.
+        /// Property names are matched case-sensitively against the camelCase body the service sends, with a Pascal
+        /// spelling accepted for the version field.
         /// </summary>
         private static bool ReadServerChatSupported(string body)
         {

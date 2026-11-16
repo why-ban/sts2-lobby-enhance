@@ -9,27 +9,25 @@ namespace Sts2LobbyEnhance;
 /// Desktop only: while the in-run chat is collapsed, its hint strip stops swallowing the mouse clicks that were
 /// meant for the game's own top-right buttons.
 ///
-/// The hint label is not the culprit - upstream already ships it as <c>MouseFilter = Ignore</c>
-/// (<c>LanConnectRoomChatOverlay.cs:498</c>). What takes the click is the chain of containers it lives in: the
-/// column holding its row is explicitly <c>Stop</c> (<c>stack</c>, :484-485), and the row (<c>topRow</c>, :489) plus
-/// the root <c>MarginContainer</c> (:476) are <c>Pass</c>, because Godot gives every <c>Container</c>
-/// <c>MOUSE_FILTER_PASS</c> by default (<c>work/lead/_tmp_godot/container.cpp:231-234</c>). <c>Pass</c> is not a
-/// hole: <c>Viewport::_gui_find_control_at_pos</c> returns the topmost control at that point whose filter is not
-/// <c>Ignore</c> (<c>viewport.cpp:1835-1877</c>), and <c>Viewport::_gui_call_input</c> then walks *up* from there,
-/// stopping at the first <c>Stop</c> ancestor (<c>:1731-1774</c>, the break is <c>:1755-1759</c>). The click dies
-/// inside the overlay; the button behind it is never offered the event.
+/// The hint label is not the culprit - upstream already ships it as <c>MouseFilter = Ignore</c>. What takes the click
+/// is the chain of containers it lives in: the column holding its row is <c>Stop</c>, and the row plus the root
+/// <c>MarginContainer</c> are <c>Pass</c>, because Godot gives every <c>Container</c> <c>MOUSE_FILTER_PASS</c> by
+/// default. <c>Pass</c> is not a hole: picking returns the topmost control at that point whose filter is not
+/// <c>Ignore</c>, and the input walk then stops at the first <c>Stop</c> ancestor. The click dies inside the overlay
+/// and the button behind it is never offered the event.
 ///
 /// So all three go to <c>Ignore</c> while collapsed - dropping only the <c>Stop</c> would merely move the pick up to
 /// the row - and back to exactly the values upstream chose when the panel is open. Picking recurses into children
-/// before deciding about a node itself (<c>:1849-1859</c> vs <c>:1862</c>), so the toggle bubble keeps its drags
-/// under <c>Ignore</c> parents.
+/// before deciding about a node itself, so the toggle bubble keeps its drags under <c>Ignore</c> parents.
 ///
 /// Collapsed/expanded is read from <c>_panelFrame.Visible</c>, the flag upstream writes from
-/// <c>chat.RoomOverlayOpen</c> (:650) - never guessed. The overlay itself is a <c>CanvasLayer</c> (:39), so the
-/// clickable chain starts at <c>_root</c>, its first <c>Control</c>.
+/// <c>chat.RoomOverlayOpen</c>. The overlay itself is a <c>CanvasLayer</c>, so the clickable chain starts at
+/// <c>_root</c>, its first <c>Control</c>.
 ///
-/// Mobile is left exactly as upstream ships it: the obstruction was reported on desktop, where the bubble is hidden
-/// in mouse mode (:1111) and that strip has no other purpose.
+/// Mobile keeps upstream's filters, and that is a product decision rather than a technical one: the obstruction was
+/// reported on desktop, where the collapsed chat has no bubble to grab (upstream shows it only in touch pointer mode)
+/// and the strip covers the game's buttons with nothing interactive of its own. On a phone the collapsed chat is the
+/// bubble, and the player can drag the bubble out of the way.
 /// </summary>
 internal sealed class RoomChatHintPassthroughFix : ICompatFix
 {
@@ -89,8 +87,8 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         Shape shape = _shape ?? throw new InvalidOperationException(
             "room-chat-hint-passthrough: Applies() did not capture the overlay shape; refusing to patch blind.");
 
-        // _Process -> RefreshFromSource every frame (:252-256). Upstream's own body runs first and sets
-        // _panelFrame.Visible (:650), so a postfix always sees this frame's collapsed state, not last frame's.
+        // RefreshFromSource runs every frame and its own body sets _panelFrame.Visible first, so a postfix sees
+        // this frame's collapsed state and not the previous one's.
         harmony.Patch(
             shape.Refresh,
             postfix: new HarmonyMethod(typeof(RoomChatHintPassthroughFix), nameof(RefreshPostfix)));
@@ -100,7 +98,7 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
             "(root/column/row = Ignore); opening the panel restores upstream's own filters. Mobile untouched.");
     }
 
-    // ReSharper disable once UnusedParameter.Local — Harmony binds by name.
+    // ReSharper disable once UnusedParameter.Local (Harmony binds by name).
     private static void RefreshPostfix(object? __instance)
     {
         Shape? shape = _shape;
@@ -154,7 +152,7 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         FilterState state = States.GetValue(overlay, _ => new FilterState());
         if (!state.Captured)
         {
-            // Upstream never writes these three, so the first frame we see is the value it chose.
+            // Upstream does not write these three, so the first frame we see carries the values it chose.
             state.Root = root.MouseFilter;
             state.Column = column.MouseFilter;
             state.Row = row.MouseFilter;

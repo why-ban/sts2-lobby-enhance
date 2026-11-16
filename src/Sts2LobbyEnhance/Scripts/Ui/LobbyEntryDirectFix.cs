@@ -7,27 +7,23 @@ namespace Sts2LobbyEnhance;
     /// <summary>
     /// Opens the lobby on the room list directly, without the "选择服务器" picker in front of it.
     ///
-    /// Why this is a prefix on `LanConnectServerSelectionStartup.Show` and not on
-    /// `OnLobbyPressed`: upstream's entry button does more than show the picker. It resolves the overlay, and
-    /// it inspects the clipboard for an invite code and for a LAN resume code
-    /// (`Patches.MultiplayerSubmenu.cs:194-217`); replacing the whole method would silently drop that
-    /// precheck. Skipping only the dialog keeps it: the button still runs its own logic, and when it reaches the
-    /// picker we invoke the callback upstream would have invoked after a pick - the same
-    /// `overlay.ShowOverlay()` (`:219-226`) - and return false so no dialog appears.
+    /// A prefix on `LanConnectServerSelectionStartup.Show` rather than on the lobby button itself: upstream's button
+    /// resolves the overlay and inspects the clipboard for an invite code and a LAN resume code before it reaches
+    /// Show, and replacing the whole handler would drop that precheck. Skipping only the dialog keeps it - the button
+    /// still runs its own logic, and when it reaches the picker we invoke the callback upstream would have invoked
+    /// after a pick, then return false so no dialog appears.
     ///
-    /// The same `Show` overload also serves the in-overlay SERVER toolbar button
-    /// (`LanConnectLobbyOverlay.cs:5465`), which must keep its picker. The two callers are told apart by
-    /// `_serverPickerOpen`: `OpenServerPicker` raises it before calling `Show`
-    /// (`:5438`), and the lobby entry path never does.
+    /// The same Show overload also serves the in-overlay SERVER toolbar button, which must keep its picker. The two
+    /// callers are told apart by `_serverPickerOpen`: opening the picker raises it before calling Show, and the lobby
+    /// entry path does not.
     ///
-    /// This is a drop-in mod: the player configures nothing, so pressing 游戏大厅 always goes straight to the room
-    /// list. A server address that turns out to be unusable is the overlay's own status line to report
-    /// (`HasAvailableLobbyEndpoint()` gates exactly those messages, `LanConnectLobbyOverlay.cs:5824-6060`),
-    /// not a reason to interrupt the player with a dialog they never asked for.
+    /// This is a drop-in mod: the player configures nothing, so pressing 游戏大厅 goes straight to the room list. An
+    /// address that turns out to be unusable is the overlay's own status line to report - its room refresh writes the
+    /// failure there - not a reason to interrupt the player with a dialog they never asked for.
     ///
-    /// The only conditions that fall back to upstream's picker are structural, never configurational: no overlay
-    /// in the tree yet (upstream then reports "大厅页面尚未准备好"), no pick callback to invoke, or this very
-    /// repair throwing - in which case upstream's own behaviour is the safer of the two.
+    /// The conditions that fall back to upstream's picker are structural, not configurational: no overlay in the tree
+    /// yet, no pick callback to invoke, or this repair throwing, in which case upstream's own behaviour is the safer
+    /// of the two. Each of those logs one line, because the install log has already reported the seam as applied.
     /// </summary>
 internal sealed class LobbyEntryDirectFix : ICompatFix
 {
@@ -58,9 +54,8 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
     public string Id => "lobby-entry-direct";
 
     /// <summary>
-    /// Grouped with the pool: upstream documents the picker as the entry point shared by the lobby button and
-    /// the SERVER button (`LanConnectLobbyOverlay.cs:5425-5430`), so this repair answers to the same seam
-    /// the server-list handling lives on. A rollback returns the picker, which is exactly upstream's behaviour.
+    /// Grouped with the pool: the picker is the entry point shared by the lobby button and the SERVER button, and the
+    /// server-list handling lives on the same seam. A rollback returns the picker, which is upstream's behaviour.
     /// </summary>
     public FixGroup Group => FixGroup.Pool;
 
@@ -113,10 +108,10 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
     }
 
     /// <summary>
-    /// Runs instead of the picker when the client is already pointed at a usable server.
+    /// Runs instead of the picker.
     ///
-    /// The parameters are named exactly like upstream's so Harmony binds by name; every type here is Godot or
-    /// BCL, so the signature never depends on a host type.
+    /// The parameters are named exactly like upstream's so Harmony binds by name; every type here is Godot or BCL, so
+    /// the signature does not depend on a host type.
     /// </summary>
     private static bool ShowPrefix(
         SceneTree tree,
@@ -151,7 +146,7 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
 
             if (shape.PickerOpen.GetValue(overlay) is bool open && open)
             {
-                // The SERVER toolbar button opened this call (OpenServerPicker raises the flag first, :5438).
+                // The SERVER toolbar button opened this call: OpenServerPicker raises the flag before it calls Show.
                 // That entry point keeps the picker; this repair only answers for the lobby button.
                 return true;
             }
@@ -173,9 +168,9 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
 
             onSettled?.Invoke();
 
-            // One line, because the failure this guards against is silent: if upstream ever moves
-            // _serverPickerOpen = true (:5438) to after Show (:5465), the SERVER button would lose its picker and
-            // nothing else in the log would say so.
+            // One line, because the failure this guards against is silent: if upstream ever raises
+            // _serverPickerOpen after Show instead of before it, the SERVER button would lose its picker and nothing
+            // else in the log would say so.
             if (Interlocked.Exchange(ref _directLogged, 1) == 0)
             {
                 Entry.Info(
@@ -195,9 +190,9 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
     }
 
     /// <summary>
-    /// The overlay is a child of the multiplayer submenu (`Patches.MultiplayerSubmenu.cs:95`), so a
-    /// recursive search from the tree root finds the one this press targets. When it finds none, upstream's own
-    /// path reports "大厅页面尚未准备好" and this repair stays out of the way.
+    /// The overlay is a child of the multiplayer submenu, so a recursive search from the tree root finds the one this
+    /// press targets. When it finds none, upstream's own path reports "大厅页面尚未准备好" and this repair stays out
+    /// of the way.
     /// </summary>
     private static object? FindOverlay(SceneTree tree, Shape shape)
     {

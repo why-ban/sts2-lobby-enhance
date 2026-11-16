@@ -9,15 +9,14 @@ namespace Sts2LobbyEnhance;
 /// Adds a 「版本」 section with one chip 「相同游戏版本」 to the lobby's room-filter dialog and, while it is on,
 /// narrows the room list to the rooms whose advertised game version equals this machine's.
 ///
-/// Only the game version is compared (<c>LobbyRoomSummary.Version</c>, LanConnectLobbyModels.cs:25). The mod
-/// version and the protocol profile stay out of the predicate on purpose: a room on a different protocol profile
-/// is still joinable, and mixing the three would hide rooms the player can actually enter.
+/// Only the game version is compared. The mod version and the protocol profile stay out of the predicate: two rooms
+/// whose profiles differ can still be joinable, and the one case where a profile difference blocks a join is rejected
+/// by upstream's own join check with an explanation of its own, so filtering on it would hide rooms the player can
+/// enter.
 ///
-/// The chip is built by the same helpers the other six chips use — <c>CreateBodyLabel</c> (:7980) for the
-/// section label, <c>ApplyFilterChipStyle</c> (:8248) for the visuals, 44 px like
-/// <c>CreateFilterToggleButton</c> (:2801-2811) — and toggling it replays the two calls upstream's own chips make
-/// (<c>SyncFilterDialogButtons</c> then <c>ApplyRoomFilterState</c>, :2743-2796), so paging, the scroll offset,
-/// the 「筛选」 button accent and the summary line all move the way they do for every other filter.
+/// The chip is built by the same helpers the other six chips use and toggling it replays the two calls upstream's own
+/// chips make (<c>SyncFilterDialogButtons</c> then <c>ApplyRoomFilterState</c>), so paging, the scroll offset, the
+/// 「筛选」 button accent and the summary line all move the way they do for every other filter.
 ///
 /// The dialog sizes itself to its content: <c>CreateDialogShell</c> puts the card in a <c>CenterContainer</c>,
 /// which lays it out at its own combined minimum size, so the extra label and chip row grow the box on their own
@@ -40,20 +39,19 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     private const string ChipTooltip = "只看与当前游戏版本相同的房间";
     private const string UnavailableTooltip = "无法读取本机游戏版本";
 
-    /// <summary>Token appended to <c>DescribeRoomFilterState</c>'s result (:7320-7381).</summary>
+    /// <summary>Token appended to <c>DescribeRoomFilterState</c>'s result.</summary>
     private const string FilterStateToken = "同版本";
 
-    /// <summary>What <c>DescribeRoomFilterState</c> returns when nothing is filtered (:7380).</summary>
+    /// <summary>What <c>DescribeRoomFilterState</c> returns when nothing is filtered.</summary>
     private const string AllRoomsSummary = "全部";
 
-    /// <summary>The build-info fallback when no version source answers (LanConnectBuildInfo.cs:30).</summary>
+    /// <summary>The build-info fallback when no version source answers.</summary>
     private const string UnknownGameVersion = "UNKNOWN";
 
     /// <summary>
-    /// The user's choice. Deliberately process-wide rather than per overlay instance: <c>RebuildForThemeChange</c>
-    /// (:3045) replaces the whole node, and a filter that silently came back on after a theme switch — while the
-    /// chip shown in the rebuilt dialog said the opposite — would be a lie. The chip is always rendered from this
-    /// value, so the two can never disagree.
+    /// The user's choice, deliberately process-wide rather than per overlay instance: a theme switch replaces the
+    /// whole node, and a filter that came back on after one, while the rebuilt dialog's chip said the opposite, would
+    /// be a lie. The chip is rendered from this value, so the two cannot disagree.
     /// </summary>
     private static bool _sameVersionOnly;
 
@@ -70,8 +68,7 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     public string Id => "room-version-filter";
 
     /// <summary>
-    /// The room-list filter row is its own seam: a shape change in that dialog rolls back this repair and nothing
-    /// else
+    /// The room-list filter row is its own seam: a shape change in that dialog rolls back this repair and nothing else.
     /// </summary>
     public FixGroup Group => FixGroup.Filter;
 
@@ -98,14 +95,14 @@ internal sealed class RoomVersionFilterFix : ICompatFix
 
     public void Apply(Harmony harmony)
     {
-        // Applies() resolved and cached these; reaching Apply without them is a host-contract violation, not a
-        // build problem, so it must not be tolerated silently.
+        // Applies() resolved and cached these; reaching Apply without them is a host-contract violation, not a build
+        // problem, so it is not tolerated silently.
         Shape shape = _shape ?? throw new InvalidOperationException(
             "room-version-filter: Applies() did not capture the filter-dialog anchors; refusing to patch blind.");
         PatchTargets targets = _targets;
 
-        // The section is added by a postfix, so upstream's dialog is built exactly as it always was and we only
-        // append to it. A missing body leaves the dialog untouched (see BuildFilterDialogPostfix).
+        // The section is added by a postfix, so upstream's dialog is built exactly as before and we only append to it.
+        // A missing body leaves the dialog untouched (see BuildFilterDialogPostfix).
         harmony.Patch(
             targets.BuildFilterDialog,
             postfix: new HarmonyMethod(typeof(RoomVersionFilterFix), nameof(BuildFilterDialogPostfix)));
@@ -115,25 +112,26 @@ internal sealed class RoomVersionFilterFix : ICompatFix
             targets.SyncFilterDialogButtons,
             postfix: new HarmonyMethod(typeof(RoomVersionFilterFix), nameof(SyncFilterDialogButtonsPostfix)));
 
-        // The predicate itself. Postfix + ref object: the list instance is the caller's own, and the entries are
-        // removed from it in place, so every call site (paging :3428, :5884 and the stage :3562) agrees.
+        // The predicate itself. Postfix + ref object: the list instance is the caller's own and the entries are removed
+        // from it in place, so every call site - paging, stage and the pool refresh - sees the same list.
         harmony.Patch(
             targets.GetFilteredRooms,
             postfix: new HarmonyMethod(typeof(RoomVersionFilterFix), nameof(GetFilteredRoomsPostfix)));
 
-        // Without this the 「筛选」 button stays unlit and the no-match hint claims the room list has nothing
-        // rather than that a filter is on (:3568-3573, :8217-8218).
+        // Without this the 「筛选」 button stays unlit and the no-match hint claims the room list has nothing rather
+        // than that a filter is on.
         harmony.Patch(
             targets.HasRoomSearchOrFilter,
             postfix: new HarmonyMethod(typeof(RoomVersionFilterFix), nameof(HasRoomSearchOrFilterPostfix)));
 
-        // The summary line the player reads (:3569-3573, :3627) has to name this filter like any other.
+        // The summary line the player reads has to name this filter like any other.
         harmony.Patch(
             targets.DescribeRoomFilterState,
             postfix: new HarmonyMethod(typeof(RoomVersionFilterFix), nameof(DescribeRoomFilterStatePostfix)));
 
-        // 「清空」 clears this filter together with the upstream ones. Prefix, not postfix: upstream's own reset
-        // runs either way, and doing ours first keeps the room stage upstream rebuilds at :5947 consistent.
+        // 「清空」 clears this filter together with the upstream ones. Prefix, not postfix: upstream's own reset runs
+        // either way, and clearing ours first means the stage rebuild that its room-search reset triggers already
+        // leaves every room visible.
         harmony.Patch(
             targets.ClearRoomFiltersAndSearch,
             prefix: new HarmonyMethod(typeof(RoomVersionFilterFix), nameof(ClearRoomFiltersAndSearchPrefix)));
@@ -147,17 +145,12 @@ internal sealed class RoomVersionFilterFix : ICompatFix
             BuildInfoTypeName + "." + shape.GetGameVersion.Name + "().");
     }
 
-    // =====================================================================================================
-    // The section itself
-    // =====================================================================================================
-
     /// <summary>
     /// Appends 「版本」 + the chip row to the dialog body upstream just built.
     ///
-    /// The body is located as the first <see cref="VBoxContainer"/> in the shell rather than by walking
-    /// <c>shell → CenterContainer → MarginContainer → PanelContainer → VBoxContainer</c> by hand
-    /// (<c>CreateDialogShell</c> :3158-3175), so a theme or layout change that inserts a wrapper does not
-    /// break this. Missing parts are reported once and skipped — upstream's dialog is left exactly as it was.
+    /// The body is located as the first <see cref="VBoxContainer"/> in the shell rather than by walking shell →
+    /// CenterContainer → MarginContainer → PanelContainer → body by hand, so a theme or layout change that inserts a
+    /// wrapper does not break this. Missing parts are reported once and skipped, leaving upstream's dialog as it was.
     /// </summary>
     private static void BuildFilterDialogPostfix(object? __instance, Control? __result)
     {
@@ -183,8 +176,7 @@ internal sealed class RoomVersionFilterFix : ICompatFix
                 return;
             }
 
-            // Upstream's own factory, so the label is byte-for-byte the style of 「房间类型」/「游戏模式」
-            // (UiText + TextStrong + 16 px, :7980-7989).
+            // Upstream's own factory, so the label carries exactly the style of 「房间类型」/「游戏模式」.
             if (shape.CreateBodyLabel.Invoke(null, new object[] { SectionText }) is not Label sectionLabel)
             {
                 WarnOnce("room-version-filter: " + OverlayTypeName + ".CreateBodyLabel returned no Label; the 「" +
@@ -216,7 +208,7 @@ internal sealed class RoomVersionFilterFix : ICompatFix
                 Disabled = !usable
             };
 
-            // Upstream's own chip painter: same styleboxes, same font sizes, same disabled look (:8248-8267).
+            // Upstream's own chip painter: same styleboxes, font sizes and disabled look.
             shape.ApplyChipStyle.Invoke(null, new object[] { chip, _sameVersionOnly });
             chip.Connect(BaseButton.SignalName.Pressed, Callable.From(() => OnChipPressed(__instance, chip)));
 
@@ -233,15 +225,15 @@ internal sealed class RoomVersionFilterFix : ICompatFix
         }
         catch (Exception exception)
         {
-            // An optional filter must never break the filter dialog. Upstream's dialog stays as it is; say so once.
+            // A failure here costs the section, not the dialog: upstream's dialog stays as it is, and one line says why.
             WarnOnce("room-version-filter: could not add the 「" + SectionText + "」 section: " + Describe(exception));
         }
     }
 
     /// <summary>
-    /// Repaints the chip after upstream synced the other six (:2813-2826, reached from every chip toggle and from
-    /// <c>OpenFilterDialog</c> :2832 and <c>UpdateRoomFilterButtons</c> :8224). Upstream cannot know our chip, so
-    /// without this it keeps whatever style it was given the last time.
+    /// Repaints the chip after upstream synced the other six, from every chip toggle and from the places that open the
+    /// dialog or relight the 「筛选」 button. Upstream cannot know our chip, so without this it keeps whatever style it
+    /// was given the last time.
     /// </summary>
     private static void SyncFilterDialogButtonsPostfix()
     {
@@ -257,8 +249,8 @@ internal sealed class RoomVersionFilterFix : ICompatFix
                 return;
             }
 
-            // ApplyFilterChipStyle also defines the disabled stylebox (:8258, :8265), so a disabled chip is
-            // painted here like any other — it only never receives the press.
+            // ApplyFilterChipStyle also defines the disabled stylebox, so a disabled chip is painted here like any
+            // other; it only never receives the press.
             shape.ApplyChipStyle.Invoke(null, new object[] { chip, _sameVersionOnly });
         }
         catch (Exception exception)
@@ -268,9 +260,9 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     }
 
     /// <summary>
-    /// What upstream's own chips do on press (:2743-2796, :7294-7295): flip the flag, sync the chips, then let
-    /// <c>ApplyRoomFilterState</c> reset the page, the scroll offset and the room stage (:7298-7307). Replaying
-    /// those two calls instead of re-implementing them is what keeps pagination and the 「筛选」 accent correct.
+    /// What upstream's own chips do on press: flip the flag, sync the chips, then let <c>ApplyRoomFilterState</c> reset
+    /// the page, the scroll offset and the room stage. Replaying those two calls instead of re-implementing them is
+    /// what keeps pagination and the 「筛选」 accent correct.
     /// </summary>
     private static void OnChipPressed(object overlay, Button chip)
     {
@@ -304,20 +296,13 @@ internal sealed class RoomVersionFilterFix : ICompatFix
         }
     }
 
-    // =====================================================================================================
-    // The predicate
-    // =====================================================================================================
-
     /// <summary>
     /// Drops every room whose advertised game version differs from this machine's.
     ///
-    /// The entries are removed from the list upstream returned, in place, rather than replaced: the call sites
-    /// assign <c>GetFilteredRooms()</c> straight into <c>List&lt;LobbyRoomSummary&gt;</c> (:3562), so handing back
-    /// a different list instance would throw an <c>InvalidCastException</c> inside the game's own code.
-    ///
-    /// Declared as <c>ref object</c> because <c>LobbyRoomSummary</c> is a host type that is deliberately not
-    /// referenced at compile time; Harmony binds the by-ref result to any assignable declared type (verified
-    /// against the shipped 0Harmony 2.4.2 in this session).
+    /// The entries are removed from the list upstream returned, in place, rather than replaced: each call site either
+    /// takes that list straight into <c>List&lt;LobbyRoomSummary&gt;</c> or reads its <c>Count</c>, so they all see the
+    /// same object. Declared as <c>ref object</c> because <c>LobbyRoomSummary</c> is a host type that is deliberately
+    /// not referenced at compile time.
     /// </summary>
     private static void GetFilteredRoomsPostfix(ref object? __result)
     {
@@ -354,8 +339,8 @@ internal sealed class RoomVersionFilterFix : ICompatFix
         }
         catch (Exception exception)
         {
-            // Never rethrow: this runs inside the room-list rebuild. Leaving the list untouched shows more rooms
-            // than asked for, which is a far smaller problem than an exception in the lobby stage.
+            // This runs inside the room-list rebuild, so it does not rethrow: leaving the list untouched shows more
+            // rooms than asked for, which is a far smaller problem than an exception in the lobby stage.
             WarnOnce("room-version-filter: could not narrow the room list: " + Describe(exception));
         }
     }
@@ -385,8 +370,8 @@ internal sealed class RoomVersionFilterFix : ICompatFix
             }
 
             string current = __result ?? string.Empty;
-            // Upstream returns 「全部」 when nothing is selected (:7380). Keeping that word and appending would
-            // read 「全部 · 同版本」, which contradicts itself.
+            // Upstream returns 「全部」 when nothing is selected. Keeping that word and appending would read
+            // 「全部 · 同版本」, which contradicts itself.
             __result = current.Length == 0 || string.Equals(current, AllRoomsSummary, StringComparison.Ordinal)
                 ? FilterStateToken
                 : current + " · " + FilterStateToken;
@@ -398,8 +383,8 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     }
 
     /// <summary>
-    /// 「清空」 resets upstream's six flags (:5938-5948); ours is cleared first so the rebuild it triggers at
-    /// :5947 already shows every room again.
+    /// 「清空」 resets upstream's six flags; ours is cleared first, so the stage rebuild that upstream's own room-search
+    /// reset triggers already shows every room again.
     /// </summary>
     private static void ClearRoomFiltersAndSearchPrefix()
     {
@@ -447,11 +432,11 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     }
 
     /// <summary>
-    /// This machine's game version through upstream's own resolver (<c>LanConnectBuildInfo.GetGameVersion</c>
-    /// :25-31), which reads <c>ReleaseInfoManager</c>, then the git commit, then the game assembly version.
+    /// This machine's game version through upstream's own resolver, which reads <c>ReleaseInfoManager</c>, then the git
+    /// commit, then the game assembly version.
     ///
-    /// Cached only once it produced something usable: the resolver answers <c>UNKNOWN</c> while the release info
-    /// is still loading, and caching that would keep the chip disabled for the rest of the session.
+    /// Cached only once it produced something usable: the resolver answers <c>UNKNOWN</c> while the release info is
+    /// still loading, and caching that would keep the chip disabled for the rest of the session.
     /// </summary>
     private static string LocalGameVersion(Shape shape)
     {
@@ -470,12 +455,10 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     }
 
     /// <summary>
-    /// Trim, then drop one leading <c>v</c>/<c>V</c>, then compare case-insensitively. Upstream compares the same
-    /// two strings with <c>Ordinal</c> after the same trim/strip (LanConnectLobbyManagedJoinFlow.cs:406-420), so a
-    /// room only reaches this comparison when its shape already matches; the case-insensitive comparison here is
-    /// the deliberate difference — <c>V0.113.0</c> and <c>v0.113.0</c> are the same build, not two.
-    /// Returns <see cref="string.Empty"/> for anything unusable (empty, whitespace-only,
-    /// <see cref="UnknownGameVersion"/>).
+    /// Trim, then drop one leading <c>v</c>/<c>V</c>. Upstream normalises the same way before it compares, so a room
+    /// only reaches this comparison when its shape already matches; comparing case-insensitively here is the
+    /// deliberate difference, because <c>V0.113.0</c> and <c>v0.113.0</c> are the same build. Returns
+    /// <see cref="string.Empty"/> for anything unusable (empty, whitespace-only, <see cref="UnknownGameVersion"/>).
     /// </summary>
     private static string NormalizeVersion(string? value)
     {
@@ -494,15 +477,9 @@ internal sealed class RoomVersionFilterFix : ICompatFix
         return normalized;
     }
 
-    // =====================================================================================================
-    // Layout
-    // =====================================================================================================
-
     /// <summary>
-    /// The dialog body: first <see cref="VBoxContainer"/> in child order. <c>CreateDialogShell</c> puts nothing
-    /// else that is one on the way to the body (shell → veil / CenterContainer → MarginContainer →
-    /// PanelContainer → body, :3158-3175), and the pixel-border panel adds no child containers (only
-    /// styleboxes).
+    /// The dialog body: first <see cref="VBoxContainer"/> in child order. Nothing else on the way to the body is one,
+    /// and the pixel-border panel adds no child containers of its own, only styleboxes.
     /// </summary>
     private static VBoxContainer? FirstVBox(Node root)
     {
@@ -556,10 +533,6 @@ internal sealed class RoomVersionFilterFix : ICompatFix
     private static string Describe(Exception exception) =>
         exception.GetType().Name + ": " + exception.Message;
 
-    // =====================================================================================================
-    // Logging
-    // =====================================================================================================
-
     private const int MaxWarnedMessages = 8;
 
     /// <summary>
@@ -582,10 +555,6 @@ internal sealed class RoomVersionFilterFix : ICompatFix
         Entry.Warn(message);
     }
 
-    // =====================================================================================================
-    // Anchors
-    // =====================================================================================================
-
     /// <summary>Methods this repair patches, install-time only</summary>
     internal readonly record struct PatchTargets(
         MethodInfo BuildFilterDialog,
@@ -596,8 +565,8 @@ internal sealed class RoomVersionFilterFix : ICompatFix
         MethodInfo ClearRoomFiltersAndSearch);
 
     /// <summary>
-    /// Every reflection anchor the runtime path uses, filled in by <see cref="Shape.TryCapture"/> only after all of
-    /// them resolved. Nothing here can be null once <see cref="Apply"/> installed the repair.
+    /// Every reflection anchor the runtime path uses, filled in by <see cref="Shape.TryCapture"/> once all of them
+    /// resolved.
     /// </summary>
     internal sealed class Shape
     {
@@ -617,28 +586,22 @@ internal sealed class RoomVersionFilterFix : ICompatFix
             GetGameVersion = getGameVersion;
         }
 
-        /// <summary><c>CreateBodyLabel(string)</c>, static private (:7980)</summary>
         internal MethodInfo CreateBodyLabel { get; }
 
-        /// <summary><c>ApplyFilterChipStyle(Button, bool)</c>, static private (:8248)</summary>
         internal MethodInfo ApplyChipStyle { get; }
 
-        /// <summary><c>SyncFilterDialogButtons()</c> (:2813)</summary>
         internal MethodInfo SyncButtons { get; }
 
-        /// <summary><c>ApplyRoomFilterState(string)</c> (:7298)</summary>
         internal MethodInfo ApplyFilterState { get; }
 
-        /// <summary><c>LobbyRoomSummary.Version</c> (LanConnectLobbyModels.cs:25)</summary>
         internal PropertyInfo RoomVersion { get; }
 
-        /// <summary><c>LanConnectBuildInfo.GetGameVersion()</c> (:25)</summary>
         internal MethodInfo GetGameVersion { get; }
 
         /// <summary>
         /// Resolves everything by name and reports every miss at once. Metadata only: no <c>Invoke</c>, no
-        /// <c>Activator</c>, no Godot node, no <c>typeof</c> on a host type — so this is safe in the headless
-        /// harness, where there is no Godot runtime behind the loaded assembly.
+        /// <c>Activator</c>, no Godot node, no <c>typeof</c> on a host type, so it also runs in the headless harness
+        /// where no Godot runtime sits behind the loaded assembly.
         /// </summary>
         internal static bool TryCapture(Assembly host, out Shape? shape, out PatchTargets targets, out string missing)
         {
@@ -679,8 +642,8 @@ internal sealed class RoomVersionFilterFix : ICompatFix
             RequireReturn(applyChipStyle, "System.Void", problems);
             RequireReturn(createBodyLabel, "Godot.Label", problems);
 
-            // The postfix removes entries from the list in place; that only works while the result is still the
-            // exact List<LobbyRoomSummary> the call sites cast it to (:3562).
+            // The postfix removes entries from the list in place, so the result has to stay the exact
+            // List<LobbyRoomSummary> upstream returns.
             if (getFiltered != null && !ReturnsListOf(getFiltered.ReturnType, RoomSummaryTypeName))
             {
                 problems.Add(

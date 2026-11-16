@@ -5,27 +5,8 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
     /// <summary>
-    /// Makes the announcement bar follow the server the public channel is attached to.
-    ///
-    /// One patch, one linkage, nothing on screen: the bar keeps upstream's shape, its refresh cadence and its
-    /// request count. Only the destination changes.
-    ///
-    /// Why the patch sits on `LobbyApiClient.GetAnnouncementsAsync` (<c>LanConnectLobbyApiClient.cs:115-119</c>) and
-    /// not on the overlay's `FetchAnnouncementsSafeAsync` (<c>LanConnectLobbyOverlay.cs:3483-3501</c>): that helper is
-    /// only reached while `RefreshRoomsAsync` runs, and this build replaces `RefreshRoomsAsync` with the pool
-    /// refresh (<c>PoolRefreshFix</c>), which fetches announcements directly through
-    /// <c>LobbyApiClient.GetAnnouncementsAsync</c> (<c>PoolRefreshFix.cs:192</c> -> <c>:437</c>). Patching the helper would
-    /// therefore be dead code in the shipped mod. `GetAnnouncementsAsync` is the single method both paths call,
-    /// so one patch covers both, and there is no second client swap to keep in sync.
-    ///
-    /// How the destination changes without a request of our own: the prefix declines the original call
-    /// (`ref object __result`, the documented Harmony idiom for a reference-returning method) and reruns the very
-    /// same method on a client aimed at the channel's server. Same method, same cadence, same caller - one request,
-    /// different host. When the channel is on the lobby's own server the prefix simply returns true.
-    ///
-    /// The linkage lives in `chat-server-switch`: a successful switch zeroes the overlay's
-    /// `_timeUntilAutoRefresh` (<c>LanConnectLobbyOverlay.cs:232</c>, consumed at <c>:736-740</c>) so the next frame runs
-    /// one ordinary refresh instead of waiting out the 8 s timer.
+    /// Makes the announcement bar follow the server the public channel is attached to. The bar keeps upstream's
+    /// shape, refresh cadence and request count; only the destination changes.
     /// </summary>
 internal sealed class AnnouncementSourceFix : ICompatFix
 {
@@ -99,6 +80,8 @@ internal sealed class AnnouncementSourceFix : ICompatFix
         Shape shape = _shape ?? throw new InvalidOperationException(
             "announcement-source: Applies() did not capture the lobby client shape; refusing to patch blind.");
 
+        // Not the helper inside RefreshRoomsAsync: this build replaces that method with the pool refresh, which
+        // fetches through the API client directly, so the client method is the one both paths call.
         harmony.Patch(
             shape.GetAnnouncements,
             prefix: new HarmonyMethod(typeof(AnnouncementSourceFix), nameof(GetAnnouncementsPrefix))
@@ -112,7 +95,7 @@ internal sealed class AnnouncementSourceFix : ICompatFix
     }
 
     /// <summary>
-    /// Runs the same fetch against the channel's server. Synchronous: it hands back a task, it never waits.
+    /// Runs the same fetch against the channel's server. Synchronous: it hands back a task and does not wait for it.
     /// </summary>
     private static bool GetAnnouncementsPrefix(object[] __args, ref object __result)
     {
@@ -175,12 +158,11 @@ internal sealed class AnnouncementSourceFix : ICompatFix
     }
 
     /// <summary>
-    /// One `LobbyApiClient` per selected server, reused across refreshes.
+    /// One client per selected server, reused across refreshes.
     ///
-    /// Reuse is not an optimisation: the caller owns the client it passes in (upstream uses
-    /// `using LobbyApiClient apiClient = CreateConfigured()`, <c>LanConnectLobbyOverlay.cs:3388</c>) but not the one this
-    /// repair substitutes, so a fresh client every 8 s tick would leak a socket pool per tick. A replaced client is
-    /// retired rather than disposed immediately, because the previous refresh's request may still be in flight.
+    /// Reuse is not an optimisation: the caller owns the client it passes in but not the one this repair substitutes,
+    /// so a fresh client every refresh tick would leak a socket pool per tick. A replaced client is retired rather
+    /// than disposed immediately, because the previous request may still be in flight.
     /// </summary>
     private static object? EnsureClient(Shape shape, string address)
     {
@@ -293,8 +275,8 @@ internal sealed class AnnouncementSourceFix : ICompatFix
     }
 
     /// <summary>
-    /// Every member this repair touches, resolved once in <see cref="Applies"/> and never again. Metadata only:
-    /// nothing is invoked while probing, and no Godot call happens anywhere in this file.
+    /// Every member this repair touches, resolved once in <see cref="Applies"/>. Metadata only: nothing is invoked
+    /// while probing, and no Godot call is made anywhere in this file, because the smoke test runs without an engine.
     /// </summary>
     internal sealed class Shape
     {
@@ -340,9 +322,8 @@ internal sealed class AnnouncementSourceFix : ICompatFix
         }
 
         /// <summary>
-        /// <c>LobbyApiClient(string baseUrl, string? readToken, string? createToken, HttpMessageHandler?,
-        /// Action&lt;string&gt;?, bool)</c> (<c>LanConnectLobbyApiClient.cs:23-30</c>), matched by shape so parameter
-        /// renames cannot drift the anchor.
+        /// <c>LobbyApiClient(string, string?, string?, HttpMessageHandler?, Action&lt;string&gt;?, bool)</c>, matched by
+        /// shape so parameter renames cannot drift the anchor.
         /// </summary>
         private static ConstructorInfo? FindConstructor(Type client)
         {

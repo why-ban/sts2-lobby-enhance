@@ -7,29 +7,9 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
     /// <summary>
-    /// Puts <c>‹</c> <c>›</c> next to the lobby server chat panel's title and moves the public channel to another
-    /// server's channel with them. It does not switch the lobby server, does not leave the room and does not write
-    /// config.json - only which server's public chat this client is attached to changes.
-    ///
-    /// Why the class under patch is the panel, not the overlay: the title row is <c>LanConnectBasicChatPanel</c>'s
-    /// own <c>HBoxContainer</c> (<c>LanConnectBasicChatPanel.cs:860-889</c>), and upstream rewrites
-    /// <c>ChatChannelTitle</c>'s text from two places, both inside that class (<c>:2288-2295</c>,
-    /// <c>:2448-2453</c>). A postfix on <c>UpdateAvailability()</c> runs after both, and a postfix on
-    /// <c>_Process()</c> gives the row its per-frame refresh, so nothing has to be re-found or cached across the
-    /// panel's rebuilds.
-    ///
-    /// Why the switch goes through <c>LanConnectRotatingServerChatPort.ConnectAsync</c> and not
-    /// <c>LanConnectLobbyRuntime.ConnectServerChatAsync</c>: the runtime method reconnects the same
-    /// <c>LanConnectServerChatClient</c>, whose <c>_connectStarted</c> latch only ever fires once
-    /// (<c>LanConnectServerChatClient.cs:254-257</c>), and whose <c>MarkPermanentStop(Unsupported)</c>
-    /// (<c>:181-189</c>, never retried at <c>:1048-1059</c>) would poison every later attempt. The rotating port
-    /// builds a new client and a new coordinator per call and disposes the old one
-    /// (<c>LanConnectChatRuntimePorts.cs:777-838</c>), so the overlay's own
-    /// <c>EnsureCurrentLobbyServerChatBinding</c> (<c>LanConnectLobbyOverlay.cs:2185-2201</c>) sees a new State
-    /// object at the next frame (<c>:729</c>) and rebinds the panel by itself.
-    ///
-    /// Every Godot call lives in a patch body. <see cref="Applies"/> and <see cref="Apply"/> are reflection and
-    /// <c>harmony.Patch</c> only, because the smoke test runs both in a plain .NET process with no engine.
+    /// Puts ‹ › and a ⟳ button in the lobby chat panel's title row; they reattach the public channel to another
+    /// server's channel. The lobby server, the room and config.json are untouched - only which server's public chat
+    /// this client is attached to changes.
     /// </summary>
 internal sealed class ChatServerSwitchFix : ICompatFix
 {
@@ -57,14 +37,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     private const string IconsGetMethodName = "Get";
 
-    /// <summary>
-    /// Lucide's "refresh-cw". Its SVG in the panel's own icon set
-    /// (<c>LanConnectLucideIconLoader.cs:257-259</c>) is byte-identical to the lobby REFRESH button's glyph
-    /// (<c>LanConnectLobbyOverlay.cs:8645-8652</c>), so the two buttons show the same icon.
-    /// </summary>
+    /// <summary>Lucide's "refresh-cw", the same four paths the lobby's REFRESH button draws.</summary>
     private const string ResetIconName = "refresh-cw";
 
-    /// <summary>Text stand-in for the reset glyph when the Lucide texture cannot be decoded.</summary>
     private const string ResetFallbackGlyph = "⟳";
 
     private const int ResetFallbackFontSize = 16;
@@ -97,13 +72,13 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     private const string ClientBaseUriFieldName = "_lobbyBaseUri";
 
-    /// <summary>The node upstream gives the sidebar panel (<c>LanConnectLobbyOverlay.cs:1762</c>).</summary>
+    /// <summary>Upstream's node name for the sidebar chat panel.</summary>
     private const string LobbyPanelNodeName = "LobbyServerChatPanel";
 
-    /// <summary>The lobby overlay's node name (<c>LanConnectConstants.LobbyOverlayName</c>, const value).</summary>
+    /// <summary>The value of upstream's <c>LanConnectConstants.LobbyOverlayName</c>.</summary>
     private const string OverlayNodeName = "LanConnectLobbyOverlay";
 
-    /// <summary>Style value of the sidebar panel (<c>LanConnectLobbyOverlay.cs:1763</c>).</summary>
+    /// <summary>The sidebar panel's <c>ChatVisualStyle</c> value.</summary>
     private const string LobbyStyleName = "LobbySidebar";
 
     private const string SwitchRowNodeName = "LobbyEnhanceChatServerSwitch";
@@ -111,7 +86,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// <summary>Per-label meta key holding the suffix this repair appended, so the next pass can strip it.</summary>
     private const string TitleSuffixMetaKey = "sts2le_chat_title_suffix";
 
-    /// <summary>Sits between upstream's title text and the server name: "频道聊天" + this + "魔仙堡".</summary>
     private const string TitleSeparator = " · ";
 
     /// <summary>Short name limit in the lobby sidebar; it is 200 px wide before layout gives it more.</summary>
@@ -139,7 +113,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(12d);
 
-    /// <summary>Whole-walk budget; also the longest the arrows stay disabled.</summary>
+    /// <summary>Whole-walk budget, checked between hops only.</summary>
     private static readonly TimeSpan WalkBudget = TimeSpan.FromSeconds(45d);
 
     private static readonly TimeSpan UsableStateInterval = TimeSpan.FromMilliseconds(500d);
@@ -180,7 +154,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// </summary>
     private static readonly Queue<string> PendingInfo = new();
 
-    /// <summary>One line when the in-run overlay had to move off the unsupported 频道 tab.</summary>
     /// <summary>One line per rendering path, so a real-machine log says which one the button actually used.</summary>
     private static int _iconLoggedTexture;
 
@@ -193,8 +166,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     public string Id => "chat-server-switch";
 
     /// <summary>
-    /// The public channel's attachment point. A shape change in the chat panel rolls back this repair and the
-    /// touch fixes only; the room list and the announcement carousel keep their own groups.
+    /// A shape change in the chat panel rolls back this repair and room-chat-hint-passthrough, the other member of
+    /// group Chat. The touch, pool and announce repairs are separate groups.
     /// </summary>
     public FixGroup Group => FixGroup.Chat;
 
@@ -234,7 +207,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         Shape shape = _shape ?? throw new InvalidOperationException(
             "chat-server-switch: Applies() did not capture the chat panel shape; refusing to patch blind.");
 
-        // Upstream lets a chat connect failure fail the whole lobby switch (LanConnectChatRuntimePorts.cs:1174-1178).
+        // The rotating port builds a new chat client and coordinator per call, so the overlay rebinds the panel by
+        // itself. The runtime's own ConnectServerChatAsync cannot do this: it reconnects the same client, whose
+        // connect latch fires once and whose permanent stop is never retried.
         harmony.Patch(
             shape.PortConnect,
             postfix: new HarmonyMethod(typeof(ChatServerSwitchFix), nameof(PortConnectPostfix))
@@ -267,7 +242,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// Runs after upstream has just rewritten the title and the status text, so the row is refreshed on the same
     /// pass instead of a frame later.
     /// </summary>
-    // ReSharper disable once UnusedParameter.Local — Harmony binds by name.
+    // ReSharper disable once UnusedParameter.Local (Harmony binds by name).
     private static void UpdateAvailabilityPostfix(object __instance)
     {
         Sync(__instance);
@@ -277,7 +252,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// Per-frame tick. Upstream refreshes the title from state events only, so a switch that completes on a
     /// worker thread has no other place to become visible in the same frame.
     /// </summary>
-    // ReSharper disable once UnusedParameter.Local — Harmony binds by name.
+    // ReSharper disable once UnusedParameter.Local (Harmony binds by name).
     private static void ProcessPostfix(object __instance)
     {
         Sync(__instance);
@@ -302,7 +277,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         }
         catch (Exception exception)
         {
-            // A missing row must never break the chat panel. Leave upstream's title row as it is and say so once.
+            // A missing row costs the switch row only: leave upstream's title row as it is and say so once.
             WarnOnce("could not update the public channel switch row: " +
                      exception.GetType().Name + ": " + exception.Message);
         }
@@ -356,18 +331,16 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         SwitchState state = Volatile.Read(ref _state);
 
         // The name is recomputed from what the channel is actually attached to, not from what the last step asked
-        // for: a switch in flight while the lobby server changes used to leave the label pointing at a server the
-        // channel never reached. Reading the live client every frame makes any such race heal on the next frame.
+        // for: a step can outlive the lobby server it started under, and reading the live client every frame heals
+        // that race on the next frame.
         string localName = ResolveLocalName(configUrl);
         string? actual = ReadLiveTargetAddress(shape) ?? state.TargetAddress;
         bool busy = state.Phase is SwitchPhase.Probing or SwitchPhase.Connecting;
         string target = CurrentTargetLabel(state, localName, actual, configUrl);
         (string text, string tooltip) = Describe(state, target, configUrl, actual);
 
-        // The title is written FIRST, before anything else in this method can fail: a real-machine report showed
-        // the arrows present with an empty name, which is exactly what happens when a later step throws after the
-        // widgets exist. The name now rides on the title itself ("频道聊天 · 魔仙堡", arrows furthest right), so a
-        // separate label - which was what went missing on the narrow sidebar - is not involved at all.
+        // The title is written before anything else in this method can fail: the name rides on the title text itself
+        // ("频道聊天 · 魔仙堡", arrows furthest right), so a later throw still leaves the row named.
         if (shape.TitleLabel.GetValue(panel) is Label title && GodotObject.IsInstanceValid(title))
         {
             ApplyTitle(title, text, tooltip, widgets);
@@ -407,10 +380,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// Rewrites the title to "频道聊天 · 魔仙堡" without accumulating suffixes: upstream rewrites the title on
-    /// every state change (<c>LanConnectBasicChatPanel.cs:2450-2452</c>, <c>:2292-2294</c>) and this runs after it,
-    /// while our own per-frame tick can also run without upstream having touched the title, so the previously
-    /// applied suffix is stripped first.
+    /// Rewrites the title to the panel's own text plus this repair's suffix without accumulating suffixes: upstream
+    /// rewrites the title from inside the panel on every state change, and the per-frame tick also runs on frames
+    /// where upstream did not, so whatever this repair appended last is stripped first.
     /// </summary>
     private static void ApplyTitle(Label title, string name, string tooltip, RowWidgets widgets)
     {
@@ -424,8 +396,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             title.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
         }
 
-        // The suffix is remembered per label: the lobby sidebar and the in-run overlay are two separate labels,
-        // and one panel's reset must not make the other append its name a second time.
+        // Remembered on the label: on a frame where upstream did not rewrite the text, last frame's suffix is still
+        // in it and has to come off before this frame's goes on.
         string applied = ReadTitleSuffix(title);
         string baseText = title.Text;
         if (applied.Length > 0 && baseText.EndsWith(applied, StringComparison.Ordinal))
@@ -433,7 +405,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             baseText = baseText[..^applied.Length];
         }
 
-        // A blank name would render as a dangling " · ". Every source already falls back, this is the last guard.
+        // A blank name would render as a dangling " · ".
         string shown = string.IsNullOrWhiteSpace(name) ? LocalServerLabel : name.Trim();
         string suffix = TitleSeparator + shown;
         string next = baseText + suffix;
@@ -462,8 +434,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     /// <summary>
     /// True while this walk still owns the state. A lobby-server change bumps the generation, and a voided walk
-    /// must not publish a target: that is the race a player can trigger by switching the chat server and the
-    /// lobby server in quick succession.
+    /// publishing a target is the race a player triggers by switching the chat server and the lobby server in quick
+    /// succession.
     /// </summary>
     private static bool IsCurrentGeneration(int generation) =>
         generation == Volatile.Read(ref _stepGeneration);
@@ -480,13 +452,12 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// What the public channel is attached to <em>right now</em>, read from the live client:
-    /// <c>port.Current</c> (<c>LanConnectChatRuntimePorts.cs:758-768</c>) → the coordinator's <c>_client</c>
-    /// (<c>:44</c>) → <c>LanConnectServerChatClient._lobbyBaseUri</c> (<c>LanConnectServerChatClient.cs:72</c>).
+    /// What the public channel is attached to right now, read from the live client: the port's current coordinator,
+    /// that coordinator's client, and the client's base URI.
     ///
-    /// This is the only value that cannot lie: our own state records what a step *asked for*, and a step can
-    /// outlive the lobby server it was started under. Any missing link answers null, which the label treats as
-    /// "fall back to the configured server".
+    /// This is the only value that cannot lie: our own state records what a step asked for, and a step can outlive
+    /// the lobby server it was started under. A missing link answers null, which the label reads as "fall back to
+    /// the configured server".
     /// </summary>
     private static string? ReadLiveTargetAddress(Shape shape)
     {
@@ -559,11 +530,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// <summary>
     /// Swallows exactly one exception type out of the port's final connect step.
     ///
-    /// The upstream shape this repairs: <c>LanConnectServerSwitchCoordinator.SwitchCoreAsync</c> persists the new
-    /// address (<c>LanConnectChatRuntimePorts.cs:1174</c>) and only then awaits the chat connect (<c>:1178</c>), so a
-    /// target without public channel v1 throws <see cref="NotSupportedException"/> out of the whole switch - the
-    /// address is already saved and the UI reports a failed switch. Nothing else is affected: any other exception
-    /// still faults the task, and this repair's own preflight still keeps our channel switches honest.
+    /// Upstream's switch persists the new lobby address and only then awaits the chat connect, so a target without
+    /// public channel v1 throws <see cref="NotSupportedException"/> out of the whole switch after the address is
+    /// already saved. Any other exception still faults the task.
     /// </summary>
     private static Task SwallowUnsupportedAsync(Task task) => SwallowCoreAsync(task);
 
@@ -601,8 +570,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// Zeroes <c>LanConnectLobbyOverlay._timeUntilAutoRefresh</c> (<c>:232</c>, consumed at <c>:736-740</c>) so the
-    /// next frame runs one ordinary refresh. Nothing is fetched from here and no timer of our own is created.
+    /// Zeroes the lobby overlay's own auto-refresh countdown so the next frame runs one ordinary refresh instead of
+    /// waiting out the interval. Nothing is fetched from here and no timer of our own is created.
     /// </summary>
     private static void NudgeOverlayAutoRefresh(Shape shape)
     {
@@ -746,11 +715,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// The short name of the server the panel is attached to, for the title's tail.
-    ///
-    /// Three sources, tried in order: the operator name the server list carries, the address host, then the
-    /// literal "本服". The last one is not decoration: a real-machine report showed the name missing entirely, and
-    /// a blank tail is worse than an imprecise one, so this method is total - it always returns something.
+    /// The short name of the server the panel is attached to, for the title's tail: the operator name the server
+    /// list carries, else the address host, else "本服". The last one is what keeps the tail non-empty, because a
+    /// blank tail reads worse than an imprecise one.
     /// </summary>
     private static string ResolveLocalName(string configUrl)
     {
@@ -803,9 +770,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// True only for the lobby sidebar's public channel panel (<c>LanConnectLobbyOverlay.cs:1756-1768</c>).
-    /// The room overlay builds the same class (<c>LanConnectRoomChatOverlay.cs:594-599</c>) and is deliberately
-    /// left alone: a channel switch there costs the room history, which players value more than the feature.
+    /// True only for the lobby sidebar's chat panel. The room overlay builds the same class and is deliberately left
+    /// alone: a channel switch there costs the room history.
     /// </summary>
     private static bool IsLobbySidebarPanel(Shape shape, Control panel)
     {
@@ -838,8 +804,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             return null;
         }
 
-        // The title row is an HBoxContainer (<c>LanConnectBasicChatPanel.cs:860</c>); anything else means the
-        // layout was reworked and guessing where the row belongs would produce the "奇形怪状" this mod avoids.
+        // The title row is an HBoxContainer; anything else means the layout was reworked, and guessing where the row
+        // belongs would produce the "奇形怪状" this mod avoids.
         if (title.GetParent() is not HBoxContainer titleRow)
         {
             return null;
@@ -889,11 +855,11 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// The reset button: same button styling and size as the arrows, with the lobby's REFRESH glyph.
+    /// The reset button: the arrows' styling and size, with the lobby's REFRESH glyph.
     ///
     /// Two renderings, because the icon texture is not guaranteed: the Lucide loader decodes an embedded SVG, and
-    /// when that fails (a preview host without the pck, or a decoder miss) the button used to come out empty - a
-    /// real report showed a 24x24 button with nothing in it. The fallback is the same shape as text.
+    /// when that fails (a preview host without the pck, a decoder miss) a 24 px button with nothing in it is worse
+    /// than the same glyph as text.
     /// </summary>
     private static Button CreateResetButton(Shape shape, Control panel)
     {
@@ -910,10 +876,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         button.FocusMode = Control.FocusModeEnum.None;
         button.MouseFilter = Control.MouseFilterEnum.Stop;
 
-        // The panel's button style carries 10 px of horizontal content margin (LanConnectBasicChatPanel.cs:2972-2975),
-        // which is right for a text button and fatal for a 24 px one: 20 px of margin leaves ~4 px for the glyph,
-        // and a real render came out as a bare button with a 1 px speck. Style is otherwise untouched, so the
-        // control still looks like its neighbours.
+        // The panel's button style carries 10 px of horizontal content margin, right for a text button and fatal for
+        // a 24 px one: 20 px of margin leaves about 4 px for the glyph. Style is otherwise untouched, so the control
+        // still looks like its neighbours.
         TightenContentMargins(button);
         button.TooltipText = "回到置顶服务器的频道";
 
@@ -950,13 +915,11 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// Pulls "refresh-cw" out of the panel's own Lucide set. That SVG
-    /// (<c>LanConnectLucideIconLoader.cs:257-259</c>) is byte-identical to the lobby REFRESH button's glyph
-    /// (<c>LanConnectLobbyOverlay.cs:8645-8652</c>), so the two icons match.
+    /// Pulls "refresh-cw" out of the panel's own Lucide set, the glyph the lobby's REFRESH button draws.
     ///
-    /// "Got a texture" is not the same as "got the glyph": when the SVG decoder fails, the loader returns its own
-    /// placeholder - a magenta X drawn at <c>pixelSize</c> (<c>LanConnectLucideIconLoader.cs:163-179</c>). A real
-    /// decode is transparent in the corner, the placeholder is not, so that is what tells them apart here.
+    /// "Got a texture" is not "got the glyph": when the SVG decoder fails the loader returns its own placeholder, a
+    /// magenta X drawn at <c>pixelSize</c>. A real decode is transparent in the corner and the placeholder is not,
+    /// which is what tells them apart here.
     /// </summary>
     private static Texture2D? TryLoadResetIcon(
         Shape shape,
@@ -1004,9 +967,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// The loader's failure texture is a magenta X on a transparent field
-    /// (<c>LanConnectLucideIconLoader.cs:167</c>: <c>Color(1f, 0.2f, 0.4f, 1f)</c>), so its top-left pixel is
-    /// opaque. A decoded Lucide glyph is stroke-only and leaves that pixel empty.
+    /// The loader's failure texture is a magenta X over a transparent field, so its top-left pixel is opaque. A
+    /// decoded Lucide glyph is stroke-only and leaves that pixel empty.
     /// </summary>
     private static bool IsDecoderPlaceholder(Texture2D texture)
     {
@@ -1033,8 +995,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     /// <summary>
     /// Zeroes the content margins of every stylebox state on this one button, so its glyph gets the whole square.
-    /// The styleboxes belong to this button alone (<c>CreateButtonStyle</c> builds a fresh one per state), so this
-    /// cannot leak into the panel's other buttons.
+    /// The styleboxes belong to this button alone (the panel's button style builds a fresh one per state).
     /// </summary>
     private static void TightenContentMargins(Button button)
     {
@@ -1079,13 +1040,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// The reset button: return the public channel to a fixed server, through the same preflight and the same
-    /// port as the arrows.
-    ///
-    /// The two panels want different targets and that difference is the whole point:
-    /// the lobby sidebar returns to the pinned server (<c>LanConnectServerListBootstrap.FeaturedServerAddress</c>,
-    /// <c>LanConnectServerListBootstrap.cs:43</c>), while the in-run overlay returns to the lobby server itself
-    /// (<c>LanConnectConfig.LobbyServerBaseUrl</c>) - the room overlay has no notion of the featured server.
+    /// Returns the public channel to upstream's pinned server, through the same preflight and the same port as the
+    /// arrows.
     /// </summary>
     private static void BeginReset(Shape shape)
     {
@@ -1150,8 +1106,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// Worker half of the reset. The lobby side degrades to the first chat-capable candidate when the pinned
-    /// server does not speak v1; the room side stays where it is, because there is no "next" to fall back to.
+    /// Worker half of the reset. When the pinned server does not speak v1 the reset degrades to the first
+    /// chat-capable candidate; with no candidate the current channel stays.
     /// </summary>
     private static async Task ResetAsync(
         Shape shape,
@@ -1253,9 +1209,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// Starts one walk. Runs on the main thread because <c>ResolveCurrentPlayerNetId</c> may reach
-    /// <c>PlatformUtil.GetLocalPlayerId</c> (<c>LanConnectLobbyRuntime.cs:3406</c>), which is a game API; the
-    /// string it returns is handed to the worker.
+    /// Starts one walk. Runs on the main thread because <c>ResolveCurrentPlayerNetId</c> may reach the game's own
+    /// <c>PlatformUtil.GetLocalPlayerId</c>; the string it returns is handed to the worker.
     /// </summary>
     private static void BeginStep(int direction)
     {
@@ -1311,8 +1266,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// Worker-thread walk. Never touches a node and never throws: the only channel back to the UI is
-    /// <see cref="SetState"/>, which the panel's own <c>_Process</c> postfix picks up on the main thread.
+    /// Worker-thread walk. It touches no node; the only channel back to the UI is <see cref="SetState"/>, which the
+    /// panel's own <c>_Process</c> postfix picks up on the main thread.
     /// </summary>
     private static async Task StepAsync(
         Shape shape,
@@ -1551,12 +1506,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     }
 
     /// <summary>
-    /// The configured lobby base URL, or "" when the getter cannot answer.
-    ///
-    /// Never throws: this used to be the first config read after the switch row was built, and a getter that
-    /// throws (the default URL resolution touches the packaged defaults file) left the row present with an empty
-    /// name - the exact failure a real-machine screenshot showed. A missing URL now costs the name its address
-    /// fallback, nothing else.
+    /// The configured lobby base URL, or "" when the getter cannot answer. That getter resolves the packaged
+    /// defaults file, so it can throw: a missing URL then costs the name its address fallback and nothing else.
     /// </summary>
     private static string ReadConfigBaseUrl(Shape shape)
     {
