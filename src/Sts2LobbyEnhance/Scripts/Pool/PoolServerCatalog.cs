@@ -131,6 +131,9 @@ internal sealed class PoolAnchors
 
     internal MethodInfo? GatherCloudflareCandidates;
 
+    /// <summary>Upstream's pinned entry, the one its own server list keeps first</summary>
+    internal FieldInfo? FeaturedAddress;
+
     /// <summary>/peers/metrics, which is where the create guard comes from</summary>
     internal MethodInfo? FetchSnapshot;
 
@@ -353,6 +356,18 @@ internal sealed class PoolAnchors
             bootstrap,
             "GatherCloudflareCandidatesAsync",
             "System.Threading.CancellationToken");
+
+        // A public const on the host type, so not through OptionalField: that one binds instance fields only, and a
+        // pin that stops resolving costs the list's first slot, not the list
+        FieldInfo? featured = bootstrap?.GetField(
+            "FeaturedServerAddress",
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        if (featured == null && bootstrap != null)
+        {
+            optional.Add(BootstrapTypeName + ".FeaturedServerAddress");
+        }
+
+        anchors.FeaturedAddress = featured;
 
         Type? entry = OptionalType(host, EntryTypeName, optional);
         anchors.EntryDisplayName = OptionalProperty(entry, "DisplayName", optional);
@@ -1388,6 +1403,35 @@ internal static class PoolServerCatalog
         string? normalized = PoolAddress.TryNormalize(baseUrl);
         return normalized == null ? null : new PoolServer(normalized);
     }
+
+    /// <summary>
+    /// The address upstream pins to the top of its own server list, normalized, or empty when the host no longer
+    /// exposes it. Read as a literal when it is one: the field is a const string, and GetValue on a literal throws
+    /// </summary>
+    internal static string PinnedBaseUrl(PoolAnchors anchors)
+    {
+        try
+        {
+            FieldInfo? field = anchors.FeaturedAddress;
+            if (field == null)
+            {
+                return string.Empty;
+            }
+
+            object? value = field.IsLiteral ? field.GetRawConstantValue() : field.GetValue(null);
+            return PoolAddress.TryNormalize(value as string) ?? string.Empty;
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>What the create path requires before it will host on a server: a measured latency, an open create guard and a /probe that accepts this profile</summary>
+    internal static bool CanHost(PoolServer server, string profile, int version) =>
+        server.LatencyMs.HasValue
+        && string.Equals(server.GuardStatus, "allow", StringComparison.OrdinalIgnoreCase)
+        && SupportsProfile(server, profile, version);
 
     /// <summary>The server the game is currently pointed at, as the config reports it.</summary>
     internal static string CurrentBaseUrl(PoolAnchors anchors)

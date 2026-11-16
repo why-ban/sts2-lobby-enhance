@@ -25,7 +25,7 @@ internal sealed class PoolCreateFix : ICompatFix
     internal const string FixId = "server-pool-create";
 
     /// <summary>How much faster a server must be before switching is worth the churn.</summary>
-    private const int SwitchGainMs = 30;
+    internal const int SwitchGainMs = 30;
 
     /// <summary>
     /// At most this many servers are tried before the create runs on whatever is current. Two attempts and a 10 s
@@ -414,9 +414,7 @@ internal sealed class PoolCreateFix : ICompatFix
         }
 
         List<PoolServer> allowed = servers
-            .Where(server => server.LatencyMs.HasValue)
-            .Where(server => string.Equals(server.GuardStatus, "allow", StringComparison.OrdinalIgnoreCase))
-            .Where(server => PoolServerCatalog.SupportsProfile(server, profile, version))
+            .Where(server => PoolServerCatalog.CanHost(server, profile, version))
             .OrderBy(server => server.LatencyMs!.Value)
             .ToList();
 

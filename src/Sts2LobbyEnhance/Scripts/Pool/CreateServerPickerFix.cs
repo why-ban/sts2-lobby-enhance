@@ -175,6 +175,13 @@ internal sealed class CreateServerPickerSection
 {
     private const string RootNodeName = "LobbyEnhanceCreateServerPicker";
 
+    private const string AutoLabel = "自动（延迟最低）";
+
+    /// <summary>How much of a server name the row and the folded title both print</summary>
+    private const int NameMaxLength = 16;
+
+    private const string NoRoomData = "— 人";
+
     private const string CollapsedMark = "  ▸";
 
     private const string ExpandedMark = "  ▾";
@@ -423,12 +430,12 @@ internal sealed class CreateServerPickerSection
 
             CreateServerPickerState state = CreateServerPickerState.For(_overlay);
 
-            AddRow(null, "自动（延迟最低）", "按延迟升序挑一台允许建房的服务器。", state.BaseUrl == null);
+            AddRow(null, AutoLabel, "按延迟升序挑一台允许建房的服务器。", state.BaseUrl == null);
 
             foreach (PoolServer server in CandidateServers(state.BaseUrl))
             {
                 bool selected = state.BaseUrl != null && PoolAddress.Same(server.BaseUrl, state.BaseUrl);
-                AddRow(server.BaseUrl, server.ShortName(16) + " · " + LatencyLabel(server), server.BaseUrl, selected);
+                AddRow(server.BaseUrl, RowLabel(server), server.BaseUrl, selected);
             }
 
             ApplyListHeight();
@@ -585,15 +592,87 @@ internal sealed class CreateServerPickerSection
             }
 
             CreateServerPickerState state = CreateServerPickerState.For(_overlay);
-            string current = state.BaseUrl == null
-                ? "自动（延迟最低）"
-                : PoolAddress.ShortName(null, state.BaseUrl, 16);
-            _header.Text = Display("服务器 · " + current + (state.Expanded ? ExpandedMark : CollapsedMark));
+            _header.Text = Display("服务器 · " + SelectionLabel(state) + (state.Expanded ? ExpandedMark : CollapsedMark));
         }
         catch (Exception exception)
         {
             PoolRefreshFix.WarnOnce("create-picker-header", "the picker header could not be updated: " + PoolRoomClient.Describe(exception));
         }
+    }
+
+    /// <summary>
+    /// What the folded title prints: the display name of the row that is chosen, never the address while the pool knows
+    /// a name for it. 自动（延迟最低） names the server it has resolved to, and keeps its own wording only while the pool
+    /// cannot say which one that is
+    /// </summary>
+    private string SelectionLabel(CreateServerPickerState state)
+    {
+        if (state.BaseUrl == null)
+        {
+            PoolServer? chosen = AutoTarget();
+            return chosen?.ShortName(NameMaxLength) ?? AutoLabel;
+        }
+
+        return ServerFor(state.BaseUrl)?.ShortName(NameMaxLength) ?? PoolAddress.ShortName(null, state.BaseUrl, NameMaxLength);
+    }
+
+    /// <summary>
+    /// The server 自动（延迟最低） would publish to right now, by the create path's own rule: the fastest server that can
+    /// host this profile and allows creating, unless the player is already on a capable one and nothing is at least
+    /// SwitchGainMs faster. Null while the pool cannot answer, which is what keeps the title from guessing
+    /// </summary>
+    private PoolServer? AutoTarget()
+    {
+        try
+        {
+            (string? profile, int version) = ResolveOwnProfile();
+            if (profile == null)
+            {
+                return null;
+            }
+
+            List<PoolServer> hostable = PoolServerCatalog.GetServers(_anchors)
+                .Where(server => PoolServerCatalog.CanHost(server, profile, version))
+                .OrderBy(server => server.LatencyMs!.Value)
+                .ToList();
+            if (hostable.Count == 0)
+            {
+                return null;
+            }
+
+            PoolServer? current = ServerFor(PoolServerCatalog.CurrentBaseUrl(_anchors));
+            if (current != null
+                && current.LatencyMs.HasValue
+                && PoolServerCatalog.SupportsProfile(current, profile, version)
+                && hostable[0].LatencyMs!.Value + PoolCreateFix.SwitchGainMs >= current.LatencyMs.Value)
+            {
+                return current;
+            }
+
+            return hostable[0];
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private PoolServer? ServerFor(string? baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return null;
+        }
+
+        foreach (PoolServer server in PoolServerCatalog.GetServers(_anchors))
+        {
+            if (PoolAddress.Same(server.BaseUrl, baseUrl))
+            {
+                return server;
+            }
+        }
+
+        return PoolServerCatalog.AdoptCurrent(baseUrl);
     }
 
     /// <summary>
@@ -680,7 +759,11 @@ internal sealed class CreateServerPickerSection
         }
     }
 
-    /// <summary>Pool order, plus the pinned server when the catalog no longer lists it (never silently drop a choice).</summary>
+    /// <summary>
+    /// The list's order: the pinned lobby server first whatever its latency is - the same entry the room list keeps at
+    /// the top - then the rest by measured latency, unmeasured last. A server the player picked but the pool no longer
+    /// lists stays in, so a choice is never silently dropped
+    /// </summary>
     private IReadOnlyList<PoolServer> CandidateServers(string? selectedBaseUrl)
     {
         List<PoolServer> servers = PoolServerCatalog.GetServers(_anchors).ToList();
@@ -690,7 +773,69 @@ internal sealed class CreateServerPickerSection
             servers.Add(new PoolServer(selectedBaseUrl));
         }
 
-        return servers;
+        string pinned = PinnedBaseUrl();
+        if (pinned.Length > 0 && !servers.Exists(server => PoolAddress.Same(server.BaseUrl, pinned)))
+        {
+            PoolServer? added = PoolServerCatalog.AdoptCurrent(pinned);
+            if (added != null)
+            {
+                servers.Add(added);
+            }
+        }
+
+        return servers
+            .OrderBy(server => PoolAddress.Same(server.BaseUrl, pinned) ? 0 : 1)
+            .ThenBy(server => server.LatencyMs ?? int.MaxValue)
+            .ThenBy(server => server.BaseUrl, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>Upstream's pinned entry, falling back to the configured lobby server when the host no longer exposes it</summary>
+    private string PinnedBaseUrl()
+    {
+        string featured = PoolServerCatalog.PinnedBaseUrl(_anchors);
+        return featured.Length > 0 ? featured : PoolServerCatalog.CurrentBaseUrl(_anchors);
+    }
+
+    private string RowLabel(PoolServer server) =>
+        server.ShortName(NameMaxLength) + " · " + LatencyLabel(server) + " · " + PlayersLabel(server);
+
+    /// <summary>
+    /// Players across every room this server returned this round. No room data is not "no players": an em dash says
+    /// the number is unknown instead of printing a zero that would be a lie
+    /// </summary>
+    private string PlayersLabel(PoolServer server)
+    {
+        IReadOnlyList<object>? rooms = server.LastRooms;
+        if (rooms == null)
+        {
+            return NoRoomData;
+        }
+
+        int total = 0;
+        foreach (object room in rooms)
+        {
+            if (PlayersOf(room) is not { } players)
+            {
+                return NoRoomData;
+            }
+
+            total += players;
+        }
+
+        return total + " 人";
+    }
+
+    private int? PlayersOf(object room)
+    {
+        try
+        {
+            return _anchors.RoomPlayers.GetValue(room) as int?;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private string LatencyLabel(PoolServer server) =>

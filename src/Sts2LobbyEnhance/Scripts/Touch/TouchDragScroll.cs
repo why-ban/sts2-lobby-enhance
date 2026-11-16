@@ -133,6 +133,21 @@ internal sealed class TouchDragScroll
         _suppress = false;
         _target = _fixedTarget != null && GodotObject.IsInstanceValid(_fixedTarget) ? _fixedTarget : NearestScrollContainer();
         _startScroll = _target?.ScrollVertical ?? 0f;
+
+        // A press focuses the row, and the host paints the focus box in the same green as hover: from then on the row
+        // stays lit after the finger has slid to another one, which reads as two highlighted rows at once
+        try
+        {
+            if (_control.HasFocus())
+            {
+                _control.ReleaseFocus();
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce(ref _inputWarned, "dropping the pressed row's focus failed: " + exception.GetType().Name + ": " +
+                                       exception.Message);
+        }
     }
 
     private void Move(Vector2 position)
@@ -146,6 +161,10 @@ internal sealed class TouchDragScroll
         if (!_dragging && travel.LengthSquared() > DragThreshold * DragThreshold)
         {
             _dragging = true;
+            // Only the travel past the threshold moves the list: applying the whole travel on the frame the drag is
+            // recognised moves it by the threshold in one step, which is the jerk a drag starts with
+            _origin += new Vector2(0f, Mathf.Sign(travel.Y) * DragThreshold);
+            travel = position - _origin;
         }
 
         if (_dragging)
@@ -167,6 +186,11 @@ internal sealed class TouchDragScroll
         }
 
         _suppress = _dragging;
+        if (_dragging)
+        {
+            DropHover();
+        }
+
         Reset();
     }
 
@@ -199,6 +223,43 @@ internal sealed class TouchDragScroll
         ScrollBar bar = scroll.GetVScrollBar();
         float max = Mathf.Max((float)bar.MaxValue - (float)bar.Page, 0f);
         scroll.ScrollVertical = Mathf.RoundToInt(Mathf.Clamp(value, 0f, max));
+    }
+
+    private float CurrentScroll()
+    {
+        ScrollContainer? scroll = _target;
+        return scroll != null && GodotObject.IsInstanceValid(scroll) ? scroll.ScrollVertical : 0f;
+    }
+
+    /// <summary>
+    /// The engine keeps a row hovered after the finger lifts, and the host paints hover in green, so a finished drag
+    /// would end with a green row and no finger on it. Flipping the filter is the one public way to make the viewport
+    /// drop that hover: it sends the exit notification and does not re-enter until the pointer moves again
+    /// </summary>
+    private void DropHover()
+    {
+        try
+        {
+            Control? hovered = _control.GetViewport()?.GuiGetHoveredControl();
+            if (hovered is not BaseButton button || !GodotObject.IsInstanceValid(button))
+            {
+                return;
+            }
+
+            Control.MouseFilterEnum filter = button.MouseFilter;
+            if (filter == Control.MouseFilterEnum.Ignore)
+            {
+                return;
+            }
+
+            button.MouseFilter = Control.MouseFilterEnum.Ignore;
+            button.MouseFilter = filter;
+        }
+        catch (Exception exception)
+        {
+            WarnOnce(ref _inputWarned, "dropping the hover box left by a drag failed: " + exception.GetType().Name + ": " +
+                                       exception.Message);
+        }
     }
 
     private ScrollContainer? NearestScrollContainer()
