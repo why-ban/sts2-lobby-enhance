@@ -134,8 +134,8 @@ internal sealed class TouchDragScroll
         _target = _fixedTarget != null && GodotObject.IsInstanceValid(_fixedTarget) ? _fixedTarget : NearestScrollContainer();
         _startScroll = _target?.ScrollVertical ?? 0f;
 
-        // A press focuses the row, and the host paints the focus box in the same green as hover: from then on the row
-        // stays lit after the finger has slid to another one, which reads as two highlighted rows at once
+        // A press focuses the row and the host paints the focus box in the same green as hover, so the row stays lit
+        // after the finger has slid to another one
         try
         {
             if (_control.HasFocus())
@@ -231,11 +231,9 @@ internal sealed class TouchDragScroll
         return scroll != null && GodotObject.IsInstanceValid(scroll) ? scroll.ScrollVertical : 0f;
     }
 
-    /// <summary>
-    /// The engine keeps a row hovered after the finger lifts, and the host paints hover in green, so a finished drag
-    /// would end with a green row and no finger on it. Flipping the filter is the one public way to make the viewport
-    /// drop that hover: it sends the exit notification and does not re-enter until the pointer moves again
-    /// </summary>
+    // The engine keeps a row hovered after the finger lifts and the host paints hover green, so a finished drag would
+    // end with a green row and no finger on it. Flipping the filter is the one public way to make the viewport drop it:
+    // it sends the exit notification and does not re-enter until the pointer moves again
     private void DropHover()
     {
         try

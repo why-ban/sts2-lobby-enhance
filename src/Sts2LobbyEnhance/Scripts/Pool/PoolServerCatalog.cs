@@ -1404,10 +1404,8 @@ internal static class PoolServerCatalog
         return normalized == null ? null : new PoolServer(normalized);
     }
 
-    /// <summary>
-    /// The address upstream pins to the top of its own server list, normalized, or empty when the host no longer
-    /// exposes it. Read as a literal when it is one: the field is a const string, and GetValue on a literal throws
-    /// </summary>
+    // The address upstream pins to the top of its own server list, empty when the host no longer exposes it. Read as a
+    // literal when it is one: the field is a const string and GetValue throws on those
     internal static string PinnedBaseUrl(PoolAnchors anchors)
     {
         try
@@ -1427,7 +1425,6 @@ internal static class PoolServerCatalog
         }
     }
 
-    /// <summary>What the create path requires before it will host on a server: a measured latency, an open create guard and a /probe that accepts this profile</summary>
     internal static bool CanHost(PoolServer server, string profile, int version) =>
         server.LatencyMs.HasValue
         && string.Equals(server.GuardStatus, "allow", StringComparison.OrdinalIgnoreCase)
