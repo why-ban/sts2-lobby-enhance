@@ -321,12 +321,65 @@ internal sealed class PoolCreateFix : ICompatFix
 
     private static string ShortName(string url) => PoolAddress.ShortName(null, url, PoolText.SourceNameMaxLength);
 
+    /// <summary>Why the candidate list came out empty, counted by cause. One server can land in more than one count.</summary>
+    private static string Exclusions(IReadOnlyList<PoolServer> servers, string profile, int version)
+    {
+        int unmeasured = 0;
+        int guarded = 0;
+        int profileless = 0;
+        foreach (PoolServer server in servers)
+        {
+            if (!server.LatencyMs.HasValue)
+            {
+                unmeasured++;
+            }
+
+            if (!string.Equals(server.GuardStatus, "allow", StringComparison.OrdinalIgnoreCase))
+            {
+                guarded++;
+            }
+
+            if (!PoolServerCatalog.SupportsProfile(server, profile, version))
+            {
+                profileless++;
+            }
+        }
+
+        return servers.Count + " servers: " + unmeasured + " without a measured latency, " + guarded +
+               " with a closed create guard, " + profileless + " whose /probe cannot host this profile";
+    }
+
     private static async Task SwitchToBestServerAsync(PoolAnchors anchors, object overlay)
     {
         IReadOnlyList<PoolServer> servers = PoolServerCatalog.GetServers(anchors);
         if (servers.Count == 0)
         {
             return;
+        }
+
+        // F2: the address the game is on competes as a candidate even when the pool has never heard of it. Without
+        // this, a config that points at the packaged default - which is neither a seed peer nor the featured entry -
+        // walked out of this method here, after the status line had already promised a choice.
+        string current = PoolServerCatalog.CurrentBaseUrl(anchors);
+        PoolServer? currentServer = servers.FirstOrDefault(server => PoolAddress.Same(server.BaseUrl, current));
+        bool adopted = false;
+        if (currentServer == null)
+        {
+            currentServer = PoolServerCatalog.AdoptCurrent(current);
+            if (currentServer == null)
+            {
+                WarnOnce(
+                    "create-current-unknown",
+                    "the address the game is on ('" + current + "') is not a lobby address, so it cannot be probed or " +
+                    "compared; hosting stays on it");
+                return;
+            }
+
+            servers = new List<PoolServer>(servers) { currentServer };
+            adopted = true;
+            Entry.Info(
+                "[server-pool] the address the game is on (" + currentServer.BaseUrl + ") is not one of the pool's " +
+                "servers; it takes part in this create's comparison as a candidate.");
         }
 
         // Probing both the metrics and the protocol capabilities: the second one is what keeps us off a server
@@ -352,12 +405,13 @@ internal sealed class PoolCreateFix : ICompatFix
             .OrderBy(server => server.LatencyMs!.Value)
             .ToList();
 
-        string current = PoolServerCatalog.CurrentBaseUrl(anchors);
-        PoolServer? currentServer = servers.FirstOrDefault(server => PoolAddress.Same(server.BaseUrl, current));
-        if (currentServer == null)
+        if (adopted && !currentServer.LatencyMs.HasValue)
         {
-            // The current address is not one of the servers the pool knows about, which in practice means the player
-            // configured it by hand. Leaving it alone is the only defensible choice.
+            // F2: a server that did not answer has nothing to compare against, and a guess is not a reason to move
+            // the player. Staying is the quiet outcome, not an error.
+            Entry.Info(
+                "[server-pool] the current server " + currentServer.BaseUrl +
+                " did not answer the probe, so the room stays on it.");
             return;
         }
 
@@ -370,11 +424,12 @@ internal sealed class PoolCreateFix : ICompatFix
         if (allowed.Count == 0)
         {
             // Nothing can host this profile: stay where the player is. A room that fails to publish is worse than a
-            // room on a slow server, so no switch is the answer, not the least-bad switch.
+            // room on a slow server, so no switch is the answer, not the least-bad switch. The old wording blamed the
+            // protocol for all three causes at once; an empty candidate list is usually the other two.
             WarnOnce(
                 "no-capable-server",
-                "no known server advertises the protocol profile this room needs, so it is created on the current " +
-                "server instead of switching");
+                "no server can host " + profile + " right now (" + Exclusions(servers, profile, version) +
+                "), so the room is created on the current server instead of switching");
             return;
         }
 

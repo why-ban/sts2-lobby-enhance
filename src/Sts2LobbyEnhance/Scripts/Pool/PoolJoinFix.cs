@@ -226,10 +226,11 @@ internal sealed class PoolJoinFix : ICompatFix
             if (!PoolServerSwitch.HasActiveRoomSession(anchors))
             {
                 // A saved-run room with more than one free slot opens the slot picker and returns WITHOUT joining
-                // (:4749-4762). Switching back there would cancel the superseded server generation and void the lease
-                // the player is about to pick a slot with, so this path keeps the context and leaves the address where
-                // it is; the picker's own callback joins through the ordinary flow.
-                if (HasSavedRun(anchors, targetRoom))
+                // (:4749-4762), so switching back there would void the lease the player is about to pick a slot with.
+                // The open dialog is the condition, not the room carrying a saved run: a room whose slots are all
+                // taken, or a single-slot room whose join failed, also has a saved run and opens nothing at all, and
+                // those are exactly the paths that used to leave the player on a stranger's server.
+                if (ResumeSlotDialogPending(anchors, overlay, targetRoom))
                 {
                     return;
                 }
@@ -260,9 +261,30 @@ internal sealed class PoolJoinFix : ICompatFix
     }
 
     /// <summary>
-    /// Whether the room carries a saved run (LanConnectLobbyModels.cs:41). Those are the rooms whose join can legally
-    /// stop at a dialog instead of connecting, which is why the caller must not treat "no session yet" as a failure
-    /// for them.
+    /// Whether upstream is waiting for the player to pick a resume slot for this very room. OpenResumeSlotDialog
+    /// stores the room it was opened for, so a non-null field for a different room is a leftover, not this join's
+    /// dialog. Used as the fallback answer when that field is gone from the host mod.
+    /// </summary>
+    private static bool ResumeSlotDialogPending(PoolAnchors anchors, object overlay, object room)
+    {
+        try
+        {
+            if (anchors.PendingResumeJoinRoom != null)
+            {
+                return ReferenceEquals(anchors.PendingResumeJoinRoom.GetValue(overlay), room);
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        return HasSavedRun(anchors, room);
+    }
+
+    /// <summary>
+    /// Whether the room carries a saved run (LanConnectLobbyModels.cs:41). Such a join may legally stop at the slot
+    /// dialog instead of connecting, which is why "no session yet" is not by itself a failure.
     /// </summary>
     private static bool HasSavedRun(PoolAnchors anchors, object room)
     {

@@ -30,6 +30,7 @@ internal sealed class PoolAnchors
     internal const string MetricsClientTypeName = "Sts2LanConnect.Scripts.LanConnectPeerMetricsClient";
     internal const string LeaseTypeName = "Sts2LanConnect.Scripts.LanConnectServerContextLease";
     internal const string ConstantsTypeName = "Sts2LanConnect.Scripts.LanConnectConstants";
+    internal const string UiTextTypeName = "Sts2LanConnect.Scripts.LanConnectUiText";
 
     internal Type Overlay = null!;
 
@@ -166,9 +167,6 @@ internal sealed class PoolAnchors
     /// <summary>LanConnectServerListBootstrap.GatherCloudflareCandidatesAsync(CancellationToken), LanConnectServerListBootstrap.cs:87</summary>
     internal MethodInfo? GatherCloudflareCandidates;
 
-    /// <summary>LanConnectServerListBootstrap.MergeDiscoveredEntries(List, IEnumerable), LanConnectServerListBootstrap.cs:112</summary>
-    internal MethodInfo? MergeDiscovered;
-
     /// <summary>LanConnectPeerMetricsClient.FetchSnapshotAsync(string, CancellationToken), LanConnectPeerMetricsClient.cs:19</summary>
     internal MethodInfo? FetchSnapshot;
 
@@ -262,6 +260,9 @@ internal sealed class PoolAnchors
     /// <summary>LanConnectLobbyOverlay.BuildCreateDialog() (:2480) - where the create dialog is assembled</summary>
     internal MethodInfo BuildCreateDialog = null!;
 
+    /// <summary>LanConnectLobbyOverlay.OpenCreateDialogInternal() (:4973) - the one path every open of the dialog takes</summary>
+    internal MethodInfo OpenCreateDialog = null!;
+
     /// <summary>LanConnectLobbyOverlay._createDialogBody (:190, assigned by CreateDialogShell :3122)</summary>
     internal FieldInfo? CreateDialogBody;
 
@@ -292,6 +293,12 @@ internal sealed class PoolAnchors
     /// <summary>LobbyRoomSummary.SavedRun (:41) - a saved-run room may open a slot dialog and never join</summary>
     internal PropertyInfo? RoomSavedRun;
 
+    /// <summary>LanConnectLobbyOverlay._pendingResumeJoinRoom (:225) - set while the resume-slot dialog waits for the player</summary>
+    internal FieldInfo? PendingResumeJoinRoom;
+
+    /// <summary>LanConnectUiText.NormalizeForDisplay(string) - the host mod's Android glyph fallback for printed text</summary>
+    internal MethodInfo? NormalizeForDisplay;
+
     /// <summary>MegaCrit.Sts2.Core.Saves.SaveManager.Instance (game type, decompiled 0.113:72)</summary>
     internal PropertyInfo? SaveManagerInstance;
 
@@ -301,6 +308,7 @@ internal sealed class PoolAnchors
     internal static PoolAnchors? TryCapture(Assembly host, PoolAnchorScope scope, out string reason)
     {
         var missing = new List<string>();
+        var optional = new List<string>();
         var anchors = new PoolAnchors();
 
         anchors.Overlay = ReflectScope.HostType(host, OverlayTypeName, missing)!;
@@ -314,9 +322,9 @@ internal sealed class PoolAnchors
             ReflectScope.HostType(host, ApiClientTypeName, missing),
             "GetRoomsAsync",
             "System.Threading.CancellationToken")!;
-        anchors.RoomId = ReflectScope.PropertyOf(anchors.RoomType, "RoomId", missing)!;
-        anchors.RoomVersion = ReflectScope.PropertyOf(anchors.RoomType, "Version", missing)!;
-        anchors.RoomPlayers = ReflectScope.PropertyOf(anchors.RoomType, "CurrentPlayers", missing)!;
+        anchors.RoomId = ReflectScope.PropertyOf(anchors.RoomType ?? typeof(object), "RoomId", missing)!;
+        anchors.RoomVersion = ReflectScope.PropertyOf(anchors.RoomType ?? typeof(object), "Version", missing)!;
+        anchors.RoomPlayers = ReflectScope.PropertyOf(anchors.RoomType ?? typeof(object), "CurrentPlayers", missing)!;
         anchors.ConfigBaseUrl = ReflectScope.StaticProperty(
             missing,
             ReflectScope.HostType(host, ConfigTypeName, missing),
@@ -348,7 +356,7 @@ internal sealed class PoolAnchors
                     RoomTypeName)!;
                 anchors.Rooms = ReflectScope.Field(missing, anchors.Overlay, "_rooms")!;
                 anchors.RebuildRoomStage = ReflectScope.InstanceMethod(missing, anchors.Overlay, "RebuildRoomStage")!;
-                anchors.CaptureRefreshPrologue(missing, host);
+                anchors.CaptureRefreshPrologue(missing, optional, host);
                 break;
 
             case PoolAnchorScope.Join:
@@ -372,6 +380,7 @@ internal sealed class PoolAnchors
 
             case PoolAnchorScope.CreatePicker:
                 anchors.BuildCreateDialog = ReflectScope.InstanceMethod(missing, anchors.Overlay, "BuildCreateDialog")!;
+                anchors.OpenCreateDialog = ReflectScope.InstanceMethod(missing, anchors.Overlay, "OpenCreateDialogInternal")!;
                 // The picker draws latency and a protocol hint, so it needs the same probe anchors the create repair has.
                 anchors.CaptureProtocolAnchors(missing, host);
                 break;
@@ -381,83 +390,82 @@ internal sealed class PoolAnchors
         }
 
         // Everything below is allowed to be absent: every use is guarded at the call site, so a host-mod rename
-        // costs the message text or the source-name column, not the pool.
-        Type? bootstrap = ReflectScope.HostType(host, BootstrapTypeName, new List<string>());
+        // costs the message text or the source-name column, not the pool. The misses go to one list rather than to
+        // the bin: a member that silently stopped resolving looks exactly like a member that is working.
+        Type? bootstrap = OptionalType(host, BootstrapTypeName, optional);
         anchors.GatherCloudflareCandidates = ReflectScope.StaticMethod(
-            new List<string>(),
+            optional,
             bootstrap,
             "GatherCloudflareCandidatesAsync",
             "System.Threading.CancellationToken");
-        anchors.MergeDiscovered = FindMergeDiscovered(bootstrap);
 
-        Type? entry = ReflectScope.HostType(host, EntryTypeName, new List<string>());
-        anchors.EntryDisplayName = OptionalProperty(entry, "DisplayName");
-        anchors.EntryPinned = OptionalProperty(entry, "IsPinned");
-        anchors.EntryRooms = OptionalProperty(entry, "Rooms");
-        anchors.EntryGuardStatus = OptionalProperty(entry, "CreateRoomGuardStatus");
+        Type? entry = OptionalType(host, EntryTypeName, optional);
+        anchors.EntryDisplayName = OptionalProperty(entry, "DisplayName", optional);
+        anchors.EntryPinned = OptionalProperty(entry, "IsPinned", optional);
+        anchors.EntryRooms = OptionalProperty(entry, "Rooms", optional);
+        anchors.EntryGuardStatus = OptionalProperty(entry, "CreateRoomGuardStatus", optional);
 
-        Type? metricsClient = ReflectScope.HostType(host, MetricsClientTypeName, new List<string>());
+        Type? metricsClient = OptionalType(host, MetricsClientTypeName, optional);
         anchors.FetchSnapshot = ReflectScope.StaticMethod(
-            new List<string>(),
+            optional,
             metricsClient,
             "FetchSnapshotAsync",
             "System.String",
             "System.Threading.CancellationToken");
         Type? snapshot = metricsClient?.GetNestedType("PeerDiscoverySnapshot", BindingFlags.Public | BindingFlags.NonPublic);
-        anchors.SnapshotMetrics = OptionalProperty(snapshot, "Metrics");
+        anchors.SnapshotMetrics = OptionalProperty(snapshot, "Metrics", optional);
         Type? metrics = anchors.SnapshotMetrics?.PropertyType;
-        anchors.MetricsGuardStatus = OptionalProperty(metrics, "CreateRoomGuardStatus");
-        anchors.MetricsDisplayName = OptionalProperty(metrics, "DisplayName");
-        anchors.MetricsRooms = OptionalProperty(metrics, "Rooms");
+        anchors.MetricsGuardStatus = OptionalProperty(metrics, "CreateRoomGuardStatus", optional);
+        anchors.MetricsDisplayName = OptionalProperty(metrics, "DisplayName", optional);
+        anchors.MetricsRooms = OptionalProperty(metrics, "Rooms", optional);
 
-        Type? config = ReflectScope.HostType(host, ConfigTypeName, new List<string>());
-        anchors.ConfigReadToken = ReflectScope.StaticProperty(new List<string>(), config, "LobbyReadAccessToken");
-        anchors.ConfigCreateToken = ReflectScope.StaticProperty(new List<string>(), config, "LobbyCreateRoomToken");
+        Type? config = OptionalType(host, ConfigTypeName, optional);
+        anchors.ConfigReadToken = ReflectScope.StaticProperty(optional, config, "LobbyReadAccessToken");
+        anchors.ConfigCreateToken = ReflectScope.StaticProperty(optional, config, "LobbyCreateRoomToken");
 
-        Type? runtime = ReflectScope.HostType(host, RuntimeTypeName, new List<string>());
-        anchors.RuntimeInstance = ReflectScope.StaticProperty(new List<string>(), runtime, "Instance");
-        anchors.RuntimeSwitchInProgress = OptionalProperty(runtime, "IsLobbyServerSwitchInProgress");
-        anchors.RuntimeActiveRoomSession = OptionalProperty(runtime, "HasActiveRoomSession");
-        anchors.RuntimeHasActiveHostedRoom = OptionalProperty(runtime, "HasActiveHostedRoom");
-        anchors.LeaseToken = OptionalProperty(
-            host.GetType(LeaseTypeName, throwOnError: false, ignoreCase: false),
-            "Token");
+        Type? runtime = OptionalType(host, RuntimeTypeName, optional);
+        anchors.RuntimeInstance = ReflectScope.StaticProperty(optional, runtime, "Instance");
+        anchors.RuntimeSwitchInProgress = OptionalProperty(runtime, "IsLobbyServerSwitchInProgress", optional);
+        anchors.RuntimeActiveRoomSession = OptionalProperty(runtime, "HasActiveRoomSession", optional);
+        anchors.RuntimeHasActiveHostedRoom = OptionalProperty(runtime, "HasActiveHostedRoom", optional);
+        anchors.LeaseToken = OptionalProperty(OptionalType(host, LeaseTypeName, optional), "Token", optional);
 
         anchors.GetGameVersion = ReflectScope.StaticMethod(
-            new List<string>(),
-            ReflectScope.HostType(host, BuildInfoTypeName, new List<string>()),
+            optional,
+            OptionalType(host, BuildInfoTypeName, optional),
             "GetGameVersion");
 
-        anchors.RefreshInFlight = anchors.Overlay
-            .GetField("_refreshInFlight", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        anchors.SelectedRoomId = anchors.Overlay
-            .GetField("_selectedRoomId", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        anchors.SetStatus = ReflectScope.InstanceMethod(new List<string>(), anchors.Overlay, "SetStatus", "System.String");
-        anchors.UpdateActionButtons = ReflectScope.InstanceMethod(new List<string>(), anchors.Overlay, "UpdateActionButtons");
-        anchors.UpdateNetworkSummary = ReflectScope.InstanceMethod(new List<string>(), anchors.Overlay, "UpdateNetworkSummary");
-        anchors.CreateBodyLabel = ReflectScope.StaticMethod(new List<string>(), anchors.Overlay, "CreateBodyLabel", "System.String");
-        anchors.TextMutedColor = ReflectScope.StaticProperty(new List<string>(), anchors.Overlay, "TextMutedColor");
-        anchors.ServerBaseUrlInput = anchors.Overlay
-            .GetField("_serverBaseUrlInput", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        anchors.RoomNameInput = anchors.Overlay
-            .GetField("_roomNameInput", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        anchors.CreateDialogBody = anchors.Overlay
-            .GetField("_createDialogBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        anchors.CreateDialogErrorLabel = anchors.Overlay
-            .GetField("_createDialogErrorLabel", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        anchors.CreateActionButton = FindSingleMethod(anchors.Overlay, "CreateActionButton", 6);
-        anchors.CreateSectionLabel = FindSingleMethod(anchors.Overlay, "CreateSectionLabel", 1, requireStatic: true);
-        anchors.ApplyButtonStyle = FindSingleMethod(anchors.Overlay, "ApplyButtonStyle", 3, requireStatic: true);
-        anchors.ShowCreateDialogError = FindSingleMethod(anchors.Overlay, "ShowCreateDialogError", 2);
-        anchors.DangerColor = ReflectScope.StaticProperty(new List<string>(), anchors.Overlay, "DangerColor");
-        anchors.ConfigBaseUrlOverride = ReflectScope.StaticProperty(new List<string>(), config, "LobbyServerBaseUrlOverride");
-        anchors.RoomSavedRun = OptionalProperty(anchors.RoomType, "SavedRun");
+        anchors.RefreshInFlight = OptionalField(anchors.Overlay, "_refreshInFlight", optional);
+        anchors.SelectedRoomId = OptionalField(anchors.Overlay, "_selectedRoomId", optional);
+        anchors.SetStatus = ReflectScope.InstanceMethod(optional, anchors.Overlay, "SetStatus", "System.String");
+        anchors.UpdateActionButtons = ReflectScope.InstanceMethod(optional, anchors.Overlay, "UpdateActionButtons");
+        anchors.UpdateNetworkSummary = ReflectScope.InstanceMethod(optional, anchors.Overlay, "UpdateNetworkSummary");
+        anchors.CreateBodyLabel = ReflectScope.StaticMethod(optional, anchors.Overlay, "CreateBodyLabel", "System.String");
+        anchors.TextMutedColor = ReflectScope.StaticProperty(optional, anchors.Overlay, "TextMutedColor");
+        anchors.ServerBaseUrlInput = OptionalField(anchors.Overlay, "_serverBaseUrlInput", optional);
+        anchors.RoomNameInput = OptionalField(anchors.Overlay, "_roomNameInput", optional);
+        anchors.CreateDialogBody = OptionalField(anchors.Overlay, "_createDialogBody", optional);
+        anchors.CreateDialogErrorLabel = OptionalField(anchors.Overlay, "_createDialogErrorLabel", optional);
+        anchors.CreateActionButton = FindSingleMethod(anchors.Overlay, "CreateActionButton", 6, optional);
+        anchors.CreateSectionLabel = FindSingleMethod(anchors.Overlay, "CreateSectionLabel", 1, optional, requireStatic: true);
+        anchors.ApplyButtonStyle = FindSingleMethod(anchors.Overlay, "ApplyButtonStyle", 3, optional, requireStatic: true);
+        anchors.ShowCreateDialogError = FindSingleMethod(anchors.Overlay, "ShowCreateDialogError", 2, optional);
+        anchors.DangerColor = ReflectScope.StaticProperty(optional, anchors.Overlay, "DangerColor");
+        anchors.ConfigBaseUrlOverride = ReflectScope.StaticProperty(optional, config, "LobbyServerBaseUrlOverride");
+        anchors.RoomSavedRun = OptionalProperty(anchors.RoomType, "SavedRun", optional);
+        anchors.PendingResumeJoinRoom = OptionalField(anchors.Overlay, "_pendingResumeJoinRoom", optional);
+        anchors.NormalizeForDisplay = ReflectScope.StaticMethod(
+            optional,
+            OptionalType(host, UiTextTypeName, optional),
+            "NormalizeForDisplay",
+            "System.String");
 
         // Game-side types are looked up by full name, so a game update costs this pre-check and not the repair.
         Type? saveManager = ReflectScope.FindType("MegaCrit.Sts2.Core.Saves.SaveManager");
-        anchors.SaveManagerInstance = OptionalProperty(saveManager, "Instance");
-        anchors.SaveManagerHasMultiplayerRun = saveManager?
-            .GetProperty("HasMultiplayerRunSave", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        anchors.SaveManagerInstance = OptionalProperty(saveManager, "Instance", optional);
+        anchors.SaveManagerHasMultiplayerRun = OptionalProperty(saveManager, "HasMultiplayerRunSave", optional);
+
+        ReportOptionalMisses(optional);
 
         // The return type is part of the contract, not a detail: the refresh prefix hands its own Task back through
         // Harmony's __result, so a Task the host mod no longer produces would silently start the original twice.
@@ -547,7 +555,7 @@ internal sealed class PoolAnchors
     /// current server's probe + announcement calls. Every one of them is required for the refresh scope, because a
     /// half-reproduced refresh is worse than no takeover at all.
     /// </summary>
-    private void CaptureRefreshPrologue(List<string> missing, Assembly host)
+    private void CaptureRefreshPrologue(List<string> missing, List<string> optional, Assembly host)
     {
         PersistSettings = ReflectScope.InstanceMethod(missing, Overlay, "PersistSettings")!;
         UpdateHealthIndicator = ReflectScope.InstanceMethod(missing, Overlay, "UpdateHealthIndicator")!;
@@ -573,9 +581,9 @@ internal sealed class PoolAnchors
 
         RefreshIntervalSeconds = ConstantDouble(host, ConstantsTypeName, "LobbyRefreshIntervalSeconds", missing);
         RoomsPerPage = ConstantInt(host, ConstantsTypeName, "LobbyRoomsPerPage", missing);
-        CurrentPageIndex = OptionalField(Overlay, "_currentPageIndex");
-        RoomListContainer = OptionalField(Overlay, "_roomListContainer");
-        RoomListSummaryLabel = OptionalField(Overlay, "_roomListSummaryLabel");
+        CurrentPageIndex = OptionalField(Overlay, "_currentPageIndex", optional);
+        RoomListContainer = OptionalField(Overlay, "_roomListContainer", optional);
+        RoomListSummaryLabel = OptionalField(Overlay, "_roomListSummaryLabel", optional);
         LobbyServiceExceptionType = ReflectScope.HostType(host, "Sts2LanConnect.Scripts.LobbyServiceException", missing)!;
     }
 
@@ -705,29 +713,14 @@ internal sealed class PoolAnchors
         return ctor;
     }
 
-    /// <summary>
-    /// MergeDiscoveredEntries(List of ServerListEntry, IEnumerable of ServerListEntry). Matched by name and arity
-    /// only: the generic arguments are host types, so spelling them out would cost the anchor on a namespace move
-    /// for no gain.
-    /// </summary>
-    private static MethodInfo? FindMergeDiscovered(Type? bootstrap)
-    {
-        if (bootstrap == null)
-        {
-            return null;
-        }
-
-        MethodInfo[] matches = bootstrap
-            .GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-            .Where(method => string.Equals(method.Name, "MergeDiscoveredEntries", StringComparison.Ordinal))
-            .Where(method => method.GetParameters().Length == 2)
-            .ToArray();
-        return matches.Length == 1 ? matches[0] : null;
-    }
-
     /// <summary>One method by name and arity, or null when the host mod has zero or several. Ambiguity is never
     /// resolved by picking one: binding to the wrong overload is silent.</summary>
-    private static MethodInfo? FindSingleMethod(Type? owner, string name, int arity, bool requireStatic = false)
+    private static MethodInfo? FindSingleMethod(
+        Type? owner,
+        string name,
+        int arity,
+        List<string>? optional = null,
+        bool requireStatic = false)
     {
         MethodInfo[] matches = owner?
             .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
@@ -735,14 +728,73 @@ internal sealed class PoolAnchors
             .Where(method => method.GetParameters().Length == arity)
             .Where(method => !requireStatic || method.IsStatic)
             .ToArray() ?? Array.Empty<MethodInfo>();
-        return matches.Length == 1 ? matches[0] : null;
+        if (matches.Length == 1)
+        {
+            return matches[0];
+        }
+
+        if (owner != null)
+        {
+            optional?.Add(owner.FullName + "." + name + "(" + arity + " parameter(s))");
+        }
+        return null;
     }
 
-    private static FieldInfo? OptionalField(Type? owner, string name) =>
-        owner?.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    private static FieldInfo? OptionalField(Type? owner, string name, List<string>? optional = null)
+    {
+        FieldInfo? field = owner?.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (field == null && owner != null)
+        {
+            optional?.Add(owner.FullName + "." + name);
+        }
 
-    private static PropertyInfo? OptionalProperty(Type? owner, string name) =>
-        owner?.GetProperty(name, BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        return field;
+    }
+
+    private static PropertyInfo? OptionalProperty(Type? owner, string name, List<string>? optional = null)
+    {
+        PropertyInfo? property = owner?.GetProperty(
+            name,
+            BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        if (property == null && owner != null)
+        {
+            optional?.Add(owner.FullName + "." + name);
+        }
+
+        return property;
+    }
+
+    private static Type? OptionalType(Assembly host, string fullName, List<string> optional)
+    {
+        Type? type = host.GetType(fullName, throwOnError: false, ignoreCase: false);
+        if (type == null)
+        {
+            optional.Add("type " + fullName);
+        }
+
+        return type;
+    }
+
+    /// <summary>
+    /// One log line for the whole optional set. Keyed by the set itself so the four scope captures, which run one
+    /// after another at startup, report it once instead of four times.
+    /// </summary>
+    private static void ReportOptionalMisses(List<string> optional)
+    {
+        if (optional.Count == 0)
+        {
+            return;
+        }
+
+        string[] names = optional
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        PoolRefreshFix.WarnOnce(
+            "optional-anchors:" + string.Join("|", names),
+            "the host mod no longer has " + string.Join(", ", names) +
+            "; the pool keeps working, with the parts that read them switched off");
+    }
 
     private void RequireSwitch(List<string> missing, Assembly host)
     {
@@ -795,7 +847,10 @@ internal sealed class PoolServer
 
     internal bool IsPinned { get; set; }
 
-    /// <summary>Round trip of the last GET /rooms (or /peers/metrics during a create probe), in milliseconds.</summary>
+    /// <summary>
+    /// Round trip of the last request that actually answered: GET /rooms during a refresh, /peers/metrics during a
+    /// create probe. A failed or timed-out probe leaves it alone, so null means "never measured", not "slow".
+    /// </summary>
     internal int? LatencyMs { get; set; }
 
     internal string GuardStatus { get; set; } = "allow";
@@ -803,9 +858,9 @@ internal sealed class PoolServer
     internal int? RoomCount { get; set; }
 
     /// <summary>
-    /// When /peers/metrics last answered. Deliberately NOT written by a /rooms fetch: the two probes answer
-    /// different questions, and sharing one stamp is what let a failed room fetch masquerade as "probed a moment
-    /// ago" and keep GuardStatus at the seed default "allow".
+    /// When /peers/metrics was last attempted, answered or not. Deliberately NOT written by a /rooms fetch: the two
+    /// probes answer different questions, and sharing one stamp is what let a failed room fetch masquerade as "probed
+    /// a moment ago" and keep GuardStatus at the seed default "allow".
     /// </summary>
     internal DateTimeOffset ProbedAt { get; set; }
 
@@ -935,7 +990,7 @@ internal static class PoolServerCatalog
     /// </summary>
     internal static async Task RefreshDiscoveryAsync(PoolAnchors anchors, CancellationToken cancellationToken)
     {
-        if (anchors.GatherCloudflareCandidates == null || anchors.MergeDiscovered == null)
+        if (anchors.GatherCloudflareCandidates == null)
         {
             return;
         }
@@ -1011,7 +1066,12 @@ internal static class PoolServerCatalog
         }
         catch (OperationCanceledException)
         {
-            // Leaving the cache alone is the whole recovery path.
+            // Leaving the cache alone is the whole recovery path, but a budget that expires on every tick is
+            // invisible without a line: the next round simply asks again.
+            PoolRefreshFix.WarnOnce(
+                "discovery-budget",
+                "server discovery used its whole " + DiscoveryBudgetMs + " ms budget; the pool keeps the servers it " +
+                "already knew and asks again next refresh");
         }
         catch (Exception exception)
         {
@@ -1181,9 +1241,9 @@ internal static class PoolServerCatalog
 
     /// <summary>
     /// One server's live snapshot: latency, display name, room count and the create-room guard
-    /// (LanConnectPeerMetricsClient.cs:19-23, which reads /peers/metrics and falls back to /probe). Never throws:
-    /// a server that does not answer records its round trip and drops out of the create-room candidates because
-    /// its guard status becomes unknown.
+    /// (LanConnectPeerMetricsClient.cs:19-23, which reads /peers/metrics and falls back to /probe). A server that does
+    /// not answer keeps its previous latency and drops out of the create-room candidates because its guard status
+    /// becomes unknown.
     /// </summary>
     internal static async Task ProbeAsync(
         PoolAnchors anchors,
@@ -1264,7 +1324,7 @@ internal static class PoolServerCatalog
         {
             RecordCapabilities(server, null, null, null, null);
             PoolRefreshFix.WarnOnce(
-                "probe-capabilities",
+                "probe-capabilities:" + server.BaseUrl,
                 "the protocol capabilities of " + server.BaseUrl + " could not be read: " +
                 PoolRoomClient.Describe(exception));
         }
@@ -1309,14 +1369,15 @@ internal static class PoolServerCatalog
                 : null;
             if (metrics == null)
             {
-                // /peers/metrics is optional upstream and its timeout is a normal answer, not an exception
-                // (LanConnectPeerMetricsClient.cs:62-126 never throws). "No metrics" therefore means "cannot verify
-                // the create guard", which is recorded as unknown rather than left at the seed default "allow".
-                RecordMetricsProbe(server, latency, null, "unknown", null);
+                // Upstream answers a cancelled or timed-out /peers/metrics request with an empty snapshot instead of
+                // throwing (LanConnectPeerMetricsClient.cs:62-126), so "no metrics" cannot tell "too slow" from "does
+                // not publish it". Either way this round trip measured nothing: it must not become the latency the
+                // dialog caches for ProbeTtlSeconds, or a node that never answered is shown as a fast one.
+                RecordMetricsProbe(server, null, null, "unknown", null);
                 PoolRefreshFix.WarnOnce(
-                    "probe-metrics",
-                    "at least one server does not publish /peers/metrics (" + server.BaseUrl +
-                    "), so it cannot be verified for hosting");
+                    "probe-metrics:" + server.BaseUrl,
+                    "no /peers/metrics answer from " + server.BaseUrl + " within " + timeoutMs +
+                    " ms, so it cannot be verified for hosting");
                 return;
             }
 
@@ -1336,6 +1397,16 @@ internal static class PoolServerCatalog
                 "probe-metrics-exception",
                 "probing " + server.BaseUrl + " failed: " + PoolRoomClient.Describe(exception));
         }
+    }
+
+    /// <summary>
+    /// The address the game is on, as a server the create choice can compare against, or null when it is not a lobby
+    /// address at all. Not cached: one decision needs it, and the room list is better off without an extra node.
+    /// </summary>
+    internal static PoolServer? AdoptCurrent(string? baseUrl)
+    {
+        string? normalized = PoolAddress.TryNormalize(baseUrl);
+        return normalized == null ? null : new PoolServer(normalized);
     }
 
     /// <summary>The server the game is currently pointed at, as the config reports it.</summary>
@@ -1375,7 +1446,28 @@ internal static class PoolServerCatalog
         }
     }
 
-    /// <summary>Copies the host mod's entries, carrying a previously measured latency across by address.</summary>
+    /// <summary>
+    /// Everything the pool has learned about a server survives a rebuild of the list it lives in. A seed rebuild runs
+    /// every DiscoveryTtlSeconds and builds fresh PoolServer objects; keeping only the probe figures reset the cooldown
+    /// ladder to its first step, dropped the stale rooms of a dead node and threw away the create-side capability cache.
+    /// </summary>
+    private static void CarryState(PoolServer server, PoolServer previous)
+    {
+        server.DisplayName ??= previous.DisplayName;
+        server.LatencyMs = previous.LatencyMs;
+        server.GuardStatus = previous.GuardStatus;
+        server.ProbedAt = previous.ProbedAt;
+        server.ConsecutiveFailures = previous.ConsecutiveFailures;
+        server.CooldownUntil = previous.CooldownUntil;
+        server.LastRooms = previous.LastRooms;
+        server.SupportedProfiles = previous.SupportedProfiles;
+        server.LanProtocolMin = previous.LanProtocolMin;
+        server.LanProtocolMax = previous.LanProtocolMax;
+        server.TailMinimumClientVersion = previous.TailMinimumClientVersion;
+        server.CapabilitiesAt = previous.CapabilitiesAt;
+    }
+
+    /// <summary>Copies the host mod's entries, carrying everything already known about each address across.</summary>
     private static List<PoolServer> ToServers(PoolAnchors anchors, IEnumerable entries)
     {
         Dictionary<string, PoolServer> known = new(StringComparer.OrdinalIgnoreCase);
@@ -1411,10 +1503,7 @@ internal static class PoolServerCatalog
 
             if (known.TryGetValue(normalized, out PoolServer? previous))
             {
-                server.DisplayName ??= previous.DisplayName;
-                server.LatencyMs = previous.LatencyMs;
-                server.ProbedAt = previous.ProbedAt;
-                server.GuardStatus = previous.GuardStatus;
+                CarryState(server, previous);
             }
 
             servers.Add(server);
@@ -1443,13 +1532,7 @@ internal static class PoolServerCatalog
                     continue;
                 }
 
-                server.LatencyMs ??= previous.LatencyMs;
-                server.DisplayName ??= previous.DisplayName;
-                if (server.ProbedAt == default)
-                {
-                    server.ProbedAt = previous.ProbedAt;
-                    server.GuardStatus = previous.GuardStatus;
-                }
+                CarryState(server, previous);
             }
         }
 

@@ -241,6 +241,10 @@ internal sealed class PoolRefreshFix : ICompatFix
                 NoteRoundBudgetSpent(session);
             }
 
+            // :3437-3440 - a caller that withdrew the round leaves it cancelled, before the commit and before any
+            // failure is counted. Upstream rethrows at the same point and the switch flow answers "服务器切换已取消".
+            cancellationToken.ThrowIfCancellationRequested();
+
             double? measuredProbeRtt = probeTask.IsCompletedSuccessfully ? probeTask.Result : null;
             object? announcements = announcementTask.IsCompletedSuccessfully ? announcementTask.Result : null;
 
@@ -319,6 +323,11 @@ internal sealed class PoolRefreshFix : ICompatFix
                 }
                 SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：所有大厅服务器均未响应\n" + FailureHint(anchors));
                 return false;
+            }
+
+            if (rooms.Count == 0)
+            {
+                ShowEmptyText(anchors, overlay);
             }
 
             SetStatus(overlay, string.Empty);                                            // :3434
@@ -510,8 +519,14 @@ internal sealed class PoolRefreshFix : ICompatFix
             await task.ConfigureAwait(true);
             return task.GetType().GetProperty("Result")?.GetValue(task) as double?;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller withdrew the round. Swallowing this is what let a cancelled refresh look like a failed one.
+            throw;
+        }
         catch (OperationCanceledException)
         {
+            // Our own budget expired: no measurement, which is a null latency and not a failure.
             return null;
         }
         catch (Exception exception)
@@ -544,6 +559,10 @@ internal sealed class PoolRefreshFix : ICompatFix
 
             await task.ConfigureAwait(true);
             return task.GetType().GetProperty("Result")?.GetValue(task);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -699,12 +718,16 @@ internal sealed class PoolRefreshFix : ICompatFix
 
     private const string LoadingHint = "正在向所有大厅服务器并发拉取房间，首次打开通常需要 1–2 秒。";
 
+    /// <summary>What an empty hall says once a round has confirmed it: the pool spans every server, so none of them has a room.</summary>
+    private const string EmptyPoolTitle = "所有服务器都没有房间";
+
     private static int _budgetLogs;
 
     /// <summary>
     /// While the first round is loading the stage has no rooms, and the host mod renders that as "大厅当前没有房间。" -
-    /// a claim, not a loading state. This rewrites exactly that text (and only that text); the round's own paint
-    /// replaces the whole stage a moment later.
+    /// a claim, not a loading state. This rewrites exactly that text (and only that text). Who replaces it depends on
+    /// the round: a round that brings rooms rebuilds the stage, a round that confirms the hall is empty calls
+    /// <see cref="ShowEmptyText"/>.
     /// </summary>
     internal static void ShowLoadingPlaceholder(PoolAnchors anchors, object overlay)
     {
@@ -742,6 +765,51 @@ internal sealed class PoolRefreshFix : ICompatFix
         {
             WarnOnce("loading-text", "the loading placeholder could not be written: " + PoolRoomClient.Describe(exception));
         }
+    }
+
+    /// <summary>
+    /// The empty hall, in the pool's words. The host mod's own empty state is "大厅当前没有房间。", which is true for one
+    /// server and a claim for fifteen; a round that started from an empty stage may also still be showing the loading
+    /// text, because a round with zero rooms has nothing for the stage-change check to compare and nothing rebuilds it.
+    /// Only labels that still say one of those two things are rewritten.
+    /// </summary>
+    internal static void ShowEmptyText(PoolAnchors anchors, object overlay)
+    {
+        try
+        {
+            if (anchors.RoomListSummaryLabel?.GetValue(overlay) is Label summary)
+            {
+                summary.Text = EmptyPoolText(summary.Text);
+            }
+
+            if (anchors.RoomListContainer?.GetValue(overlay) is not Node container)
+            {
+                return;
+            }
+
+            foreach (Node node in container.FindChildren("*", "Label", recursive: true, owned: false))
+            {
+                if (node is Label label)
+                {
+                    label.Text = EmptyPoolText(label.Text);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("empty-text", "the empty-hall text could not be written: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    private static string EmptyPoolText(string text)
+    {
+        if (text.StartsWith(EmptySummaryPrefix, StringComparison.Ordinal)
+            || text.StartsWith(LoadingTitle, StringComparison.Ordinal))
+        {
+            return EmptyPoolTitle;
+        }
+
+        return text.StartsWith(LoadingHint, StringComparison.Ordinal) ? EmptyHintPrefix + "。" : text;
     }
 
     /// <summary>Remembers that a round hit its ceiling, so a recurring slow round cannot flood the log.</summary>
@@ -875,6 +943,8 @@ internal sealed class PoolRefreshSession
 
     private readonly CancellationTokenSource _cancellation;
 
+    private readonly CancellationToken _callerToken;
+
     /// <summary>One line in the log for the first round of the session, and nothing after it.</summary>
     private static int _announced;
 
@@ -884,6 +954,7 @@ internal sealed class PoolRefreshSession
     {
         _anchors = anchors;
         Overlay = overlay;
+        _callerToken = cancellationToken;
         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _cycle = PoolRoomStore.Instance.BeginCycle();
     }
@@ -1013,23 +1084,41 @@ internal sealed class PoolRefreshSession
             {
                 Task<PoolServerFetch> finished = await Task.WhenAny(pending).ConfigureAwait(true);
                 pending.Remove(finished);
-                if (finished.Status == TaskStatus.RanToCompletion)
-                {
-                    PoolServerFetch fetch = finished.Result;
-                    PoolServerCatalog.RecordRoomsFetch(fetch);
-                    _cycle.Accept(_anchors, fetch);
-                }
-                else
+                if (finished.Status != TaskStatus.RanToCompletion)
                 {
                     // FetchAsync is written not to throw; a fault here is a bug in this mod, and an unobserved task
                     // exception would surface as noise in the game log with no repair name on it.
                     _ = finished.Exception;
+                    continue;
+                }
+
+                PoolServerFetch fetch = finished.Result;
+                if (fetch.Cancelled)
+                {
+                    // The round was superseded, so this server did not fail: writing it down as a failure would put
+                    // it on the cooldown ladder and close its create guard for a request nobody waited for.
+                    continue;
+                }
+
+                PoolServerCatalog.RecordRoomsFetch(fetch);
+                _cycle.Accept(_anchors, fetch);
+                if (!fetch.Succeeded && fetch.Server.LastRooms is { Count: > 0 } lastRooms)
+                {
+                    // This is the round the server became dead in, so IsCoolingDown is still false for it and the
+                    // next round is the first one that keeps its rooms as stale. Dropping them now is the blink: they
+                    // vanish, then come back eight seconds later marked "（旧）".
+                    _cycle.AcceptStale(_anchors, fetch.Server, lastRooms);
                 }
             }
         }
+        catch (OperationCanceledException) when (_callerToken.IsCancellationRequested)
+        {
+            // The caller withdrew the refresh: the round stays cancelled instead of turning into a failure.
+            throw;
+        }
         catch (OperationCanceledException)
         {
-            // A superseded round publishes nothing.
+            // A superseded round publishes nothing: our own budget expired and the session was finished under it.
         }
         catch (Exception exception)
         {

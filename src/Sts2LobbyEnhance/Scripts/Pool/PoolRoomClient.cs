@@ -20,6 +20,9 @@ internal sealed class PoolServerFetch
 
     internal string? Error { get; set; }
 
+    /// <summary>Set when the caller's token stopped the request. Cancellation is not a failed measurement.</summary>
+    internal bool Cancelled { get; set; }
+
     internal bool Succeeded => Error == null;
 
     internal const int UnknownLatency = int.MaxValue;
@@ -79,6 +82,7 @@ internal static class PoolRoomClient
         }
         catch (OperationCanceledException)
         {
+            fetch.Cancelled = true;
             fetch.Error = "cancelled";
         }
         catch (Exception exception)

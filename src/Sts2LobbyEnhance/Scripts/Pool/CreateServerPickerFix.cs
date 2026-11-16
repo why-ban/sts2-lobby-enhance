@@ -77,9 +77,17 @@ internal sealed class CreateServerPickerFix : ICompatFix
                 priority = Priority.Last
             });
 
+        harmony.Patch(
+            anchors.OpenCreateDialog,
+            postfix: new HarmonyMethod(typeof(CreateServerPickerFix), nameof(OpenCreateDialogPostfix))
+            {
+                priority = Priority.Last
+            });
+
         Entry.Info(
-            "[server-pool] the create dialog now offers a collapsible server picker (default 自动（延迟最低）); " +
-            "patched " + PoolAnchors.OverlayTypeName + ".BuildCreateDialog (LanConnectLobbyOverlay.cs:2480).");
+            "[server-pool] the create dialog now offers a collapsible server picker (default 自动（延迟最低）), and every " +
+            "open of the dialog starts at that default again; patched " + PoolAnchors.OverlayTypeName +
+            ".BuildCreateDialog (LanConnectLobbyOverlay.cs:2480) and .OpenCreateDialogInternal (:4973).");
     }
 
     // ReSharper disable once InconsistentNaming - Harmony binds these by their exact names.
@@ -119,6 +127,32 @@ internal sealed class CreateServerPickerFix : ICompatFix
         }
     }
 
+    // ReSharper disable once InconsistentNaming - Harmony binds these by their exact names.
+    public static void OpenCreateDialogPostfix(object? __instance)
+    {
+        try
+        {
+            if (__instance == null)
+            {
+                return;
+            }
+
+            // A manual choice belongs to the room being created, not to the session: the dialog is built once, so
+            // without this the previous room's server would still be pinned the next time the dialog opens.
+            CreateServerPickerState.Reset(__instance);
+            if (Sections.TryGetValue(__instance, out CreateServerPickerSection? section) && section != null)
+            {
+                section.ResetToDefault();
+            }
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce(
+                "create-picker-reset",
+                "the picker could not be reset for this open: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
     internal static int ProbeBudget => ProbeBudgetMs;
 }
 
@@ -138,6 +172,14 @@ internal sealed class CreateServerPickerState
 
     /// <summary>The server the player pinned, or null for 自动. Read by PoolCreateFix.</summary>
     internal static string? SelectedBaseUrl(object overlay) => For(overlay).BaseUrl;
+
+    /// <summary>Back to 自动（延迟最低）, collapsed: what each open of the create dialog starts from.</summary>
+    internal static void Reset(object overlay)
+    {
+        CreateServerPickerState state = For(overlay);
+        state.BaseUrl = null;
+        state.Expanded = false;
+    }
 }
 
 /// <summary>
@@ -366,7 +408,7 @@ internal sealed class CreateServerPickerSection
     {
         var row = new Button
         {
-            TooltipText = tooltip,
+            TooltipText = Display(tooltip),
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             Alignment = HorizontalAlignment.Left
         };
@@ -380,7 +422,7 @@ internal sealed class CreateServerPickerSection
 
     private void ApplyRowStyle(Button row, string label, bool selected)
     {
-        row.Text = (selected ? SelectedBullet : UnselectedBullet) + label;
+        row.Text = Display((selected ? SelectedBullet : UnselectedBullet) + label);
         _anchors.ApplyButtonStyle?.Invoke(null, new object?[] { row, selected, false });
     }
 
@@ -437,7 +479,7 @@ internal sealed class CreateServerPickerSection
             string current = state.BaseUrl == null
                 ? "自动（延迟最低）"
                 : PoolAddress.ShortName(null, state.BaseUrl, 16);
-            _header.Text = "服务器 · " + current + (state.Expanded ? ExpandedMark : CollapsedMark);
+            _header.Text = Display("服务器 · " + current + (state.Expanded ? ExpandedMark : CollapsedMark));
         }
         catch (Exception exception)
         {
@@ -474,7 +516,7 @@ internal sealed class CreateServerPickerSection
                 }
             }
 
-            hint!.Text = text;
+            hint!.Text = Display(text);
             hint.Visible = text.Length > 0;
         }
         catch (Exception exception)
@@ -614,4 +656,43 @@ internal sealed class CreateServerPickerSection
     /// and visibility work detached; only a freed node must not be touched.
     /// </summary>
     private static bool IsLive(Node? node) => node != null && GodotObject.IsInstanceValid(node);
+
+    /// <summary>
+    /// Every string this panel prints goes through the host mod's own glyph fallback, the call its buttons and labels
+    /// already use. The panel is full of the punctuation and bullet glyphs that fallback exists for, so printing them
+    /// raw is the half-applied state: correct on a desktop, tofu on the Android builds that need it.
+    /// </summary>
+    private string Display(string text)
+    {
+        try
+        {
+            return _anchors.NormalizeForDisplay?.Invoke(null, new object?[] { text }) as string ?? text;
+        }
+        catch (Exception)
+        {
+            return text;
+        }
+    }
+
+    /// <summary>Repaints after the choice was reset, so the header stops showing the previous room's server.</summary>
+    internal void ResetToDefault()
+    {
+        try
+        {
+            CreateServerPickerState state = CreateServerPickerState.For(_overlay);
+            if (IsLive(_rows))
+            {
+                _rows.Visible = state.Expanded;
+            }
+
+            UpdateHeader();
+            UpdateHint(state);
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce(
+                "create-picker-repaint",
+                "the picker could not be repainted for this open: " + PoolRoomClient.Describe(exception));
+        }
+    }
 }
