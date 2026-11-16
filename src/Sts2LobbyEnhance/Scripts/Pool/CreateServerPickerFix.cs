@@ -6,29 +6,17 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Lets the player choose which lobby server a new room is published to, inside the create-room dialog.
-///
-/// The default is "自动（延迟最低）" and that is also the behaviour without this repair; picking a server turns the
-/// choice into a constraint ("only create on that server"), which is honoured by PoolCreateFix.
-///
-/// The section is inserted into the dialog body the host mod builds, between the max-players row and the error label,
-/// collapsed by default. Expanding it probes the servers that have no fresh cache entry (2 s total budget) and rewrites
-/// the latency column when the answers arrive; nothing blocks, and a failed probe leaves "未测" rather than a made-up
-/// number.
-///
-/// The selection lives in memory only, keyed by the overlay instance, and every open of the dialog starts from 自动
-/// again: config.json keeps holding one server address, and this is neither a persisted nor a remembered setting.
+/// Lets the player publish a new room to one chosen lobby server. 自动（延迟最低） is both the default and the behaviour
+/// without this repair; a picked server is a constraint only create honours, and it is never written to config.json
 /// </summary>
 internal sealed class CreateServerPickerFix : ICompatFix
 {
     internal const string FixId = "server-pool-create-picker";
 
-    /// <summary>Budget for the latency refresh a single expand may trigger, matching the create path's probe budget.</summary>
     internal const int ProbeBudgetMs = 2000;
 
     private static PoolAnchors? _anchors;
 
-    /// <summary>One section per overlay, replaced when the dialog is rebuilt.</summary>
     private static readonly ConditionalWeakTable<object, CreateServerPickerSection> Sections = new();
 
     public string Id => FixId;
@@ -155,8 +143,8 @@ internal sealed class CreateServerPickerFix : ICompatFix
 }
 
 /// <summary>
-/// The per-overlay remembered choice. <see cref="BaseUrl"/> null means 自动（延迟最低）; anything else is a normalized
-/// authority the create repair must switch to (and only to) before publishing.
+/// The per-overlay remembered choice: <see cref="BaseUrl"/> null means 自动（延迟最低）, anything else is the one authority
+/// the create repair may switch to before publishing
 /// </summary>
 internal sealed class CreateServerPickerState
 {
@@ -168,10 +156,9 @@ internal sealed class CreateServerPickerState
 
     internal static CreateServerPickerState For(object overlay) => States.GetValue(overlay, _ => new CreateServerPickerState());
 
-    /// <summary>The server the player pinned, or null for 自动. Read by PoolCreateFix.</summary>
     internal static string? SelectedBaseUrl(object overlay) => For(overlay).BaseUrl;
 
-    /// <summary>Back to 自动（延迟最低）, collapsed: what each open of the create dialog starts from.</summary>
+    /// <summary>Back to 自动（延迟最低） and collapsed: what each open of the create dialog starts from</summary>
     internal static void Reset(object overlay)
     {
         CreateServerPickerState state = For(overlay);
@@ -181,8 +168,8 @@ internal sealed class CreateServerPickerState
 }
 
 /// <summary>
-/// The collapsed header plus the expandable server list. Pure UI: it never switches servers itself, and every node
-/// write is guarded against a dialog that closed while a probe was still running.
+/// Pure UI: it never switches servers itself, and every node write tolerates a dialog that closed while a probe was
+/// still running
 /// </summary>
 internal sealed class CreateServerPickerSection
 {
@@ -292,7 +279,6 @@ internal sealed class CreateServerPickerSection
         UpdateHeader();
     }
 
-    /// <summary>Puts the section into the dialog body, before the error label when the host mod still has one.</summary>
     internal void Attach()
     {
         try
@@ -419,7 +405,7 @@ internal sealed class CreateServerPickerSection
         }
     }
 
-    /// <summary>Redraws the list from the current cache. Cheap: no network, only string building.</summary>
+    /// <summary>No network here: the latency column is only what the cache already knows</summary>
     private void RebuildRows()
     {
         try
@@ -541,7 +527,6 @@ internal sealed class CreateServerPickerSection
         row.SetMeta(RowSelectedMeta, selected);
     }
 
-    /// <summary>Re-marks every row after a click, so exactly one carries the bullet and the primary styling.</summary>
     private void RestyleRows(string? selectedBaseUrl)
     {
         if (!IsLive(_rows))
@@ -649,7 +634,6 @@ internal sealed class CreateServerPickerSection
         }
     }
 
-    /// <summary>Probes only the servers whose latency/guard cache is stale, then rewrites the rows once.</summary>
     private async Task RefreshAsync()
     {
         if (Interlocked.Exchange(ref _refreshing, 1) != 0)
