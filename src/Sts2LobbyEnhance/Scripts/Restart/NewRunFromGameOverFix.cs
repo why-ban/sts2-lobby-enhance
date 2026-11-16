@@ -403,9 +403,27 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             }
         }
 
+        if (_injectedHint is { } hint)
+        {
+            try
+            {
+                if (GodotObject.IsInstanceValid(hint))
+                {
+                    // The client's hint belongs to the game-over screen's first page: the leaderboard that opens after
+                    // the summary's fade-out would otherwise show it on top of its own text.
+                    hint.Visible = false;
+                    hidden = true;
+                }
+            }
+            catch (Exception exception)
+            {
+                Entry.Warn($"new-run-button: could not hide the client hint: {exception.Message}");
+            }
+        }
+
         if (hidden)
         {
-            Entry.Info($"new-run-button: host controls hidden ({why}).");
+            Entry.Info($"new-run-button: injected controls hidden ({why}).");
         }
     }
 
@@ -416,10 +434,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
         // The screen dies with the run, so the finished run has to be captured now: the stale room binding is
         // keyed by a hash of it and can only be cleaned up before the teardown.
-        if (shape.ResultField.GetValue(screen) is PostRunProgressUpdateResult result)
-        {
-            _finishedRun = result.run;
-        }
+        // _result is a value-type field on the screen, so the pattern always matches: this is a read, not a guard, and
+        // run can still be null on a screen that never got a result.
+        _finishedRun = shape.ResultField.GetValue(screen) is PostRunProgressUpdateResult result ? result.run : null;
 
         PeerCounts counts = CountPeers(service);
         RunState? runState = shape.RunStateField.GetValue(screen) as RunState;
@@ -552,6 +569,10 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     ///
     /// <paramref name="captionText"/> is why the button is gone. It goes into the caption because that label is
     /// the only thing left on the screen once the button disappears
+    ///
+    /// The button is freed: the session it could restart is gone, so keeping a hidden duplicate alive only leaves a
+    /// dead node behind. The caption is kept on purpose - it is that reason, and the next injection reuses it instead
+    /// of adding a second label on the same rectangle.
     /// </summary>
     private static void WithdrawHostControls(string captionText)
     {
@@ -566,6 +587,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
                     // NReturnToMainMenuButton.OnDisable sets Visible = false, so the button really disappears
                     // instead of staying clickable.
                     button.Disable();
+                    button.QueueFree();
                 }
             }
             catch (Exception exception)
@@ -574,9 +596,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             }
         }
 
-        Label? caption = _injectedCaption;
-        _injectedCaption = null;
-        if (caption != null)
+        if (_injectedCaption is { } caption)
         {
             try
             {
@@ -1403,6 +1423,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     {
         if (_finishedRun == null)
         {
+            Entry.Warn(
+                "new-run-button: the finished run's save key is unknown (result.run was null), so the stale room " +
+                "binding stays in the mod's config.");
             return null;
         }
 

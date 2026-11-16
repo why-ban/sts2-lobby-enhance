@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -53,6 +54,9 @@ internal sealed record ScanReport(
     long AssemblySize,
     string AssemblySha256,
     string GameAssemblyDirectory,
+    string GameAssemblyVersion,
+    long GameAssemblySize,
+    string GameAssemblySha256,
     int MemberReferenceCount,
     int FieldDefinitionCount,
     int MethodDefinitionCount,
@@ -114,6 +118,11 @@ internal static class BreakpointScanner
 
         var fileInfo = new FileInfo(fullPath);
         string sha256 = ComputeSha256(fullPath);
+        var gameInfo = new FileInfo(gameAssemblyPath);
+        // The scan's answer is only meaningful for one game build: recording which one turns "this used to pass" into
+        // something the next reader can check without a debugger.
+        string gameVersion = FileVersionInfo.GetVersionInfo(gameAssemblyPath).FileVersion ?? string.Empty;
+        string gameSha256 = ComputeSha256(gameAssemblyPath);
 
         using FileStream stream = File.OpenRead(fullPath);
         using var peReader = new PEReader(stream);
@@ -167,6 +176,9 @@ internal static class BreakpointScanner
             fileInfo.Length,
             sha256,
             gameDirectory,
+            gameVersion,
+            gameInfo.Length,
+            gameSha256,
             reader.MemberReferences.Count,
             reader.FieldDefinitions.Count,
             reader.MethodDefinitions.Count,

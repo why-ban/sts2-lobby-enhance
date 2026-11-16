@@ -245,6 +245,9 @@ internal sealed class PoolAnchors
     /// <summary>The room the resume-slot dialog waits for, null when it is closed</summary>
     internal FieldInfo? PendingResumeJoinRoom;
 
+    /// <summary>The slot picker itself: the field survives a hidden overlay, the container is what says "on screen"</summary>
+    internal FieldInfo? ResumeSlotDialogContainer;
+
     /// <summary>The host mod's Android glyph fallback for printed text</summary>
     internal MethodInfo? NormalizeForDisplay;
 
@@ -253,6 +256,15 @@ internal sealed class PoolAnchors
 
     /// <summary>Game type: a multiplayer run save blocks a new room</summary>
     internal PropertyInfo? SaveManagerHasMultiplayerRun;
+
+    /// <summary>The mode the dialog would create; upstream refuses an unlocked-mode check before any request</summary>
+    internal MethodInfo? SelectedCreateGameMode;
+
+    /// <summary>What the player has unlocked: the second half of that check</summary>
+    internal MethodInfo? ReadCreateGameModeAvailability;
+
+    /// <summary>Upstream's own "this mode can be hosted" predicate</summary>
+    internal MethodInfo? IsCreateGameModeAvailable;
 
     internal static PoolAnchors? TryCapture(Assembly host, PoolAnchorScope scope, out string reason)
     {
@@ -403,6 +415,7 @@ internal sealed class PoolAnchors
         anchors.ConfigBaseUrlOverride = ReflectScope.StaticProperty(optional, config, "LobbyServerBaseUrlOverride");
         anchors.RoomSavedRun = OptionalProperty(anchors.RoomType, "SavedRun", optional);
         anchors.PendingResumeJoinRoom = OptionalField(anchors.Overlay, "_pendingResumeJoinRoom", optional);
+        anchors.ResumeSlotDialogContainer = OptionalField(anchors.Overlay, "_resumeSlotDialogContainer", optional);
         anchors.NormalizeForDisplay = ReflectScope.StaticMethod(
             optional,
             OptionalType(host, UiTextTypeName, optional),
@@ -413,6 +426,24 @@ internal sealed class PoolAnchors
         Type? saveManager = ReflectScope.FindType("MegaCrit.Sts2.Core.Saves.SaveManager");
         anchors.SaveManagerInstance = OptionalProperty(saveManager, "Instance", optional);
         anchors.SaveManagerHasMultiplayerRun = OptionalProperty(saveManager, "HasMultiplayerRunSave", optional);
+
+        // The game-mode refusal comes before everything else upstream checks, and its two arguments are only reachable
+        // through the two getters, so all three are pinned together by the getters' own return types rather than arity.
+        if (scope == PoolAnchorScope.Create)
+        {
+            anchors.SelectedCreateGameMode = ReflectScope.InstanceMethod(optional, anchors.Overlay, "GetSelectedCreateGameMode");
+            anchors.ReadCreateGameModeAvailability = ReflectScope.InstanceMethod(optional, anchors.Overlay, "GetCreateGameModeAvailability");
+            if (anchors.SelectedCreateGameMode?.ReturnType.FullName is { } modeType
+                && anchors.ReadCreateGameModeAvailability?.ReturnType.FullName is { } availabilityType)
+            {
+                anchors.IsCreateGameModeAvailable = ReflectScope.StaticMethod(
+                    optional,
+                    anchors.Overlay,
+                    "IsCreateGameModeAvailable",
+                    modeType,
+                    availabilityType);
+            }
+        }
 
         ReportOptionalMisses(optional);
 
@@ -870,6 +901,12 @@ internal static class PoolServerCatalog
     /// <summary>Longest one discovery round may take before it gives up and tries again next tick.</summary>
     internal const int DiscoveryBudgetMs = 1500;
 
+    /// <summary>
+    /// How long a failed or empty discovery round is left alone. The refresh tick is eight seconds, so without this an
+    /// unreachable discovery endpoint is asked on every single one of them, forever.
+    /// </summary>
+    internal const int DiscoveryRetrySeconds = 60;
+
     private static readonly object Gate = new();
 
     private static List<PoolServer> _servers = new();
@@ -879,6 +916,8 @@ internal static class PoolServerCatalog
     private static DateTimeOffset _builtAt = DateTimeOffset.MinValue;
 
     private static DateTimeOffset _discoveredAt = DateTimeOffset.MinValue;
+
+    private static DateTimeOffset _discoveryRetryAt = DateTimeOffset.MinValue;
 
     private static int _discoveryInFlight;
 
@@ -927,7 +966,17 @@ internal static class PoolServerCatalog
     {
         lock (Gate)
         {
-            return DateTimeOffset.UtcNow - _discoveredAt > TimeSpan.FromSeconds(DiscoveryTtlSeconds);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            return now >= _discoveryRetryAt && now - _discoveredAt > TimeSpan.FromSeconds(DiscoveryTtlSeconds);
+        }
+    }
+
+    /// <summary>Leaves the next attempt alone for a while. Called by every exit that did not refresh the list.</summary>
+    private static void DeferNextDiscovery()
+    {
+        lock (Gate)
+        {
+            _discoveryRetryAt = DateTimeOffset.UtcNow.AddSeconds(DiscoveryRetrySeconds);
         }
     }
 
@@ -939,6 +988,7 @@ internal static class PoolServerCatalog
     {
         if (anchors.GatherCloudflareCandidates == null)
         {
+            DeferNextDiscovery();
             return;
         }
 
@@ -959,18 +1009,22 @@ internal static class PoolServerCatalog
 
             if (current.Count == 0)
             {
+                // Discovery merges into the known list, so with nothing known there is nothing to merge into.
+                DeferNextDiscovery();
                 return;
             }
 
             object? invocation = anchors.GatherCloudflareCandidates.Invoke(null, new object?[] { budget.Token });
             if (invocation is not Task gather)
             {
+                DeferNextDiscovery();
                 return;
             }
 
             await gather.ConfigureAwait(true);
             if (gather.GetType().GetProperty("Result")?.GetValue(gather) is not IEnumerable discovered)
             {
+                DeferNextDiscovery();
                 return;
             }
 
@@ -997,6 +1051,7 @@ internal static class PoolServerCatalog
 
             if (additions.Count == 0)
             {
+                DeferNextDiscovery();
                 return;
             }
 
@@ -1013,6 +1068,7 @@ internal static class PoolServerCatalog
         }
         catch (OperationCanceledException)
         {
+            DeferNextDiscovery();
             // Leaving the cache alone is the whole recovery path, but a budget that expires on every tick is
             // invisible without a line: the next round simply asks again.
             PoolRefreshFix.WarnOnce(
@@ -1022,6 +1078,7 @@ internal static class PoolServerCatalog
         }
         catch (Exception exception)
         {
+            DeferNextDiscovery();
             PoolRefreshFix.WarnOnce(
                 "discovery",
                 "server discovery failed, the pool keeps the servers it already knew: " +
@@ -1524,7 +1581,7 @@ internal static class PoolAddress
 
     /// <summary>
     /// The short name the pool prints for a room: the operator's display name when there is one, otherwise the
-    /// host part of the address, truncated to max characters.
+    /// host part of the address, cut to max characters with an ellipsis so two hosts cannot print the same name.
     /// </summary>
     internal static string ShortName(string? displayName, string authority, int max)
     {
@@ -1534,7 +1591,19 @@ internal static class PoolAddress
             candidate = Uri.TryCreate(authority, UriKind.Absolute, out Uri? uri) ? uri.Host : authority;
         }
 
-        return candidate.Length <= max ? candidate : candidate[..max];
+        if (candidate.Length <= max)
+        {
+            return candidate;
+        }
+
+        // Never cut a surrogate pair in half: half an emoji is a broken glyph, not a shorter name.
+        int cut = max - 1;
+        if (cut > 0 && char.IsHighSurrogate(candidate[cut - 1]))
+        {
+            cut--;
+        }
+
+        return candidate[..cut] + "…";
     }
 }
 

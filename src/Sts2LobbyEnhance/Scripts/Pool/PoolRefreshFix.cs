@@ -26,17 +26,18 @@ internal sealed class PoolRefreshFix : ICompatFix
     private const string Tag = "[server-pool] ";
 
     /// <summary>
-    /// Ceiling for the current server's /probe and /announcements. Upstream leaves them on the client's 10 s
-    /// HttpClient timeout, which would let one dead server hold the status line; the failure path is the same.
+    /// Ceiling for the current server's /probe and /announcements: the same 2 s one pooled fetch gets, instead of the
+    /// 10 s HttpClient timeout upstream leaves them on. It has to stay below <see cref="RoundBudgetMs"/>: a budget the
+    /// round ceiling always expires first is a number nobody can observe.
     /// </summary>
-    private const int CurrentServerQueryBudgetMs = 3000;
+    private const int CurrentServerQueryBudgetMs = 2000;
 
     /// <summary>A round may rebuild the stage this often: the cold-start paints plus the one final draw</summary>
     private const int MaxRebuildsPerRound = 3;
 
     /// <summary>
-    /// Hard ceiling for one pooled round. The per-server fetch already stops at 2 s; this bounds the whole round
-    /// (probe + announcements + fan-out), so the paint waits at most this long.
+    /// Hard ceiling for one pooled round, so the paint waits at most this long. It has to stay above both the
+    /// per-server fetch and the current server's query budget above, or the round would cut them off.
     /// </summary>
     private const int RoundBudgetMs = 2500;
 
@@ -302,6 +303,22 @@ internal sealed class PoolRefreshFix : ICompatFix
                 return false;
             }
 
+            if (session.NoServersKnown)
+            {
+                // An empty hall and an empty catalogue look the same on screen but are different failures: with no
+                // server to ask, clearing the status line reports a success nobody performed.
+                WarnOnce("no-servers", "no lobby server is known: neither the built-in list nor discovery produced one");
+                MarkRefreshFailed(anchors, overlay);
+                if (RoomCount(anchors, overlay) == 0)
+                {
+                    NoteRebuild();
+                    anchors.RebuildRoomStage.Invoke(overlay, null);
+                }
+
+                SetStatus(overlay, "大厅服务不可用：没有可用的内建或发现的大厅服务器");
+                return false;
+            }
+
             if (rooms.Count == 0)
             {
                 ShowEmptyText(anchors, overlay);
@@ -346,10 +363,12 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         finally
         {
-            anchors.RefreshInFlight!.SetValue(overlay, false);
-            anchors.UpdateActionButtons!.Invoke(overlay, null);
+            // Release the round before running host code: UpdateActionButtons touches nodes and can throw on an
+            // overlay that a theme change freed mid-round, and that must not skip the fan-out stop or the dispose.
             session?.Finish();
             (apiClient as IDisposable)?.Dispose();
+            anchors.RefreshInFlight!.SetValue(overlay, false);
+            anchors.UpdateActionButtons!.Invoke(overlay, null);
         }
     }
 
@@ -708,8 +727,16 @@ internal sealed class PoolRefreshFix : ICompatFix
     {
         try
         {
-            if (anchors.RoomListSummaryLabel?.GetValue(overlay) is Label summary
-                && summary.Text.StartsWith(EmptySummaryPrefix, StringComparison.Ordinal))
+            Label? summary = anchors.RoomListSummaryLabel?.GetValue(overlay) as Label;
+
+            // A round that already confirmed the hall is empty has said so on the stage. Rewriting the hint to "loading"
+            // and back on every eight-second tick is a flash that carries no information.
+            if (summary != null && summary.Text.StartsWith(EmptyPoolTitle, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (summary != null && summary.Text.StartsWith(EmptySummaryPrefix, StringComparison.Ordinal))
             {
                 summary.Text = LoadingTitle;
             }
@@ -937,6 +964,9 @@ internal sealed class PoolRefreshSession
     /// <summary>How the round went, for the refresh's "every server was silent" decision.</summary>
     internal PoolCycle Cycle => _cycle;
 
+    /// <summary>Set when the catalogue has no server at all, so the epilogue reports it instead of clearing the status line.</summary>
+    internal bool NoServersKnown { get; private set; }
+
     /// <summary>
     /// Commits the finished round and returns the list the overlay should hold. Called once per round, from the
     /// refresh's epilogue; a round that produced nothing keeps the previously published list.
@@ -987,7 +1017,9 @@ internal sealed class PoolRefreshSession
         Interlocked.CompareExchange(ref PoolRefreshFix.ActiveSession, null, this);
         try
         {
+            // Cancel first: the fan-out holds this token, and a disposed source cannot cancel.
             _cancellation.Cancel();
+            _cancellation.Dispose();
         }
         catch (Exception)
         {
@@ -1014,6 +1046,10 @@ internal sealed class PoolRefreshSession
     {
         try
         {
+            // The list first, discovery second: discovery merges into the catalogue GetServers just built, so asking
+            // while the catalogue is still empty was a round that returned before doing anything.
+            IReadOnlyList<PoolServer> servers = PoolServerCatalog.GetServers(_anchors);
+
             if (PoolServerCatalog.NeedsDiscovery())
             {
                 // Fire and forget on purpose: the extra servers can only help the *next* round, and the discovery
@@ -1022,9 +1058,10 @@ internal sealed class PoolRefreshSession
                 _ = PoolServerCatalog.RefreshDiscoveryAsync(_anchors, CancellationToken.None);
             }
 
-            IReadOnlyList<PoolServer> servers = PoolServerCatalog.GetServers(_anchors);
             if (servers.Count == 0)
             {
+                // Nothing to ask. The epilogue reports it; returning quietly here used to read as a successful round.
+                NoServersKnown = true;
                 return;
             }
 

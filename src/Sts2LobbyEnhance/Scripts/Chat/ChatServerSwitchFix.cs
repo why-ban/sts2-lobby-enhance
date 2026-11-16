@@ -1083,6 +1083,14 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             if (SameAddress(target, actual))
             {
                 Interlocked.Exchange(ref _busy, 0);
+                // A click that changes nothing on screen reads as a broken button, so the reason goes into the tooltip
+                // the row already has (Describe prints it as the last attempt).
+                SwitchState idled = Volatile.Read(ref _state);
+                SetState(new SwitchState(
+                    idled.TargetAddress,
+                    idled.TargetName,
+                    SwitchPhase.Idle,
+                    "已经在置顶服务器的频道上，未重连：" + target));
                 DeferInfo("已经在目标服务器的频道上，未重连：" + target);
                 return;
             }

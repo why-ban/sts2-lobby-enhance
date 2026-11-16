@@ -154,7 +154,18 @@ internal static class ReflectScope
         }
 
         ParameterInfo[] parameters = method.GetParameters();
-        for (int index = 0; index < parameters.Length && index < names.Length; index++)
+        if (names.Length > parameters.Length)
+        {
+            // More names than parameters: the signature shrank under the pinned list, and the extra names would be
+            // compared against nothing. A shorter list is deliberate - only the parameters this patch binds by name
+            // are pinned, and those are always the first ones.
+            problems.Add(
+                $"{method.DeclaringType?.Name}.{method.Name} takes {parameters.Length} parameter(s), " +
+                $"but {names.Length} name(s) were pinned (Harmony binds by name)");
+            return;
+        }
+
+        for (int index = 0; index < names.Length; index++)
         {
             if (!string.Equals(parameters[index].Name, names[index], StringComparison.Ordinal))
             {

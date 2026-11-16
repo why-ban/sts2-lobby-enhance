@@ -46,7 +46,8 @@ internal static class OfficialModScan
     /// <summary>Short description of what was scanned, appended to assertion messages.</summary>
     internal static string Context(ScanReport report) =>
         $"scanned {report.AssemblyPath} ({report.AssemblySize} B, sha256 {report.AssemblySha256}) " +
-        $"against {report.GameAssemblyDirectory}";
+        $"against {report.GameAssemblyDirectory} (sts2.dll {report.GameAssemblyVersion}, {report.GameAssemblySize} B, " +
+        $"sha256 {report.GameAssemblySha256})";
 
     private static Attempt Run()
     {

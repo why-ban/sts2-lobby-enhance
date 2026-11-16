@@ -357,6 +357,10 @@ internal sealed class RosterLab : IDisposable
             Assert.Skip($"Official sts2_lan_connect DLL not found. {TestPaths.OfficialModHint}");
         }
 
+        // Same pin as TailRosterContractTests: a roster contract is only meaningful against the exact binary the
+        // patch was written for, so a substituted build fails here instead of passing on a different shape.
+        Assert.Equal(TestPaths.PinnedOfficialModSha256, BreakpointScanner.ComputeSha256(officialMod!));
+
         GameAssemblyLoader.InstallResolver(gameDirectory!);
         Assembly game = GameAssemblyLoader.Load(Path.Combine(gameDirectory!, "sts2.dll"));
         Assembly host = GameAssemblyLoader.Load(officialMod!);

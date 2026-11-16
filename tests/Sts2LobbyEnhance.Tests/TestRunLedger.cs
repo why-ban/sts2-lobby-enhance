@@ -6,12 +6,12 @@ using Xunit;
 namespace Sts2LobbyEnhance.Tests;
 
 /// <summary>
-/// Counts how many game-dependent cases actually reached their assertions in this process.
+/// Records which game-dependent cases actually reached their assertions in this process, and holds the list of
+/// cases that are supposed to reach them.
 ///
 /// The suite skips a case when the game DLL or the official mod DLL is missing, and a skipped case still
 /// exits 0, so a green run on a machine without the game proves nothing. `GameDependentCoverageTests`
-/// turns that into a failure by comparing this count against
-/// `ExpectedGameDependentTestCount`.
+/// turns that into a failure by comparing this list against what really ran.
 ///
 /// The name comes from the stack: every skip guard calls `Record()` from a helper, so
 /// `[CallerMemberName]` would record the helper's name and collapse whole classes into one entry.
@@ -19,11 +19,46 @@ namespace Sts2LobbyEnhance.Tests;
 internal static class TestRunLedger
 {
     /// <summary>
-    /// How many game-dependent cases the suite executes when every input is present. Hard-coded on purpose:
-    /// adding or removing such a case has to be a deliberate edit here, and the coverage test fails when the
-    /// count drifts in either direction.
+    /// The game-dependent cases the suite executes when every input is present, by the name the runner reports (a
+    /// theory row counts on its own). Listed instead of counted: a bare number can say that something is missing but
+    /// not which case, and it cannot tell a new case from a skipped one. Adding or removing such a case has to be a
+    /// deliberate edit here.
     /// </summary>
-    internal const int ExpectedGameDependentTestCount = 30;
+    internal static readonly string[] ExpectedGameDependentTests =
+    [
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EachHistoricalBreakIsResolvedNow(typeName: \"ClientLobbyJoinRequestMessage\", memberName: \"maxAscensionUnlocked\")",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EachHistoricalBreakIsResolvedNow(typeName: \"InitialGameInfoMessage\", memberName: \"gameMode\")",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EachHistoricalBreakIsResolvedNow(typeName: \"NetHostGameService\", memberName: \"DisconnectClient\")",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EachHistoricalBreakIsResolvedNow(typeName: \"NetHostGameService\", memberName: \"get_ConnectedPeers\")",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EachHistoricalBreakIsResolvedNow(typeName: \"RelicPickingResult\", memberName: \"GenerateRelicFight\")",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EachHistoricalBreakIsResolvedNow(typeName: \"SaveManager\", memberName: \"UpdateProgressWithRunData\")",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EveryHistoricallyBrokenTypeStillExistsInTheGame",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.EveryUnresolvedReferenceIsExplainedOrAbsent",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.NoBreakAppearsThatTheProjectDoesNotDocument",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.NoReferenceIsUnresolvableAgainstTheGame",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.PinnedOfficialBuildIsTheOneUnderTest",
+        "Sts2LobbyEnhance.Tests.BreakpointRegressionTests.ScanCoversEveryMetadataTableThatCanCarryABrokenSignature",
+        "Sts2LobbyEnhance.Tests.BuiltPatchTests.PatchAssemblyResolvesCompletelyAgainstTheInstalledGame",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.ClientLobbyJoinRequestMessageSplitItsAscensionField",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.InitialGameInfoMessageLostItsGameModeField",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.JoinFlowBeginTakesASceneTree",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.JoinResponseMessageCarriesGameModeAndIsCustom",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.NetHostGameServiceConnectedPeersBecameReadOnly",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.NetHostGameServiceDisconnectClientGainedADebugReason",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.PostRunProgressUpdateResultTypeExists",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.RelicPickingResultGenerateRelicFightNeedsARelicIndex",
+        "Sts2LobbyEnhance.Tests.GameApiShapeTests.SaveManagerUpdateProgressWithRunDataReturnsAResult",
+        "Sts2LobbyEnhance.Tests.RosterEpochRegressionTests.T1_AnAuthorityThatAcceptedTheOldEpochRejectsTheNewEpochAsCurrentState",
+        "Sts2LobbyEnhance.Tests.RosterEpochRegressionTests.T2_ResetMakesTheNextEpochAcceptableAsABootstrap",
+        "Sts2LobbyEnhance.Tests.RosterEpochRegressionTests.T3_RepeatingTheAcceptedBytesAsCurrentStateStillPasses",
+        "Sts2LobbyEnhance.Tests.RosterEpochRegressionTests.T4_ResetKeepsTheHostPeerIdSoTheAuthorityStillValidates",
+        "Sts2LobbyEnhance.Tests.TailRosterContractTests.BindingDictionaryCarriesTheRosterAuthority",
+        "Sts2LobbyEnhance.Tests.TailRosterContractTests.RosterAuthorityStateExposesAnInstanceReset",
+        "Sts2LobbyEnhance.Tests.TailRosterContractTests.TailRuntimeExposesTheMessageBusResolver",
+        "Sts2LobbyEnhance.Tests.TailRosterContractTests.TailRuntimeExposesTheSharedSingleton"
+    ];
+
+    internal static int ExpectedGameDependentTestCount => ExpectedGameDependentTests.Length;
 
     private static readonly ConcurrentDictionary<string, byte> Executed = new(StringComparer.Ordinal);
 
@@ -32,6 +67,19 @@ internal static class TestRunLedger
 
     internal static IReadOnlyList<string> ExecutedNames =>
         Executed.Keys.Order(StringComparer.Ordinal).ToList();
+
+    /// <summary>Expected cases that never reached their assertions in this process.</summary>
+    internal static IReadOnlyList<string> MissingTests() =>
+        ExpectedGameDependentTests
+            .Except(ExecutedNames, StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>Cases that ran without being expected: a new case, or one whose displayed name changed.</summary>
+    internal static IReadOnlyList<string> UnexpectedTests() =>
+        ExecutedNames
+            .Except(ExpectedGameDependentTests, StringComparer.Ordinal)
+            .ToList();
 
     /// <summary>Called by a skip guard once the guard has been passed.</summary>
     internal static void Record()
@@ -45,7 +93,7 @@ internal static class TestRunLedger
 
     private static string? CurrentCaseName()
     {
-        // xUnit reports the case (a theory row counts separately), which is the granularity the threshold is
+        // xUnit reports the case (a theory row counts separately), which is the granularity the expected list is
         // expressed in. The stack is only a fallback for a run without an ambient test context.
         string? display = Xunit.TestContext.Current.Test?.TestDisplayName;
         if (!string.IsNullOrEmpty(display))

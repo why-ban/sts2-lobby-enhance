@@ -27,27 +27,24 @@ internal sealed class PoolCreateFix : ICompatFix
     /// <summary>How much faster a server must be before switching is worth the churn.</summary>
     private const int SwitchGainMs = 30;
 
-    /// <summary>At most this many servers are tried before the create runs on whatever is current.</summary>
-    private const int MaxSwitchAttempts = 3;
+    /// <summary>
+    /// At most this many servers are tried before the create runs on whatever is current. Two attempts and a 10 s
+    /// switch cap the whole thing at roughly 2.8 s of probing plus 20 s of switching: the player waits behind a status
+    /// line with no cancel button, so the ceiling has to be small enough to sit through.
+    /// </summary>
+    private const int MaxSwitchAttempts = 2;
 
     private const int ProbeTimeoutMs = 2000;
 
     /// <summary>A switch stops the public chat, reconnects it and writes the config, so it gets its own budget and
-    /// never shares the probe's.</summary>
-    private const int SwitchTimeoutMs = 15_000;
+    /// never shares the probe's. Same cap as the cross-server join's forward switch.</summary>
+    private const int SwitchTimeoutMs = 10_000;
 
     /// <summary>Re-entry gate for the reflective call into the original CreateRoomAsync.</summary>
     [ThreadStatic]
     private static bool _reentering;
 
     private static PoolAnchors? _anchors;
-
-    /// <summary>
-    /// Blocks a second click while the server choice is still running. The host mod only sets _actionInFlight inside
-    /// CreateRoomAsync, which is the method this prefix has not reached yet, so two fast clicks would otherwise start
-    /// two switches and the switch coordinator would cancel the superseded one.
-    /// </summary>
-    private static int _inFlight;
 
     public string Id => FixId;
 
@@ -126,29 +123,39 @@ internal sealed class PoolCreateFix : ICompatFix
                 return true;
             }
 
-            // Upstream rejects the create for free in these three cases before it ever contacts a server. Switching
-            // first would take the player off their server - leaving
-            // the room, dropping the public channel and rewriting config.json - for a create that is then refused
-            // anyway. Let upstream report its own error instead.
+            // Upstream rejects the create for free in these cases before it ever contacts a server. Switching first
+            // would take the player off their server - leaving the room, dropping the public channel and rewriting
+            // config.json - for a create that is then refused anyway. Let upstream report its own error instead.
             if (!CheapCreateChecksPass(anchors, __instance))
             {
                 return true;
             }
 
-            if (Interlocked.Exchange(ref _inFlight, 1) != 0)
+            if (Interlocked.Exchange(ref PoolServerSwitch.InFlight, 1) != 0)
             {
-                // Already choosing a server: the second click is a no-op rather than a second switch, said out loud.
-                PoolRefreshFix.SetStatus(__instance, "正在选择大厅服务器，请稍候…");
+                // Already switching for the other repair: this click is a no-op rather than a second switch, said out
+                // loud. The wording covers both repairs, since either can hold the gate.
+                PoolRefreshFix.SetStatus(__instance, "正在切换大厅服务器，请稍候…");
                 __result = Task.CompletedTask;
                 return false;
             }
 
-            // The dialog's picker (CreateServerPickerFix) records a pinned server; null means 自动（延迟最低）.
-            string? pinned = CreateServerPickerState.SelectedBaseUrl(__instance);
-            __result = pinned == null
-                ? CreateOnBestServerAsync(anchors, __instance)
-                : CreateOnChosenServerAsync(anchors, __instance, pinned);
-            return false;
+            try
+            {
+                // The dialog's picker (CreateServerPickerFix) records a pinned server; null means 自动（延迟最低）.
+                string? pinned = CreateServerPickerState.SelectedBaseUrl(__instance);
+                __result = pinned == null
+                    ? CreateOnBestServerAsync(anchors, __instance)
+                    : CreateOnChosenServerAsync(anchors, __instance, pinned);
+                return false;
+            }
+            catch
+            {
+                // The gate is shared with the join repair: a throw between taking it and starting the task must not
+                // leave both repairs refusing clicks for the rest of the process.
+                Interlocked.Exchange(ref PoolServerSwitch.InFlight, 0);
+                throw;
+            }
         }
         catch (Exception exception)
         {
@@ -161,14 +168,24 @@ internal sealed class PoolCreateFix : ICompatFix
     }
 
     /// <summary>
-    /// The three refusals the host mod makes before it talks to any server: an empty room name, a multiplayer continue
-    /// save, and an already hosted room. All three are reads; a missing anchor means "cannot tell" and the pre-check
-    /// passes, because blocking a legitimate create is worse than an unnecessary switch.
+    /// The refusals the host mod makes before it talks to any server: a game mode the player has not unlocked, an empty
+    /// room name, a multiplayer continue save, and an already hosted room. All of them are reads; a missing anchor means
+    /// "cannot tell" and the pre-check passes, because blocking a legitimate create is worse than an unnecessary switch.
     /// </summary>
     private static bool CheapCreateChecksPass(PoolAnchors anchors, object overlay)
     {
         try
         {
+            if (anchors.SelectedCreateGameMode != null
+                && anchors.ReadCreateGameModeAvailability != null
+                && anchors.IsCreateGameModeAvailable != null
+                && anchors.SelectedCreateGameMode.Invoke(overlay, null) is { } gameMode
+                && anchors.ReadCreateGameModeAvailability.Invoke(overlay, null) is { } availability
+                && anchors.IsCreateGameModeAvailable.Invoke(null, new[] { gameMode, availability }) is false)
+            {
+                return false;
+            }
+
             if (anchors.RoomNameInput?.GetValue(overlay) is Godot.LineEdit nameInput
                 && string.IsNullOrWhiteSpace(nameInput.Text))
             {
@@ -226,7 +243,7 @@ internal sealed class PoolCreateFix : ICompatFix
         {
             // Held until the original create is done, because a click during hosting must not switch the server the
             // host flow is publishing to.
-            Interlocked.Exchange(ref _inFlight, 0);
+            Interlocked.Exchange(ref PoolServerSwitch.InFlight, 0);
         }
     }
 
@@ -270,7 +287,7 @@ internal sealed class PoolCreateFix : ICompatFix
         }
         finally
         {
-            Interlocked.Exchange(ref _inFlight, 0);
+            Interlocked.Exchange(ref PoolServerSwitch.InFlight, 0);
         }
     }
 

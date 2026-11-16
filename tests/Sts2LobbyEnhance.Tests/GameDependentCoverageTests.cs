@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Xunit;
 
 namespace Sts2LobbyEnhance.Tests;
@@ -10,9 +11,9 @@ namespace Sts2LobbyEnhance.Tests;
 /// without Slay the Spire 2 would mean those 30 never asserted anything.
 ///
 ///   1. <b>Input probe</b>. Every input that makes one of those cases skip is checked here.
-///   2. <b>Execution count</b>. <see cref="TestRunLedger.ExecutedCount"/> must equal the hard-coded
-///      threshold. This fact may run before the cases it counts, so it waits for them (bounded) instead of
-///      asserting whatever order the runner happened to pick.
+///   2. <b>Execution set</b>. The cases that recorded themselves must be exactly the expected list. This fact may run
+///      before the cases it counts, so it waits for them (bounded) instead of asserting whatever order the runner
+///      happened to pick.
 ///
 /// Set <c>STS2_ALLOW_MISSING_GAME_INPUTS=1</c> to downgrade a missing input to a skip (for a developer
 /// without the game). The skip message lists every missing input, so the exception is never silent.
@@ -33,7 +34,7 @@ public sealed class GameDependentCoverageTests
     {
         int expected = TestRunLedger.ExpectedGameDependentTestCount;
         int executed = TestRunLedger.ExecutedCount;
-        List<string> missing = MissingInputs();
+        List<string> missingInputs = MissingInputs();
 
         _output.WriteLine($"game-dependent cases recorded in this process: {executed}/{expected}");
         foreach (string name in TestRunLedger.ExecutedNames)
@@ -41,7 +42,7 @@ public sealed class GameDependentCoverageTests
             _output.WriteLine("  ran: " + name);
         }
 
-        if (missing.Count > 0)
+        if (missingInputs.Count > 0)
         {
             int wouldSkip = Math.Max(0, expected - executed);
             string detail =
@@ -49,7 +50,7 @@ public sealed class GameDependentCoverageTests
                 Environment.NewLine +
                 "原因（这些输入缺失时对应用例走 Assert.Skip，dotnet test 仍然退出 0）：" +
                 Environment.NewLine +
-                string.Join(Environment.NewLine, missing.Select(reason => "  - " + reason));
+                string.Join(Environment.NewLine, missingInputs.Select(reason => "  - " + reason));
 
             if (string.Equals(
                     Environment.GetEnvironmentVariable(AllowMissingInputsVariable),
@@ -66,26 +67,50 @@ public sealed class GameDependentCoverageTests
                 $"确实要在没有游戏/构建产物的机器上跑，请设置 {AllowMissingInputsVariable}=1（skip 消息会列出全部缺失项）。");
         }
 
-        // Every input is present, so none of them may skip. This fact can still run before the cases it
-        // counts, so wait for the rest of the run (bounded) instead of asserting the runner's ordering.
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        while (TestRunLedger.ExecutedCount < expected && clock.Elapsed < TimeSpan.FromSeconds(60))
+        // Every input is present, so none of them may skip. This fact can still run before the cases it counts, so wait
+        // for the rest of the run (bounded). Waiting on the *set* rather than the count is what lets the failure name
+        // the cases: a count alone also passes when a new case replaces a skipped one.
+        var clock = Stopwatch.StartNew();
+        while (TestRunLedger.MissingTests().Count > 0 && clock.Elapsed < TimeSpan.FromSeconds(60))
         {
             Thread.Sleep(50);
         }
 
-        int finalCount = TestRunLedger.ExecutedCount;
-        _output.WriteLine($"game-dependent cases executed: {finalCount}/{expected}");
-        foreach (string name in TestRunLedger.ExecutedNames)
+        List<string> missingCases = TestRunLedger.MissingTests().ToList();
+        List<string> unexpectedCases = TestRunLedger.UnexpectedTests().ToList();
+        List<string> ran = TestRunLedger.ExecutedNames.ToList();
+        _output.WriteLine($"game-dependent cases executed: {ran.Count}/{expected}");
+        foreach (string name in missingCases)
         {
-            _output.WriteLine("  ran: " + name);
+            _output.WriteLine("  missing: " + name);
         }
 
-        Assert.True(
-            finalCount == expected,
-            finalCount < expected
-                ? $"只有 {finalCount}/{expected} 个游戏依赖型用例真的执行了断言：有输入存在却仍有用例跳过。"
-                : $"执行了 {finalCount} 个游戏依赖型用例，超过阈值 {expected}：新增用例请同步 tests/.../TestRunLedger.cs 的阈值。");
+        foreach (string name in unexpectedCases)
+        {
+            _output.WriteLine("  unexpected: " + name);
+        }
+
+        if (missingCases.Count == 0 && unexpectedCases.Count == 0)
+        {
+            return;
+        }
+
+        List<string> lines = [$"期望 {expected} 个游戏依赖型用例，实际执行 {ran.Count} 个。"];
+        if (missingCases.Count > 0)
+        {
+            lines.Add($"有输入存在却仍有用例跳过，没有执行断言的是（{missingCases.Count} 个）：");
+            lines.AddRange(missingCases.Select(name => "  - " + name));
+        }
+
+        if (unexpectedCases.Count > 0)
+        {
+            lines.Add(
+                $"这 {unexpectedCases.Count} 个用例不在期望名单里（新增、改名或阈值过期，请同步 " +
+                "tests/Sts2LobbyEnhance.Tests/TestRunLedger.cs 的 ExpectedGameDependentTests）：");
+            lines.AddRange(unexpectedCases.Select(name => "  - " + name));
+        }
+
+        Assert.Fail(string.Join(Environment.NewLine, lines));
     }
 
     /// <summary>

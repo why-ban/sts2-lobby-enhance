@@ -37,6 +37,13 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
     /// <summary>-1 unknown, 0 legacy stays because 新协议 is unusable, 1 新协议 forced</summary>
     private static int _decision = -1;
 
+    /// <summary>
+    /// The offer the selectability question needs, computed once per process. CreateCurrent walks the external
+    /// capability snapshot and the game's message registry, and this postfix runs on every GetSelectedCreateProtocolId
+    /// call; the two answers it feeds the predicate (RitsuLib present, tail LAN range) are fixed until a restart.
+    /// </summary>
+    private static object? _offer;
+
     public string Id => "new-protocol-only";
 
     public FixGroup Group => FixGroup.Modes;
@@ -86,6 +93,9 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
 
             if (shape.CompatButton.GetValue(__instance) is not Button compat || !GodotObject.IsInstanceValid(compat))
             {
+                // The dialog assigns both protocol buttons unconditionally, so this is a shape change: the section is
+                // still on screen even though the install line said it was gone.
+                WarnOnce("the 联机协议 buttons are not in the create dialog, so its section is still shown");
                 return;
             }
 
@@ -94,6 +104,7 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
             Node? body = section?.GetParent();
             if (section == null || body == null)
             {
+                WarnOnce("the 联机协议 section is not where the dialog builds it, so it is still shown");
                 return;
             }
 
@@ -116,12 +127,18 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
                 return;
             }
 
+            object? offer = Offer(shape);
+            if (offer == null)
+            {
+                return;
+            }
+
             // Upstream's own predicate: when 新协议 cannot be hosted right now (no standalone tail runtime), forcing
             // it would turn a working create into a hard failure.
             bool tailUsable = shape.IsSelectable.Invoke(null, new object?[]
             {
                 TailProtocolId,
-                shape.CreateOffer.Invoke(null, null),
+                offer,
                 shape.TailRuntimeAvailable.Invoke(null, null),
             }) is true;
 
@@ -139,6 +156,23 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
         {
             WarnOnce("could not force the protocol choice: " + exception.GetType().Name + ": " + exception.Message);
         }
+    }
+
+    private static object? Offer(Shape shape)
+    {
+        object? cached = Volatile.Read(ref _offer);
+        if (cached != null)
+        {
+            return cached;
+        }
+
+        object? created = shape.CreateOffer.Invoke(null, null);
+        if (created != null)
+        {
+            Volatile.Write(ref _offer, created);
+        }
+
+        return created;
     }
 
     private static void RecordDecision(int value, string message)

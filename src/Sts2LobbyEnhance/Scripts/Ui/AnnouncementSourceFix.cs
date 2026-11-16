@@ -33,7 +33,11 @@ internal sealed class AnnouncementSourceFix : ICompatFix
 
     private static string _clientAddress = string.Empty;
 
-    /// <summary>Non-zero while this prefix is rerunning the method on our own client.</summary>
+    /// <summary>
+    /// Non-zero while this prefix is rerunning the method on our own client. Per thread on purpose: the nested call is
+    /// made on this thread and re-enters synchronously, and a process-wide flag would swallow a parallel request.
+    /// </summary>
+    [ThreadStatic]
     private static int _selfCall;
 
     public string Id => "announcement-source";
@@ -101,9 +105,9 @@ internal sealed class AnnouncementSourceFix : ICompatFix
     {
         try
         {
-            if (Volatile.Read(ref _selfCall) != 0)
+            if (_selfCall != 0)
             {
-                // The call we started below re-entered this prefix: let it reach the real method.
+                // The call we started below re-entered this prefix on this thread: let it reach the real method.
                 return true;
             }
 
@@ -130,14 +134,14 @@ internal sealed class AnnouncementSourceFix : ICompatFix
 
             object? invocationArgument = __args.Length > 0 ? __args[0] : default(CancellationToken);
             object? forwarded;
-            Interlocked.Increment(ref _selfCall);
+            _selfCall++;
             try
             {
                 forwarded = shape.GetAnnouncements.Invoke(client, new[] { invocationArgument });
             }
             finally
             {
-                Interlocked.Decrement(ref _selfCall);
+                _selfCall--;
             }
 
             if (forwarded == null)
@@ -206,6 +210,8 @@ internal sealed class AnnouncementSourceFix : ICompatFix
         lock (Gate)
         {
             RetireClientLocked();
+            // Otherwise the last retired client waits for a switch to a remote server that may never come.
+            DisposeExpiredLocked();
         }
     }
 

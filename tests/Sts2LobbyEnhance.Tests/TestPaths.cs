@@ -213,6 +213,38 @@ internal static class TestPaths
             Path.Combine(projectDirectory, "bin", "Debug", "net9.0", "sts2_lobby_enhance.dll")
         ];
 
-        return candidates.FirstOrDefault(File.Exists);
+        // Newest, not "Release if it happens to exist": a stale Release next to a current Debug build would make every
+        // assertion below describe a binary nobody built.
+        return candidates
+            .Where(File.Exists)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault() is { } newest
+            ? Path.GetFullPath(newest)
+            : null;
+    }
+
+    /// <summary>
+    /// Newest source file of the patch project, build output excluded. The suite does not reference that project, so
+    /// this is the only way for a test to notice that the DLL it scans is older than the code in this tree.
+    /// </summary>
+    internal static string? NewestPatchSource { get; } = ResolveNewestPatchSource();
+
+    private static string? ResolveNewestPatchSource()
+    {
+        string projectDirectory = Path.Combine(CompanionRoot, "src", "Sts2LobbyEnhance");
+        if (!Directory.Exists(projectDirectory))
+        {
+            return null;
+        }
+
+        return Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path =>
+            {
+                string relative = Path.GetRelativePath(projectDirectory, path);
+                return !relative.StartsWith("bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                       && !relative.StartsWith("obj" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
     }
 }

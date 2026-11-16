@@ -126,12 +126,22 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
 
     private static void Sync(Shape shape, Node overlay)
     {
-        if (shape.Root.GetValue(overlay) is not Control root || !GodotObject.IsInstanceValid(root))
+        if (shape.PanelFrame.GetValue(overlay) is not Control frame || !GodotObject.IsInstanceValid(frame))
         {
             return;
         }
 
-        if (shape.PanelFrame.GetValue(overlay) is not Control frame || !GodotObject.IsInstanceValid(frame))
+        FilterState state = States.GetValue(overlay, _ => new FilterState());
+        bool collapsed = !frame.Visible;
+
+        // The collapsed flag is the only input, and upstream never writes these three filters: re-applying the same
+        // values on every frame of the overlay's _Process is work with nothing to show for it.
+        if (state.Applied == collapsed)
+        {
+            return;
+        }
+
+        if (shape.Root.GetValue(overlay) is not Control root || !GodotObject.IsInstanceValid(root))
         {
             return;
         }
@@ -149,7 +159,6 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
             return;
         }
 
-        FilterState state = States.GetValue(overlay, _ => new FilterState());
         if (!state.Captured)
         {
             // Upstream does not write these three, so the first frame we see carries the values it chose.
@@ -159,10 +168,10 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
             state.Captured = true;
         }
 
-        bool collapsed = !frame.Visible;
         root.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Root;
         column.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Column;
         row.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Row;
+        state.Applied = collapsed;
 
         if (collapsed && !state.Logged)
         {
@@ -216,6 +225,9 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         internal bool Captured;
 
         internal bool Logged;
+
+        /// <summary>The last collapsed state that was written into the filters; null until the first write.</summary>
+        internal bool? Applied;
 
         /// <summary>Upstream's filters for the expanded state, restored verbatim.</summary>
         internal Control.MouseFilterEnum Root;

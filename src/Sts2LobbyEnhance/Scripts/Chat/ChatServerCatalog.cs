@@ -59,6 +59,12 @@ namespace Sts2LobbyEnhance;
 
         private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2d);
 
+        /// <summary>
+        /// One connection pool for every probe. A client per call builds a fresh handler, throws its pool away and
+        /// leaves the TCP connections in TIME_WAIT; the per-request ceiling is applied with a token instead.
+        /// </summary>
+        private static readonly HttpClient ProbeClient = new() { Timeout = Timeout.InfiniteTimeSpan };
+
         private static readonly TimeSpan CloudflareTimeout = TimeSpan.FromSeconds(3d);
 
         /// <summary>
@@ -122,7 +128,15 @@ namespace Sts2LobbyEnhance;
                 if (bootstrap != null)
                 {
                     handles.GatherInitial = ReflectScope.MethodOf(bootstrap, GatherInitialName, 0, missing)!;
-                    handles.GatherCloudflare = ReflectScope.MethodOf(bootstrap, GatherCloudflareName, 1, missing)!;
+                    // Bound by parameter type, not arity: a same-arity overload with a different parameter would
+                    // otherwise be accepted and only throw when the candidate list is built.
+                    handles.GatherCloudflare = ReflectScope.Exact(
+                        bootstrap,
+                        GatherCloudflareName,
+                        requireStatic: true,
+                        ["System.Threading.CancellationToken"],
+                        null,
+                        missing)!;
 
                     // public const string: a literal field, so GetRawConstantValue is the safe read.
                     FieldInfo? featured = bootstrap.GetField(
@@ -672,9 +686,9 @@ namespace Sts2LobbyEnhance;
             var stopwatch = Stopwatch.StartNew();
             try
             {
-                using var client = new HttpClient { Timeout = ProbeTimeout };
-                using HttpResponseMessage response = await client
-                    .GetAsync(address + "/probe", HttpCompletionOption.ResponseHeadersRead)
+                using var budget = new CancellationTokenSource(ProbeTimeout);
+                using HttpResponseMessage response = await ProbeClient
+                    .GetAsync(address + "/probe", HttpCompletionOption.ResponseHeadersRead, budget.Token)
                     .ConfigureAwait(false);
                 stopwatch.Stop();
 
@@ -683,7 +697,7 @@ namespace Sts2LobbyEnhance;
                     return new ProbeOutcome(true, false, (int)stopwatch.ElapsedMilliseconds, DateTimeOffset.UtcNow);
                 }
 
-                string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                string body = await response.Content.ReadAsStringAsync(budget.Token).ConfigureAwait(false);
                 return new ProbeOutcome(
                     Reachable: true,
                     Supported: ReadServerChatSupported(body),

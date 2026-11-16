@@ -366,8 +366,11 @@ internal sealed class PoolRoomStore
 /// <summary>Text limits the pool shares with the rest of the mod.</summary>
 internal static class PoolText
 {
-    /// <summary>Source names are cut at twelve characters so the meta row keeps fitting on one card line.</summary>
-    internal const int SourceNameMaxLength = 12;
+    /// <summary>
+    /// Source names are cut at fifteen characters, the longest an IPv4 address can be: a shorter limit turned
+    /// 112.74.164.10 into the same badge as 112.74.164.11. Anything longer is cut with an ellipsis.
+    /// </summary>
+    internal const int SourceNameMaxLength = 15;
 
     internal const string SourceLabelPrefix = "来源：";
 

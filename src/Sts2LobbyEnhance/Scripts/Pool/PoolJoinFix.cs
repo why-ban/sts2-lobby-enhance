@@ -32,12 +32,6 @@ internal sealed class PoolJoinFix : ICompatFix
 
     private static PoolAnchors? _anchors;
 
-    /// <summary>
-    /// Blocks a second join while a cross-server switch is in flight. The switch coordinator cancels the superseded
-    /// generation, so two clicks would abort the first join instead of the second.
-    /// </summary>
-    private static int _inFlight;
-
     public string Id => FixId;
 
     public FixGroup Group => FixGroup.Pool;
@@ -132,10 +126,10 @@ internal sealed class PoolJoinFix : ICompatFix
                 return true;
             }
 
-            if (Interlocked.Exchange(ref _inFlight, 1) != 0)
+            if (Interlocked.Exchange(ref PoolServerSwitch.InFlight, 1) != 0)
             {
-                // Already switching for a previous click: this click is a no-op, said out loud instead of silently
-                // swallowing it.
+                // Already switching - for a previous click, or for a create: this click is a no-op, said out loud
+                // instead of silently swallowing it.
                 PoolRefreshFix.SetStatus(__instance, "正在切换大厅服务器，请稍候…");
                 __result = Task.CompletedTask;
                 return false;
@@ -254,14 +248,15 @@ internal sealed class PoolJoinFix : ICompatFix
         finally
         {
             PoolServerSwitch.DisposeLease(lease);
-            Interlocked.Exchange(ref _inFlight, 0);
+            Interlocked.Exchange(ref PoolServerSwitch.InFlight, 0);
         }
     }
 
     /// <summary>
     /// Whether upstream is waiting for the player to pick a resume slot for this very room. OpenResumeSlotDialog
     /// stores the room it was opened for, so a non-null field for a different room is a leftover, not this join's
-    /// dialog. Used as the fallback answer when that field is gone from the host mod.
+    /// dialog. A hidden overlay keeps the same room in that field while hiding its picker, so the picker's own
+    /// visibility is part of the answer. Used as the fallback answer when the field is gone from the host mod.
     /// </summary>
     private static bool ResumeSlotDialogPending(PoolAnchors anchors, object overlay, object room)
     {
@@ -269,7 +264,18 @@ internal sealed class PoolJoinFix : ICompatFix
         {
             if (anchors.PendingResumeJoinRoom != null)
             {
-                return ReferenceEquals(anchors.PendingResumeJoinRoom.GetValue(overlay), room);
+                if (!ReferenceEquals(anchors.PendingResumeJoinRoom.GetValue(overlay), room))
+                {
+                    return false;
+                }
+
+                if (anchors.ResumeSlotDialogContainer == null)
+                {
+                    // No way to tell whether the picker is on screen: keep the conservative answer.
+                    return true;
+                }
+
+                return anchors.ResumeSlotDialogContainer.GetValue(overlay) is Control dialog && dialog.IsVisibleInTree();
             }
         }
         catch (Exception)
@@ -386,6 +392,12 @@ internal sealed class PoolJoinFix : ICompatFix
 /// </summary>
 internal static class PoolServerSwitch
 {
+    /// <summary>
+    /// One gate for both repairs: a create and a join both move the server context, and the switch coordinator cancels
+    /// the superseded generation, so a second click during either must not start a second switch.
+    /// </summary>
+    internal static int InFlight;
+
     private const int SwitchBackTimeoutMs = 10_000;
 
     /// <summary>

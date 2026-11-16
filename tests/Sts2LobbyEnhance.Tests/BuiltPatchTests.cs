@@ -24,6 +24,14 @@ public sealed class BuiltPatchTests
         string assemblyPath = RequireBuiltAssembly();
         string gameDirectory = RequireGameDirectory();
 
+        // This project is not referenced by the suite, so a plain test run would happily scan last build's DLL and go
+        // green about sources that were never compiled.
+        Assert.True(
+            TestPaths.NewestPatchSource is not { } newestSource
+            || File.GetLastWriteTimeUtc(assemblyPath) >= File.GetLastWriteTimeUtc(newestSource),
+            $"The built patch at {assemblyPath} is older than {TestPaths.NewestPatchSource}: the assertions below " +
+            $"would describe a stale DLL. {TestPaths.BuildHint}");
+
         ScanReport report = BreakpointScanner.Scan(assemblyPath, gameDirectory);
 
         Assert.True(

@@ -20,7 +20,7 @@ binaries as data. **59 cases in 9 classes.**
 | `TailRosterContractTests` | 4 | The tail-roster epoch reset (`TailRoster`) contract against the shipped **0.6.4** binary: the five reflection anchors the reset depends on. | game + official 0.6.4 DLL |
 | `RosterEpochRegressionTests` | 4 | Why the roster must be rebaselined: an authority that accepted the old epoch rejects the new one, `Reset` makes the next epoch acceptable again, repeating the bytes still passes, and the host peer id survives the reset. Drives the real host types with the real serializers. | game + official 0.6.4 DLL |
 | `FixRegistryTests` | 1 | The **inventory** of repairs: `CompatFixes.Build()` yields exactly the expected ids in the expected order (so deleting a line cannot stay green). | nothing (source-level) |
-| `GameDependentCoverageTests` | 1 | The anti-false-green gate: fails when an input that makes one of the 30 game-dependent cases skip is missing, and fails when fewer than 30 of them actually ran, so a green run always means they executed. | nothing (probes the inputs) |
+| `GameDependentCoverageTests` | 1 | The anti-false-green gate: fails when an input that makes one of the 30 game-dependent cases skip is missing, and fails when the cases that ran are not exactly the expected list — naming the ones that are missing or unexpected, so a green run always means they executed. | nothing (probes the inputs) |
 
 ## Missing inputs: skipped *and* reported
 
@@ -29,11 +29,13 @@ cases need the game DLL, an official LAN Connect DLL, the built patch, the packa
 zip, and call `Assert.Skip` when it is absent; a skip still exits 0, so a green run on a machine without
 them used to prove nothing. The gate:
 
-* checks every input that can trigger one of those skips (`TestRunLedger.ExpectedGameDependentTestCount` = 30)
-  and **fails**, listing the missing inputs, when any of them is absent;
-* counts the game-dependent cases that actually reached their assertions in this run (`TestRunLedger`, one
-  entry per case including each theory row) and fails unless the count is exactly 30. The fact may run before
-  the cases it counts, so it waits for them (bounded at 60 s) instead of asserting the runner's order.
+* checks every input that can trigger one of those skips and **fails**, listing the missing inputs, when any of
+  them is absent;
+* compares the game-dependent cases that actually reached their assertions in this run (`TestRunLedger`, one
+  entry per case including each theory row) with `TestRunLedger.ExpectedGameDependentTests`, and names the cases
+  that are missing or unexpected. A bare count could not say which case went missing, or tell a new case from a
+  skipped one. The fact may run before the cases it counts, so it waits for them (bounded at 60 s) instead of
+  asserting the runner's order.
 
 Set `STS2_ALLOW_MISSING_GAME_INPUTS=1` to downgrade a missing input to a skip (for a developer
 without the game). The skip message still lists every missing input, so the exception is never silent.

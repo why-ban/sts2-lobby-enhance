@@ -124,7 +124,18 @@ public static class Entry
     /// </summary>
     private static void Install(ICompatFix fix, StartupReport report)
     {
-        GroupReport group = report.GroupFor(fix.Group);
+        GroupReport group;
+        try
+        {
+            group = report.GroupFor(fix.Group);
+        }
+        catch (Exception exception)
+        {
+            // GroupFor builds the group's Harmony instance; a failure there has no group report to go into, and it
+            // still must not take the remaining repairs down with it.
+            report.Failed.Add($"{fix.Id}: its group could not be created: {DescribeException(exception)}");
+            return;
+        }
 
         // A group that already rolled back must not grow new patches. Without this gate the repairs that come
         // after the failing one still install into the same Harmony instance, and the announcement at startup
@@ -234,7 +245,9 @@ public static class Entry
         {
             Info(
                 $"group {GroupName(group.Group)} [{group.HarmonyId}]: " +
-                $"applied={group.Applied.Count}[{string.Join(",", group.Applied)}] " +
+                (group.RolledBack
+                    ? $"applied=0 (installed then removed with the group: [{string.Join(",", group.Applied)}]) "
+                    : $"applied={group.Applied.Count}[{string.Join(",", group.Applied)}] ") +
                 $"skipped={group.Skipped.Count} failed={group.Failed.Count}" +
                 (group.RolledBack ? " rolledBack=true" : string.Empty));
 
