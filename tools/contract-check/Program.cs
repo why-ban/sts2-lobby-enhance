@@ -1,15 +1,13 @@
 using System.Reflection;
 
-// 契约检查：验证兼容补丁依赖的上游成员真实存在且形状正确。
+// 契约检查：验证兼容补丁依赖的上游成员真实存在（少数几处还校验签名与个数）。
 //
 // 这是本项目的一道防线：补丁大量依赖运行时反射（编译期不能引用 sts2_lan_connect.dll），而反射的
 // 失败模式是"运行时才发现"。把依赖显式列出来逐个校验，上游一改就立刻暴露。
 //
-// 2026-11-15（适配上游 0.6.4，补丁 2.0.0）：原本打印 30 条，其中 27 条只服务于已删除的 8 项修复
-//（join-flow / host-wire / tail-error-paths / abandon-run），随修复一起删掉。剩下的 3 条
-//（1 个类型 + 2 个成员）服务于 Core/TailRoster.cs —— 它被 roster-rebaseline 与 new-run-button 共用，是当前唯一还直接依赖
-// LanConnectTailMessageRuntime 的运行时组件。**这不是"契约都满足了"的完整覆盖**：其余保留项
-//（load-join-order / new-protocol-only / 新开一局存档绑定）的反射锚点尚未纳入本工具，
+// 现在只有 3 条（1 个类型 + 2 个成员），全部服务于 Core/TailRoster.cs；TailRoster 目前只有
+// new-run-button 在调用（重建大厅前重置名册 epoch），它也是唯一还直接依赖 LanConnectTailMessageRuntime
+// 的运行时组件。**这不是"契约都满足了"的完整覆盖**：其余修复的反射锚点没有纳入本工具，
 // 覆盖靠 tools/smoke-test 的 one-real-seam-per-fix 与 tests/ 里的源码级断言。
 //
 // 退出码：0 全部通过 / 2 有缺失 / 3 找不到官方 DLL
@@ -74,7 +72,7 @@ void RequireProperty(Type? type, string name, string label)
 }
 
 // ---------------------------------------------------------------- Core/TailRoster.cs
-// 被 roster-rebaseline（客户端丢掉过期的 roster epoch）与 new-run-button（重建大厅前重置）共用。
+// 只有 new-run-button 在用：重建大厅前把名册 epoch 重置。
 // 它从 LanConnectTailMessageRuntime.Shared 拿单例，再用 GetMessageBus(service) 反查该会话的 binding。
 Console.WriteLine("[tail-roster]");
 Type? tailRuntime = RequireType("Sts2LanConnect.Scripts.LanConnectTailMessageRuntime");

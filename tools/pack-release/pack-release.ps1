@@ -23,7 +23,8 @@
            content/LICENSE                        <- LICENSE (repository root)
            content/THIRD_PARTY_NOTICES            <- docs/THIRD_PARTY_NOTICES
          The DLL comparison is the one that matters: it makes "content is the current build" true
-         before the zip exists, so a stale zip cannot be produced even by accident.
+         before the zip exists. It compares content against bin/, not source against binary, so a build
+         that is older than its sources still passes here - run the build first, as the gate order says.
       4. The zip name comes from the manifest's "version" - never hard-coded, so a version bump
          cannot leave a misnamed package behind.
       5. The zip is written, then RE-OPENED and every entry is read back and hashed. Entry names,

@@ -81,8 +81,8 @@ if ($SkipBuild) {
     # -SkipBuild reuses bin/<Configuration>/net9.0/*.dll as-is. If a .cs file is newer than that DLL the
     # copy below silently ships the previous build, which is exactly how a "successful" run produced a
     # stale content/ before. This is a warning, not an error: another agent/terminal may be mid-edit and
-    # a hard failure here would block unrelated work. tools/pack-release/pack-release.ps1 is the gate
-    # that refuses to build a release zip out of a stale content/, so this warning is the early hint.
+    # a hard failure here would block unrelated work. pack-release only compares content against bin/, so
+    # it cannot catch a build that is older than its sources; this warning is the only hint you get.
     $builtItem = Get-Item -LiteralPath $builtDll -ErrorAction SilentlyContinue
     $newestSource = Get-ChildItem -LiteralPath (Join-Path $projectDir 'Scripts') -Recurse -File -Filter *.cs |
         Sort-Object LastWriteTime -Descending |
