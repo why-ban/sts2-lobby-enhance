@@ -10,23 +10,21 @@ namespace Sts2LobbyEnhance;
     /// somebody the client still remembers
     ///
     /// Upstream has no handling for a player leaving. <c>LanConnectTailMessageRuntime.CommitHostSnapshot</c> has
-    /// exactly four call sites (LanConnectTailMessageRuntime.cs:1104, 1117, 1141, 1150) and not one of them
-    /// subtracts a member, so after a kick the client keeps the roster it accepted at join time while the host
-    /// keeps publishing the smaller one. Every later roster-bearing message then fails inside
-    /// <c>LanConnectRosterAuthorityState.Accept</c>, and the failure is not limited to starting the run:
+    /// exactly four call sites and not one of them subtracts a member, so after a kick the client keeps the roster
+    /// it accepted at join time while the host keeps publishing the smaller one. Every later roster-bearing
+    /// message then fails inside <c>LanConnectRosterAuthorityState.Accept</c>, and the failure is not limited to
+    /// starting the run:
     ///
     /// <list type="bullet">
-    /// <item><b>LobbyBeginRun</b> — <c>RestoreBeginRun</c> is the only caller that uses <c>StateTransition</c>
-    /// (:1181), whose branch demands identical membership and real slots (:91-92, :119-126) and rejects the
-    /// smaller roster with "State-transition snapshot changed roster membership or real slot
-    /// assignments."</item>
-    /// <item><b>PlayerJoined</b> — <c>RestorePlayerJoined</c> (:1194-1197) passes <c>MembershipMutation</c> with
-    /// the authoritative set derived from the client's own stale <c>Current</c>, so the ghost member makes the
-    /// set comparison fail with "Roster snapshot differs from the authoritative connected-peer set."
-    /// (:140-142).</item>
+    /// <item><b>LobbyBeginRun</b> — <c>RestoreBeginRun</c> is the only caller that uses <c>StateTransition</c>,
+    /// whose branch demands identical membership and real slots and rejects the smaller roster with
+    /// "State-transition snapshot changed roster membership or real slot assignments."</item>
+    /// <item><b>PlayerJoined</b> — <c>RestorePlayerJoined</c> passes <c>MembershipMutation</c> with the
+    /// authoritative set derived from the client's own stale <c>Current</c>, so the ghost member makes the set
+    /// comparison fail with "Roster snapshot differs from the authoritative connected-peer set."</item>
     /// <item><b>A reload / rejoin</b> — <c>AcceptRoster</c> can only pick <c>Bootstrap</c> while
-    /// <c>Current == null</c> (:1350-1354), so the next RoomJoin goes through <c>CurrentState</c> and demands a
-    /// byte-for-byte repeat of the accepted revision (:83-88).</item>
+    /// <c>Current == null</c>, so the next RoomJoin goes through <c>CurrentState</c> and demands a byte-for-byte
+    /// repeat of the accepted revision.</item>
     /// </list>
     ///
     /// So the trigger is not "this is a begin-run", it is "the host says somebody is gone and we still have
@@ -38,19 +36,20 @@ namespace Sts2LobbyEnhance;
     /// The trap, and the one thing this repair must not get wrong: <c>Reset()</c> alone does not fix anything.
     /// It drops <c>_current</c>, and upstream then refuses the very snapshot we are holding, because with no
     /// accepted state a <c>StateTransition</c>/<c>MembershipMutation</c> snapshot may not initialize the state
-    /// (:66-74, "Transition and mutation snapshots cannot initialize roster authority state."). The use
-    /// argument has to become <c>Bootstrap</c> in the same breath as the reset, which is why the prefix
-    /// rewrites the use value through <c>__args</c> instead of just calling <c>Reset()</c>.
+    /// ("Transition and mutation snapshots cannot initialize roster authority state."). The use argument has to
+    /// become <c>Bootstrap</c> in the same breath as the reset, which is why the prefix rewrites the use value
+    /// through <c>__args</c> instead of just calling <c>Reset()</c>.
     ///
     /// The same reasoning applies to the authoritative membership set a mutation snapshot carries: the caller
-    /// builds it from <c>Current</c> (:1195-1196), i.e. from the state being dropped, so it is stale by
-    /// construction and is cleared together with the reset.
+    /// builds it from <c>Current</c>, i.e. from the state being dropped, so it is stale by construction and is
+    /// cleared together with the reset.
     ///
-    /// Client side only. <c>Accept</c> is unreachable on a host binding to begin with — <c>ValidateIncomingCore</c>
-    /// rejects every session-selection message whose binding is a host (:1064) and hosts publish through
-    /// <c>CommitHostSnapshot</c> instead — but the prefix still looks the authority up in the tail runtime's
-    /// live bindings and steps aside when the owning service is not a <c>NetClientGameService</c>, so a future
-    /// caller that sends a roster to the host cannot be made to accept a client-authored one by this repair.
+    /// Client side only. <c>Accept</c> is unreachable on a host binding to begin with, because
+    /// <c>ValidateIncomingCore</c> rejects every session-selection message whose binding is a host and hosts
+    /// publish through <c>CommitHostSnapshot</c> instead. The prefix still looks the authority up in the tail
+    /// runtime's live bindings and steps aside when the owning service is not a <c>NetClientGameService</c>, so a
+    /// future caller that sends a roster to the host cannot be made to accept a client-authored one by this
+    /// repair.
     /// </summary>
 internal sealed class RosterRebaselineFix : ICompatFix
 {
@@ -136,9 +135,9 @@ internal sealed class RosterRebaselineFix : ICompatFix
     }
 
     /// <summary>
-    /// Never throws and never vetoes the original call: every path returns <c>true</c>. A roster message that
-    /// this repair cannot understand must still reach upstream, which is the only thing that knows what to do
-    /// with it — the alternative is swallowing a join or a begin-run because a diagnostic blew up.
+    /// Every path returns <c>true</c>, so the original call always runs. A roster message that this repair
+    /// cannot understand must still reach upstream, which is the only thing that knows what to do with it. The
+    /// alternative is swallowing a join or a begin-run because a diagnostic blew up.
     ///
     /// The parameters are read and written through <c>__args</c> because two of them are types internal to the
     /// host mod (the snapshot and its use enum) and a <c>ref</c> parameter cannot be declared for a type that
@@ -209,11 +208,11 @@ internal sealed class RosterRebaselineFix : ICompatFix
         }
 
         // Order matters: without the use rewrite the reset itself turns the snapshot into one upstream refuses
-        // (LanConnectRosterAuthorityState.cs:66-74).
+        // ("Transition and mutation snapshots cannot initialize roster authority state").
         shape.Reset.Invoke(__instance, null);
         __args[2] = Enum.ToObject(shape.UseType, shape.Bootstrap);
 
-        // Derived from the state that was just dropped (LanConnectTailMessageRuntime.cs:1195-1196).
+        // Derived from the state that was just dropped, so it is stale by construction.
         if (__args.Length > 3)
         {
             __args[3] = null;
@@ -250,8 +249,8 @@ internal sealed class RosterRebaselineFix : ICompatFix
     /// <summary>
     /// <c>false</c> when the authority could not be tied to a live binding, or when its binding's service is a
     /// client service. "Could not tie it to anything" is deliberately treated as a client: the only callers of
-    /// <c>Accept</c> are the restore handlers, which <c>ValidateIncomingCore</c> only runs for a non-host binding
-    /// (LanConnectTailMessageRuntime.cs:1064), and an out-of-process probe drives the authority directly.
+    /// <c>Accept</c> are the restore handlers, which <c>ValidateIncomingCore</c> only runs for a non-host binding,
+    /// and an out-of-process probe drives the authority directly.
     /// </summary>
     private static bool IsHostSide(Shape shape, object authority)
     {
@@ -440,9 +439,8 @@ internal sealed class RosterRebaselineFix : ICompatFix
     }
 
     /// <summary>
-    /// Resolves the four <c>LanConnectRosterSnapshotUse</c> members by name (dec-official
-    /// LanConnectRosterSnapshotUse.cs:3-9) and refuses a <c>Bootstrap</c> that upstream would still treat as a
-    /// transition, because that combination cannot be re-baselined at all.
+    /// Resolves the four <c>LanConnectRosterSnapshotUse</c> members by name and refuses a <c>Bootstrap</c> whose
+    /// value upstream would still treat as a transition, because that combination cannot be re-baselined at all.
     /// </summary>
     private static void CaptureUseValues(Type useType, Shape shape, List<string> missing)
     {
@@ -490,9 +488,8 @@ internal sealed class RosterRebaselineFix : ICompatFix
 
     /// <summary>
     /// The client/host discriminator, resolved best-effort. Losing it costs the host-side veto, not the repair:
-    /// <c>Accept</c> is already unreachable on a host binding (LanConnectTailMessageRuntime.cs:1064), so the
-    /// guard is a second line of defence and is reported instead of being allowed to disable a repair that
-    /// would otherwise work.
+    /// <c>Accept</c> is already unreachable on a host binding, so the guard is a second line of defence and is
+    /// reported instead of being allowed to disable a repair that would otherwise work.
     /// </summary>
     private static void CaptureBindings(Assembly host, Shape shape)
     {

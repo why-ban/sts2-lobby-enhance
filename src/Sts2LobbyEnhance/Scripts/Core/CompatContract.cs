@@ -26,14 +26,20 @@ internal enum FixGroup
     /// <summary>Server pool: fan-out room collection, origin badges and the server switch a cross-server join needs</summary>
     Pool,
 
-    /// <summary>Touch scrolling and long-press selection in the chat panel; the only group that reads the platform</summary>
+    /// <summary>
+    /// Touch scrolling and long-press selection in the chat panel. Platform-conditioned behaviour sits in two
+    /// groups: this one and <see cref="Chat"/> (the hint click-through is desktop-only), so grouping follows the
+    /// seam rather than the platform
+    /// </summary>
     Touch,
 
     /// <summary>Switching which server's public channel the chat panel is attached to</summary>
     Chat,
 
-    /// <summary>Announcement rendering: the per-server source line and wheel paging. Separate from Pool so a
-    /// carousel shape change costs the carousel, not the room list</summary>
+    /// <summary>
+    /// Announcement fetching. Separate from <see cref="Pool"/> so a change to the announcement client costs the
+    /// announcement fetch, not the room list
+    /// </summary>
     Announce
 }
 
@@ -54,7 +60,8 @@ internal enum FixGroup
     /// into a failure.
     ///
     /// Since 2.0.0 neither method takes a game-version snapshot: the six 0.113 breaks that used to be probed
-    /// are adapted upstream (0.6.4), so no repair here reads a version flag any more
+    /// are adapted upstream (0.6.4), so no repair gates itself on a version any more. The room-version filter
+    /// still reads the local version string, but as feature input, not as a gate
     /// </summary>
 internal interface ICompatFix
 {
@@ -67,7 +74,8 @@ internal interface ICompatFix
     /// <summary>
     /// When <c>false</c>, <paramref name="reason"/> is shown in the startup log next to the repair id, so write
     /// a sentence a user can act on rather than a status code, and use <see cref="string.Empty"/> when
-    /// <c>true</c>. Throwing counts as a failure of this repair alone, so prefer answering <c>false</c>
+    /// <c>true</c>. A throw also takes this repair's whole group down (see <c>Entry.Install</c>), so prefer
+    /// answering <c>false</c>
     /// </summary>
     bool Applies(out string reason);
 

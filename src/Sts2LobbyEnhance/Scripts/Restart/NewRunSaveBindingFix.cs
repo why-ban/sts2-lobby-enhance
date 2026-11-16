@@ -11,30 +11,30 @@ namespace Sts2LobbyEnhance;
     /// the save of the run that just finished
     ///
     /// The deadlock, all upstream: a hosted room keeps a <c>HostedRoomSession</c> for the whole sitting, and that
-    /// session remembers the save key it bound to (<c>BoundSaveKey</c>, LanConnectLobbyRuntime.cs:156). Every
-    /// <c>save_event</c> hands that key to the writer as <c>BindingTarget.ExpectedSaveKey</c> (:2150) and the writer
-    /// refuses any other save outright (:55-61 of LanConnectCurrentSaveBindingWriter.cs). The only code that ever
-    /// updates the key is the writer's own success callback (:2152), so once a <em>different</em> save shows up the
-    /// room can never bind to it again — the callback that would heal it is behind the refusal.
+    /// session remembers the save key it bound to (<c>HostedRoomSession.BoundSaveKey</c>). Every <c>save_event</c>
+    /// hands that key to the writer as <c>BindingTarget.ExpectedSaveKey</c> and the writer refuses any other save
+    /// outright (<c>RefusedDifferentSave</c>). After the session is created, only the writer's own success
+    /// callback ever updates the key, so once a <em>different</em> save shows up the room can never bind to it
+    /// again: the callback that would heal it is behind the refusal.
     ///
     /// "新开一局" hits exactly that, because it deliberately keeps the session: the new run's first save has a new
-    /// key (LanConnectMultiplayerSaveRoomBinding.BuildSaveKey hashes the run's <c>StartTime</c>, :319-331, so a new
+    /// key (<c>LanConnectMultiplayerSaveRoomBinding.BuildSaveKey</c> hashes the run's <c>StartTime</c>, so a new
     /// run can never reuse the old one), the write is refused with <c>save_key_mismatch</c>, and the save stays
     /// unbound. A later "读档多人游戏" then has no binding to read and stops by telling the player it cannot
     /// confirm the original protocol.
     ///
     /// Clearing the key is enough, and it is the whole repair: with an empty <c>ExpectedSaveKey</c> the writer takes
-    /// its keyless branch (:62-73), which the new run satisfies — <c>RunManager</c> assigns exactly the lobby's
-    /// service (RunManager.cs:388 -> :523), i.e. the service this session kept, and a brand-new save key has no
-    /// stored binding to trip the explicit-LAN guard. The first successful persist then writes the new key back
-    /// (:2152) and every later save of that run matches normally.
+    /// its keyless branch, which the new run satisfies. <c>RunManager</c> assigns exactly the lobby's service, i.e.
+    /// the service this session kept, and a brand-new save key has no stored binding to trip the explicit-LAN
+    /// guard. The first successful persist then writes the new key back and every later save of that run matches
+    /// normally.
     ///
-    /// The moment is <c>RunManager.SetUpNewMultiplayer</c> rather than the 新开一局 click: that method is the first
-    /// thing a new multiplayer run does (NGame.cs:1172) and it runs before <c>NGame.StartRun</c> (:1173) touches
-    /// the save system, so the clearing is guaranteed to be earlier than the new run's first <c>save_event</c> —
-    /// while the click itself is only "the lobby was rebuilt", with a whole character-select screen in between and
-    /// nothing that says the player will ever embark. Patching here also fixes the same deadlock for a new run
-    /// started through the vanilla menus in a kept room, not just through our button.
+    /// The moment is <c>RunManager.SetUpNewMultiplayer</c> rather than the 新开一局 click: that method runs before
+    /// <c>NGame.StartRun</c> touches the save system, so the clearing is guaranteed to be earlier than the new
+    /// run's first <c>save_event</c>, while the click itself is only "the lobby was rebuilt", with a whole
+    /// character-select screen in between and nothing that says the player will ever embark. Patching here also
+    /// fixes the same deadlock for a new run started through the vanilla menus in a kept room, not just through
+    /// our button.
     ///
     /// Only the room that owns this run is touched: the session (or host origin) must hold the very service the new
     /// run is being set up on. A client's begin-run, a singleplayer run and a fresh room all leave it alone.
@@ -182,9 +182,9 @@ internal sealed class NewRunSaveBindingFix : ICompatFix
     }
 
     /// <summary>
-    /// The <c>host_origin</c> target (LanConnectLobbyRuntime.cs:2185). It only applies when no room session exists,
-    /// so it cannot be the path the field report hit — cleared with the same rule so a room whose session is gone
-    /// does not keep the same deadlock alive.
+    /// The <c>host_origin</c> target. It only applies when no room session exists, so it cannot be the path the
+    /// field report hit. Cleared with the same rule so a room whose session is gone does not keep the same
+    /// deadlock alive.
     /// </summary>
     private static void ClearHostOriginBinding(Shape shape, object runtime, INetGameService service)
     {
@@ -381,19 +381,19 @@ internal sealed class NewRunSaveBindingFix : ICompatFix
     /// </summary>
     internal sealed class Shape
     {
-        /// <summary><c>LanConnectLobbyRuntime.Instance</c> (:657).</summary>
+        /// <summary><c>LanConnectLobbyRuntime.Instance</c></summary>
         internal PropertyInfo Instance = null!;
 
-        /// <summary><c>_activeSession</c> (:587), the hosted room this process owns.</summary>
+        /// <summary><c>_activeSession</c>, the hosted room this process owns</summary>
         internal FieldInfo ActiveSession = null!;
 
-        /// <summary><c>HostedRoomSession.BoundSaveKey</c> (:156) — read at :2150, written at :2152.</summary>
+        /// <summary><c>HostedRoomSession.BoundSaveKey</c>, read on every save_event and written back on success</summary>
         internal PropertyInfo BoundSaveKey = null!;
 
-        /// <summary><c>HostedRoomSession.NetService</c> (:142) — the identity that proves the room owns this run.</summary>
+        /// <summary><c>HostedRoomSession.NetService</c>, the identity that proves the room owns this run</summary>
         internal PropertyInfo SessionNetService = null!;
 
-        /// <summary><c>RunManager.SetUpNewMultiplayer(RunState, StartRunLobby, bool, DateTimeOffset?)</c> (RunManager.cs:381).</summary>
+        /// <summary><c>RunManager.SetUpNewMultiplayer(RunState, StartRunLobby, bool, DateTimeOffset?)</c></summary>
         internal MethodInfo SetUpNewMultiplayer = null!;
 
         internal FieldInfo? HostOrigin;

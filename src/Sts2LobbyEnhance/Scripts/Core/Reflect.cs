@@ -8,8 +8,7 @@ namespace Sts2LobbyEnhance;
 ///
 /// Lookups accept instance and static members alike because upstream mixes the two, and a lookup that
 /// silently missed a static member would degrade behaviour instead of failing. <c>Require*</c> throws,
-/// <c>Try*</c> returns null, and ambiguity counts as "not found" so a probe never binds to an arbitrary
-/// overload.
+/// <c>Try*</c> returns null.
 /// </summary>
 internal static class Reflect
 {

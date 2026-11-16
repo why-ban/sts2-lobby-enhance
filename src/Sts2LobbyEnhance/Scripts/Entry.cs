@@ -22,8 +22,7 @@ public static class Entry
     internal const string HostModAssemblyName = "sts2_lan_connect";
 
     /// <summary>
-    /// Prefix of the per-group Harmony ids (<c>"sts2_lobby_enhance." + group name, lower case</c>). Per-group
-    /// ids are what make a rollback scoped, because <c>UnpatchAll</c> takes an id rather than a patch set
+    /// Per-group ids are what make a rollback scoped: <c>UnpatchAll</c> takes an id, not a patch set
     /// </summary>
     internal const string HarmonyId = "sts2_lobby_enhance";
 
@@ -42,8 +41,8 @@ public static class Entry
         HarmonyId + "." + group.ToString().ToLowerInvariant();
 
     /// <summary>
-    /// Every Harmony id this mod can install under. <c>Harmony.GetPatchedMethods()</c> only reports the id of the
-    /// instance it is called on, so a harness enumerating installed patches needs all of them
+    /// <c>Harmony.GetPatchedMethods()</c> reports only the patches of the instance it is called on, so a harness
+    /// that wants to see everything needs every id
     /// </summary>
     internal static IEnumerable<string> AllHarmonyIds() =>
         Enum.GetValues<FixGroup>().Select(HarmonyIdFor);
@@ -120,8 +119,8 @@ public static class Entry
     }
 
     /// <summary>
-    /// Ask, then patch, then record. Never lets an exception escape, because one repair is not allowed to decide
-    /// whether the other repairs run
+    /// One repair is not allowed to decide whether the other repairs run, so a throwing
+    /// <c>Applies</c>/<c>Apply</c> costs this repair's group and nothing more
     /// </summary>
     private static void Install(ICompatFix fix, StartupReport report)
     {
@@ -183,9 +182,9 @@ public static class Entry
         $"{exception.GetType().Name}: {exception.Message}";
 
     /// <summary>
-    /// Removes this group's patches and only this group's. 0Harmony 2.4.2 exposes exactly one
-    /// unpatch-everything entry point, <c>void HarmonyLib.Harmony.UnpatchAll(string harmonyID)</c>, with no
-    /// parameterless overload, and the id argument is what scopes the removal
+    /// Removes this group's patches and only this group's. 0Harmony 2.4.2 has one unpatch entry point,
+    /// <c>void Harmony.UnpatchAll(string harmonyID = default)</c>: the id argument is optional, and omitting
+    /// it unpatches every id in the process, so it must always be passed
     ///
     /// A failed removal leaves the patches live, so its ids stay in <see cref="StartupReport.Applied"/>: the
     /// report must describe what is running, not what was attempted
@@ -379,7 +378,6 @@ internal sealed class StartupReport
     }
 }
 
-    /// <summary>One <see cref="FixGroup"/>: its own Harmony instance, patch set and rollback</summary>
 internal sealed class GroupReport
 {
     internal GroupReport(FixGroup group)

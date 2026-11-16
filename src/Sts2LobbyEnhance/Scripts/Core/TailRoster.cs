@@ -14,17 +14,16 @@ namespace Sts2LobbyEnhance;
     ///
     /// The trap, from the shipped 0.6.3 binary under <c>work/lobby/dec-official</c>:
     /// <c>LanConnectTailMessageRuntime.AcceptRoster</c> picks the snapshot use with
-    /// <c>authority.Current == null ? firstUse : CurrentState</c> (LanConnectTailMessageRuntime.cs:1350-1354),
-    /// so the <c>Bootstrap</c> hint <c>RestoreStartRunResponse</c> passes at :1169 is ignored once the authority
-    /// holds a snapshot. <c>CurrentState</c> then demands the snapshot repeat the accepted revision byte for
-    /// byte (LanConnectRosterAuthorityState.cs:83-88) and throws at :86. Official joins never reach that branch
-    /// because they arrive on a fresh binding with an empty roster authority, but a kept-alive session still
-    /// holds the <c>StartRunLobbyPlayer</c> epoch from the room it left while the host publishes a
-    /// <c>LoadRunLobbyPlayer</c> epoch, and the length check fails before any field is compared
+    /// <c>authority.Current == null ? firstUse : CurrentState</c>, so the <c>Bootstrap</c> hint
+    /// <c>RestoreStartRunResponse</c> passes is ignored once the authority holds a snapshot. <c>CurrentState</c>
+    /// then demands the snapshot repeat the accepted revision byte for byte, and throws when it does not.
+    /// Official joins never reach that branch because they arrive on a fresh binding with an empty roster
+    /// authority, but a kept-alive session still holds the <c>StartRunLobbyPlayer</c> epoch from the room it
+    /// left while the host publishes a <c>LoadRunLobbyPlayer</c> epoch, and the length check fails before any
+    /// field is compared
     ///
     /// Resetting only the client is deliberate: the host keeps publishing monotonically increasing revisions,
-    /// which is what an unpatched client expects, so a mixed room degrades to unpatched behaviour instead of
-    /// "Roster revision moved backwards" (LanConnectRosterAuthorityState.cs:77)
+    /// and a client that resets loses only its own stale epoch
     ///
     /// Best effort throughout: a missing anchor or a throwing target logs one warning and returns <c>false</c>,
     /// because both call sites sit inside a handshake that must not die for a diagnostic
@@ -45,13 +44,14 @@ internal static class TailRoster
     /// <summary>
     /// Forgets the accepted roster epoch of <paramref name="service"/>'s Tail binding
     ///
-    /// <c>true</c> only when an epoch was really dropped, so a caller must not claim success on <c>false</c>.
+    /// <c>true</c> once the reset ran. A binding that never established an authority gets an empty one created
+    /// by <c>RequireRoster()</c> and resetting that is a no-op, so <c>true</c> does not mean an epoch existed.
     /// <paramref name="when"/> names the call site and only reaches the log
     /// </summary>
     internal static bool Reset(INetGameService service, string when)
     {
-        // "Never throws" is literal: even a caller bug must come back as false plus a warning, because both
-        // call sites sit inside a message handler whose job is to keep the handshake alive.
+        // A caller bug has to come back as false plus a warning, because both call sites sit inside a message
+        // handler whose job is to keep the handshake alive.
         if (service is null)
         {
             Entry.Warn($"{Tag}no session to reset the roster epoch on ({when}).");
@@ -150,14 +150,10 @@ internal static class TailRoster
     /// Every anchor the reset needs, captured once. Each one is shape-checked, because a silently wrong
     /// binding would be worse than a loud failure: the reset would "succeed" and change nothing
     ///
-    /// Shipped 0.6.3 binary, <c>work/lobby/dec-official/Sts2LanConnect.Scripts/</c>:
-    /// <list type="bullet">
-    /// <item><c>LanConnectTailMessageRuntime.Shared</c> — LanConnectTailMessageRuntime.cs:459</item>
-    /// <item><c>LanConnectTailMessageRuntime.GetMessageBus(INetGameService)</c> — :1670</item>
-    /// <item><c>LanConnectTailMessageRuntime._bindings</c> (<c>Dictionary&lt;NetMessageBus, Binding&gt;</c>) — :439</item>
-    /// <item><c>Binding.RequireRoster()</c> — :116 (Binding is a nested private type at :27)</item>
-    /// <item><c>LanConnectRosterAuthorityState.Reset()</c> — LanConnectRosterAuthorityState.cs:128</item>
-    /// </list>
+    /// In the shipped 0.6.3 binary under <c>work/lobby/dec-official/Sts2LanConnect.Scripts/</c> these are
+    /// <c>LanConnectTailMessageRuntime.Shared</c>, <c>GetMessageBus(INetGameService)</c> and the private
+    /// <c>_bindings</c> dictionary (keyed by <c>NetMessageBus</c>, valued by the nested private <c>Binding</c>),
+    /// plus <c>Binding.RequireRoster()</c> and <c>LanConnectRosterAuthorityState.Reset()</c>
     /// </summary>
     private sealed class Anchors
     {
@@ -218,7 +214,7 @@ internal static class TailRoster
             FieldInfo bindings = Reflect.RequireField(tailRuntime, "_bindings");
 
             // _bindings is Dictionary<NetMessageBus, Binding> and Binding is a nested private type, so the
-        // only stable way to reach it is through the field's own generic arguments.
+            // only stable way to reach it is through the field's own generic arguments.
             Type[] bindingArguments = bindings.FieldType.GetGenericArguments();
             if (bindingArguments.Length != 2 || bindingArguments[0] != typeof(NetMessageBus))
             {

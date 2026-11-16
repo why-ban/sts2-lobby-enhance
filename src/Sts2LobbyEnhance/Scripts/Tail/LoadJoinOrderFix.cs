@@ -5,19 +5,19 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
     /// <summary>
-    /// Load-join member order. <c>RestoreLoadJoinPlayers</c> (dec-official LanConnectTailMessageRuntime.cs:1275)
-    /// requires <c>message.playersAlreadyConnected</c> to equal the Tail roster position by position, but the
+    /// Load-join member order. <c>RestoreLoadJoinPlayers</c> requires <c>message.playersAlreadyConnected</c> to
+    /// equal the Tail roster position by position, but the
     /// two lists are sorted by different keys: the host fills the list in *join* order, while the roster
     /// carriers are stamped with each player's index in <c>SerializableRun.Players</c> - the save order - by
-    /// <c>BuildLoadJoinCarriers</c> (:1282-1294), and <c>LanConnectRosterCodec.Encode</c> sorts carriers by
+    /// <c>BuildLoadJoinCarriers</c>, and <c>LanConnectRosterCodec.Encode</c> sorts carriers by
     /// (RealSlotId, PlayerId). Same set, different order, so <c>SequenceEqual</c> fails and every client whose
     /// group did not join in save order is rejected with "Loaded-lobby vanilla membership disagrees with the
     /// Tail roster."
     ///
     /// The repair re-sorts the incoming list into save order before that comparison runs. It edits the list
     /// object in place: the callee reads the list reference its own copy of the struct already holds, while a
-    /// field written into the boxed message would never reach it. The restored order is unaffected either way -
-    /// upstream replaces the field with the save-order list at :1208 - so only the positional check changes.
+    /// field written into the boxed message would never reach it. The restored order is unaffected either way,
+    /// because upstream replaces the field with the save-order list, so only the positional check changes.
     /// </summary>
 internal sealed class LoadJoinOrderFix : ICompatFix
 {
@@ -117,9 +117,9 @@ internal sealed class LoadJoinOrderFix : ICompatFix
     /// <summary>
     /// Re-sorts the message's already-connected list into <c>SerializableRun.Players</c> order, in place.
     ///
-    /// Never throws: this runs inside the host mod's load-join path, where an exception is reported as a
-    /// protocol failure and costs the client its connection. On any surprise the list is left untouched and the
-    /// original method decides, which is exactly the behaviour this repair is not allowed to make worse.
+    /// An exception here would be reported as a protocol failure and cost the client its connection, so on any
+    /// surprise the list is left untouched and the original method decides, which is exactly the behaviour this
+    /// repair is not allowed to make worse.
     /// </summary>
     public static bool RestoreLoadJoinPrefix(object boxedMessage)
     {
@@ -359,7 +359,7 @@ internal sealed class LoadJoinOrderFix : ICompatFix
         }
     }
 
-    /// <summary>A public <c>ulong</c> member by that name, field or property.</summary>
+    /// <summary>A <c>ulong</c> member by that name, field or property, any accessibility</summary>
     private static MemberInfo? RequireMember(List<string> problems, Type owner, string name)
     {
         MemberInfo? member = TryMember(owner, name, out Type? memberType);

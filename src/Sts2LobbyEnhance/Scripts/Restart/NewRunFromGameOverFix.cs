@@ -93,8 +93,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     private static PatchTargets _targets;
 
-    // ---- injected UI (host side) ------------------------------------------------------------------------
-    //
     // Kept so the button can be withdrawn the moment the session it depends on is gone. A visible button that
     // silently does nothing is the exact failure the 2026-11-13 field report described ("我点了没反应").
 
@@ -107,12 +105,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     private const string DisconnectedMessage = "联机会话已断开，无法新开一局。请点「主菜单」返回主菜单后重新建房。";
 
-    // ---- disconnect suppression (one call, one service) -------------------------------------------------
-
     private static INetGameService? _suppressedService;
     private static bool _suppressDisconnect;
-
-    // ---- client side ------------------------------------------------------------------------------------
 
     private static bool _gameOverScreenVisible;
 
@@ -121,16 +115,14 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     ///
     /// It used to double as "the current session" for the handlers, which was a real defect: after a reconnect the
     /// slot points at the new session while the old session's handlers are still registered on the old one, so a
-    /// message arriving there was answered on the wrong session. The handlers no longer read this field — each one is
-    /// bound to the session it was registered on (see <see cref="RegisterClientHandlers"/>) — so a stale value can
+    /// message arriving there was answered on the wrong session. The handlers no longer read this field (each one is
+    /// bound to the session it was registered on, see <see cref="RegisterClientHandlers"/>), so a stale value can
     /// only cause a duplicate registration, never an answer sent on the wrong session.
     /// </summary>
     private static INetGameService? _handlersRegisteredFor;
     private static bool? _hostHasPatch;
     private static bool _reassemblePending;
     private static TaskCompletionSource<ClientLobbyJoinResponseMessage>? _joinResponse;
-
-    // ---- host side --------------------------------------------------------------------------------------
 
     private static bool _hostRestartInProgress;
     private static SerializableRun? _finishedRun;
@@ -216,9 +208,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
         // The host's "新开一局" button is deliberately *not* injected in _Ready: the player asked for it to
         // appear only after pressing "继续" and entering the run summary, so the first page shows exactly what
-        // the game shows. OpenSummaryScreen is that moment (NGameOverScreen.cs:587) and it runs at most once per
-        // screen, because the continue button it disables (NGameOverScreen.cs:590) is only re-enabled by the
-        // screen's own intro animation (NGameOverScreen.cs:1082).
+        // the game shows. OpenSummaryScreen is that moment, and it runs at most once per screen because the
+        // continue button it disables is only re-enabled by the screen's own intro animation.
         harmony.Patch(
             targets.OpenSummary,
             postfix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(SummaryOpenedPostfix))
@@ -226,9 +217,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
                 priority = Priority.First
             });
 
-        // Leaving the summary hides the whole summary container (NGameOverScreen.cs:912-916), so the injected
-        // nodes have to leave with it — they are siblings of the container, not children, and would otherwise
-        // stay on top of the leaderboard (NGameOverScreen.cs:899-902 fades the summary out and shows it).
+        // Leaving the summary hides the whole summary container, so the injected nodes have to leave with it:
+        // they are siblings of the container, not children, and would otherwise stay on top of the leaderboard
+        // that opens straight after the fade-out.
         harmony.Patch(
             targets.HideSummary,
             postfix: new HarmonyMethod(typeof(NewRunFromGameOverFix), nameof(SummaryClosedPostfix))
@@ -283,10 +274,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         }
     }
 
-    // =====================================================================================================
-    // UI injection
-    // =====================================================================================================
-
     private static void GameOverReadyPostfix(NGameOverScreen __instance)
     {
         try
@@ -329,8 +316,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// <summary>
     /// The run summary is on screen: this is where the host's "新开一局" button and its caption appear.
     ///
-    /// The hook is <c>NGameOverScreen.OpenSummaryScreen(NButton)</c> (NGameOverScreen.cs:587), i.e. the method
-    /// the "继续" button is wired to (NGameOverScreen.cs:444). It is private, but Harmony patches private instance
+    /// The hook is <c>NGameOverScreen.OpenSummaryScreen(NButton)</c>, the method the "继续" button is wired to.
+    /// It is private, but Harmony patches private instance
     /// methods as long as the signature matches; <see cref="TryCapture"/> resolves it by name and exact parameter
     /// types before anything is patched.
     /// </summary>
@@ -361,11 +348,11 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     }
 
     /// <summary>
-    /// The summary is being hidden (NGameOverScreen.cs:912): take the injected nodes with it.
+    /// The summary is being hidden: take the injected nodes with it.
     ///
     /// The nodes are hidden, not freed: <c>OpenSummaryScreen</c> can be invoked again through the screen's own
-    /// method dispatcher (NGameOverScreen.cs:1214-1216), and a second injection has to reuse the nodes it
-    /// created the first time instead of stacking a second button and a second label on top of them.
+    /// method dispatcher, and a second injection has to reuse the nodes it created the first time instead of
+    /// stacking a second button and a second label on top of them.
     /// </summary>
     private static void SummaryClosedPostfix(NGameOverScreen __instance)
     {
@@ -375,8 +362,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// <summary>
     /// Hides the injected host controls while keeping the nodes alive for the next summary open. Unlike
     /// <see cref="WithdrawHostControls"/> this does not rewrite the caption: nothing is wrong with the session,
-    /// the summary was only covered by the leaderboard (NGameOverScreen.cs:899-902 fades it out and calls
-    /// HideSummary from the tween's callback at :901) or hidden by the screen's own method dispatcher.
+    /// the summary was only covered by the leaderboard that opens after its fade-out, or hidden by the screen's
+    /// own method dispatcher.
     /// </summary>
     private static void HideHostControls(string why)
     {
@@ -388,8 +375,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             {
                 if (GodotObject.IsInstanceValid(button))
                 {
-                    // OnDisable sets Visible = false (NReturnToMainMenuButton.cs:193-198); OnEnable replays the
-                    // game's own fade-in when we come back (NReturnToMainMenuButton.cs:180-188).
+                    // OnDisable sets Visible = false, and OnEnable replays the game's own fade-in when we come
+                    // back.
                     button.Disable();
                     hidden = true;
                 }
@@ -489,8 +476,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// shader, same animate-in) without touching the game's .tscn.
     ///
     /// Reuse is not an optimisation: <c>OpenSummaryScreen</c> is reachable more than once through the screen's
-    /// method dispatcher (NGameOverScreen.cs:1214-1216), and every extra <c>AddChild</c> would leave another
-    /// button and another caption stacked on the same rectangle.
+    /// method dispatcher, and every extra <c>AddChild</c> would leave another button and another caption stacked
+    /// on the same rectangle.
     /// </summary>
     private static NReturnToMainMenuButton? ShowRestartButton(
         Shape shape,
@@ -510,9 +497,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
                 existing.Disable();
                 existing.Enable();
 
-                // Enable() runs NButton.OnEnable (NButton.cs:232-236), which calls RegisterHotkeys() and pushes
-                // MegaInput.select again — that is exactly what took the confirm key away from "主菜单" the
-                // first time (see ReleaseDuplicatedHotkey), so it has to be dropped again on every re-enable.
+                // Enable() runs NButton.OnEnable, which calls RegisterHotkeys() and pushes MegaInput.select
+                // again. That is exactly what took the confirm key away from "主菜单" the first time (see
+                // ReleaseDuplicatedHotkey), so it has to be dropped again on every re-enable.
                 ReleaseDuplicatedHotkey(shape, existing);
                 return existing;
             }
@@ -557,10 +544,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         CopyButtonMaterial(shape, mainMenu, button);
         return button;
     }
-
-    // =====================================================================================================
-    // Session liveness
-    // =====================================================================================================
 
     /// <summary>
     /// Withdraws the injected controls. Called when the session the button depends on ends, and again when the
@@ -735,10 +718,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         _gameOverScreenVisible = true;
 
         // The hint talks about what the *host* can still do, so it is only true while our own session is alive.
-        // IsConnected is the game's own answer to "can this service still send messages"
-        // (INetGameService.cs:22-25), and a client clears it the moment the host drops us
-        // (NetClientGameService.cs:162-176, IsConnected = false at :168 before Disconnected fires at :169). The
-        // host path uses the same flag for the same reason (InjectHostControls).
+        // IsConnected is the game's own answer to "can this service still send messages", and a client clears
+        // it before the Disconnected event fires. The host path uses the same flag for the same reason
+        // (InjectHostControls).
         bool sessionAlive = service.IsConnected;
 
         Control anchor = ResolveLayoutAnchor(shape, screen);
@@ -762,10 +744,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             $"placement={(slots.PlacedBelow ? "below" : "above")}, font={slots.FontSize}, " +
             $"menu={Describe(slots.Menu)}, hint={Describe(slots.Hint)}).");
     }
-
-    // =====================================================================================================
-    // Layout plumbing
-    // =====================================================================================================
 
     /// <summary>
     /// Picks the coordinate space (and parent) for the injected nodes.
@@ -949,11 +927,11 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// The client's one-line hint. Two inputs decide it: whether our own session is still alive, and whether the
     /// host runs this patch.
     ///
-    /// Every wording below has to fit on one line of the label <see cref="CreateInfoLabel"/> builds. The layout
-    /// gives that label <c>min(maxMenuWidth, max(2 * menuWidth, 420))</c> px (GameOverLayout.cs:166), i.e. 520 px
-    /// with the shipped main-menu button and never less than 420 px, and the font is 24 px at 1080p
-    /// (GameOverLayout.cs:101 MinFontSize). A full-width CJK glyph therefore costs 24 px, so the worst case
-    /// allows 17 glyphs (420 / 24 = 17.5). The glyph count of each wording is noted next to it;
+    /// Every wording below has to fit the label <see cref="CreateInfoLabel"/> builds. <c>GameOverLayout</c>
+    /// gives that label <c>min(maxMenuWidth, max(2 * menuWidth, 420))</c> px, so 520 px with the shipped
+    /// main-menu button and never less than 420 px, and the 1080p font is the same 24 px the layout's
+    /// <c>MinFontSize</c> pins. A full-width CJK glyph therefore costs 24 px, so the narrowest budget is 17
+    /// glyphs (420 / 24 = 17.5). The glyph count of each wording is noted next to it;
     /// <c>AutowrapMode.WordSmart</c> is the safety net, not the plan.
     /// </summary>
     private static string BuildClientHint(bool sessionAlive)
@@ -976,10 +954,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             _ => "房主补丁未知，可能直接新开或需重进"
         };
     }
-
-    // =====================================================================================================
-    // Host side
-    // =====================================================================================================
 
     private static void OnNewRunPressed(NButton _)
     {
@@ -1223,12 +1197,12 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
     /// <summary>
     /// One-shot replacement for the daily lobby's "admit everyone that connected before this lobby existed" step.
-    /// It is only armed for the single restart that asked for it; any other call (a normal daily host, another
-    /// mode, the native path taken by <see cref="AdmitPatchedPeers"/>) falls straight through to the game's own
-    /// implementation.
+    /// It is only armed for the single restart that asked for it, and only for the lobby of the session that
+    /// restart created; any other call (a normal daily host, another mode, a daily lobby built later, the native
+    /// path taken by <see cref="AdmitPatchedPeers"/>) falls straight through to the game's own implementation.
     ///
     /// This is a Harmony *prefix*, so it must never throw: <c>StartRunLobby.AdmitClientsConnectedBeforeLobbyExisted</c>
-    /// is a plain <c>void</c> the daily screen calls while it builds its lobby (StartRunLobby.cs:253-268), and
+    /// is a plain <c>void</c> the daily screen calls while it builds its lobby, and
     /// upstream does not catch. An escaping exception would therefore not "fail one admission" — it would abort
     /// the whole daily host flow. Every failure here degrades to <c>true</c>, i.e. the game's own admission,
     /// because admitting an unpatched peer (who then times out) is strictly better than a dead lobby.
@@ -1487,10 +1461,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         }
     }
 
-    // =====================================================================================================
-    // Client side
-    // =====================================================================================================
-
     private static void HandshakeSucceededPostfix(NetClientGameService __instance, ulong peerId, PeerVersionInfo versionInfo)
     {
         try
@@ -1608,10 +1578,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
         // This reassemble reuses the session, so the Tail binding (and its roster authority) survives the room
         // rebuild. The host's answer to the request below is a ClientLobbyJoinResponseMessage, which
-        // RestoreStartRunResponse turns into AcceptRoster(..., Bootstrap) — but AcceptRoster ignores the hint
+        // RestoreStartRunResponse turns into AcceptRoster(..., Bootstrap), but AcceptRoster ignores the hint
         // once an epoch is accepted and validates as CurrentState instead, demanding a byte-for-byte repeat of
-        // the finished run's StartRunLobbyPlayer snapshot (LanConnectTailMessageRuntime.cs:1350-1354,
-        // LanConnectRosterAuthorityState.cs:83-88). Drop the epoch first, strictly before the send.
+        // the finished run's StartRunLobbyPlayer snapshot. Drop the epoch first, strictly before the send.
         // Non-fatal by design: a failed reset must never abort the reassemble.
         if (TailRoster.Reset(service, "before the reassemble join request"))
         {
@@ -1793,14 +1762,10 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         ShowInfo("返回准备页失败，已退出本局。请重新加入房间。");
     }
 
-    // =====================================================================================================
-    // Shared plumbing
-    // =====================================================================================================
-
     /// <summary>
     /// Tears the finished run down the way the main-menu button does, but keeps the socket: the one
     /// <c>NetService.Disconnect</c> issued by <c>RunManager.CleanUp</c> is suppressed for exactly this call.
-    /// The flag is always cleared in <c>finally</c>, so a failure here can never leave the session half-wired.
+    /// The flag is cleared in <c>finally</c>, so a failed teardown cannot leave the suppression behind.
     /// </summary>
     private static async Task TeardownToMainMenuAsync(INetGameService service)
     {
@@ -1971,8 +1936,8 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// deliberately keeping the session. Everything else (a real quit, a kick, the rollback) passes through.
     ///
     /// The <c>NetError</c> filter is load-bearing, not defensive. While the teardown runs, the host mod's Tail runtime
-    /// can reject an inbound frame on this very service and disconnect with <c>ModMismatch</c>
-    /// (LanConnectTailMessageRuntime.cs:1428). Swallowing that one leaves the session half torn down: the Tail binding
+    /// can reject an inbound frame on this very service and disconnect with <c>ModMismatch</c>. Swallowing that one
+    /// leaves the session half torn down: the Tail binding
     /// is still registered, ENet is still up, and nothing ever reports the rejection. Only the teardown's own
     /// <c>Quit</c> may be dropped. Field log 2026-11-13 566639 → 566660/566679 is the sequence that taught it.
     ///
@@ -2004,10 +1969,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     }
 
     private readonly record struct PeerCounts(int Total, int Patched, int Unknown);
-
-    // =====================================================================================================
-    // Installability probe
-    // =====================================================================================================
 
     private const string GameOverScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen.NGameOverScreen";
     private const string ReturnToMainMenuButtonTypeName =
@@ -2045,8 +2006,9 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     /// <item>No <c>Invoke</c>, no <c>Activator</c>, no Godot node, no file system. Resolving a
     /// <see cref="MethodInfo"/> does not JIT the target, so probing is safe before the game has created anything.</item>
     /// <item>Every missing anchor is collected, not just the first one: one log line has to say what to fix.</item>
-    /// <item>Nothing is thrown to the caller. The host treats an exception as "this repair failed" and, today,
-    /// removes every patch of the whole mod — a missing anchor must not do that.</item>
+    /// <item>Nothing is thrown to the caller. The host treats an exception as "this repair failed" and rolls
+    /// back this repair's group, which for the new-run group means both of its repairs: a missing anchor must
+    /// not cost that.</item>
     /// </list>
     /// </summary>
     private static bool TryCapture(
@@ -2057,7 +2019,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     {
         List<string> problems = new();
 
-        // ---- host mod: the three helpers reached through reflection ----
         Type? compatibility = ReflectScope.HostType(host, CompatibilityTypeName, problems);
         MethodInfo? getMaxPlayers = ReflectScope.StaticMethod(problems, compatibility, "GetEffectiveMaxPlayers");
 
@@ -2071,7 +2032,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         Type? configType = ReflectScope.HostType(host, ConfigTypeName, problems);
         MethodInfo? removeBinding = ReflectScope.StaticMethod(problems, configType, "RemoveSaveRoomBinding", "System.String");
 
-        // ---- game: the game-over screen ----
         Type? screenType = ReflectScope.GameType(GameOverScreenTypeName, problems);
         FieldInfo? mainMenuButton = ReflectScope.Field(problems, screenType, "_mainMenuButton");
         FieldInfo? resultField = ReflectScope.Field(problems, screenType, "_result");
@@ -2110,7 +2070,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             "MegaCrit.Sts2.Core.Nodes.GodotExtensions.NButton");
         MethodInfo? hideSummary = ReflectScope.InstanceMethod(problems, screenType, "HideSummary");
 
-        // ---- game: the button we duplicate ----
         Type? buttonType = ReflectScope.GameType(ReturnToMainMenuButtonTypeName, problems);
         FieldInfo? showPosition = ReflectScope.Field(problems, buttonType, "_showPosition");
         FieldInfo? shaderMaterial = ReflectScope.Field(problems, buttonType, "_hsv");
@@ -2130,7 +2089,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         Type? nButtonType = ReflectScope.GameType(ButtonTypeName, problems);
         MethodInfo? unregisterHotkeys = ReflectScope.InstanceMethod(problems, nButtonType, "UnregisterHotkeys");
 
-        // ---- game: the lobby we rebuild and the two services we suppress ----
         Type? lobbyType = ReflectScope.GameType(StartRunLobbyTypeName, problems);
         MethodInfo? admitPeer = ReflectScope.InstanceMethod(problems, lobbyType, "OnConnectedToClientAsHost", "System.UInt64");
         MethodInfo? admitClients = ReflectScope.InstanceMethod(
@@ -2170,7 +2128,6 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
         ReflectScope.RequireParameterNames(problems, clientDisconnect, "reason");
         ReflectScope.RequireParameterNames(problems, handshake, "peerId", "versionInfo");
 
-        // ---- game: types only referenced inside patch bodies ----
         //
         // These are the ones no "install-time" check would otherwise catch: they appear in handler bodies, so a rename
         // surfaces as a TypeLoadException inside the game's own method the first time the handler runs, where a
