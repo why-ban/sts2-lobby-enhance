@@ -144,7 +144,11 @@ internal sealed class PoolCreateFix : ICompatFix
                 return false;
             }
 
-            __result = CreateOnBestServerAsync(anchors, __instance);
+            // The dialog's picker (CreateServerPickerFix) records a pinned server; null means 自动（延迟最低）.
+            string? pinned = CreateServerPickerState.SelectedBaseUrl(__instance);
+            __result = pinned == null
+                ? CreateOnBestServerAsync(anchors, __instance)
+                : CreateOnChosenServerAsync(anchors, __instance, pinned);
             return false;
         }
         catch (Exception exception)
@@ -227,6 +231,95 @@ internal sealed class PoolCreateFix : ICompatFix
             Interlocked.Exchange(ref _inFlight, 0);
         }
     }
+
+    /// <summary>
+    /// The player pinned a server in the create dialog. "Only create on that server" means exactly that: switch to it,
+    /// and if the switch does not land, publish nothing and say why in the dialog's own error line. Creating on a
+    /// different server than the one chosen would be the one outcome the feature exists to prevent.
+    /// </summary>
+    private static async Task CreateOnChosenServerAsync(PoolAnchors anchors, object overlay, string chosenBaseUrl)
+    {
+        try
+        {
+            string current = PoolServerCatalog.CurrentBaseUrl(anchors);
+            if (!PoolAddress.Same(chosenBaseUrl, current))
+            {
+                PoolRefreshFix.SetStatus(overlay, "正在切换到所选服务器：" + ShortName(chosenBaseUrl) + "…");
+                bool switched = await SwitchToServerAsync(anchors, overlay, chosenBaseUrl).ConfigureAwait(true);
+                if (!switched)
+                {
+                    ShowCreateError(
+                        anchors,
+                        overlay,
+                        "无法切换到所选服务器（" + ShortName(chosenBaseUrl) + "），房间没有创建。" +
+                        "可以改成「自动（延迟最低）」，或换一台服务器再试。");
+                    PoolRefreshFix.SetStatus(overlay, "未能切换到所选服务器，已取消建房。");
+                    WarnOnce(
+                        "create-pinned-switch",
+                        "the pinned server " + chosenBaseUrl + " could not be switched to, so no room was created");
+                    return;
+                }
+            }
+
+            await InvokeCreateAsync(anchors, overlay).ConfigureAwait(true);
+
+            if (!PoolServerSwitch.HasActiveRoomSession(anchors))
+            {
+                Entry.Info(
+                    "[server-pool] create finished without a live room; server=" +
+                    PoolServerCatalog.CurrentBaseUrl(anchors) + " (pinned by the player).");
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _inFlight, 0);
+        }
+    }
+
+    /// <summary>Switches to one server and reports whether the config really ended up pointing at it.</summary>
+    private static async Task<bool> SwitchToServerAsync(PoolAnchors anchors, object overlay, string baseUrl)
+    {
+        try
+        {
+            using var budget = new CancellationTokenSource(SwitchTimeoutMs);
+            object? lease = await PoolServerSwitch.SwitchAsync(anchors, baseUrl, budget.Token).ConfigureAwait(true);
+            PoolServerSwitch.DisposeLease(lease);
+            PoolServerSwitch.RefreshServerUi(anchors, overlay);
+        }
+        catch (Exception exception)
+        {
+            WarnOnce(
+                "create-pinned-switch",
+                "switching to the pinned server " + baseUrl + " failed: " + PoolRoomClient.Describe(exception));
+        }
+
+        return PoolAddress.Same(PoolServerCatalog.CurrentBaseUrl(anchors), baseUrl);
+    }
+
+    /// <summary>Writes the dialog's own error line, preferring the host mod's helper so styling stays upstream's.</summary>
+    private static void ShowCreateError(PoolAnchors anchors, object overlay, string message)
+    {
+        try
+        {
+            if (anchors.ShowCreateDialogError != null)
+            {
+                anchors.ShowCreateDialogError.Invoke(overlay, new object?[] { message, true });
+                return;
+            }
+
+            if (anchors.CreateDialogErrorLabel?.GetValue(overlay) is Godot.Label label)
+            {
+                label.Text = message;
+                label.Visible = true;
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("create-error", "the dialog error line could not be written: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    private static string ShortName(string url) => PoolAddress.ShortName(null, url, PoolText.SourceNameMaxLength);
 
     private static async Task SwitchToBestServerAsync(PoolAnchors anchors, object overlay)
     {

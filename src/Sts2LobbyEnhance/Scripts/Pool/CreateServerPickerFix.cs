@@ -1,0 +1,617 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Godot;
+using HarmonyLib;
+
+namespace Sts2LobbyEnhance;
+
+/// <summary>
+/// Lets the player choose which lobby server a new room is published to, inside the create-room dialog.
+///
+/// The default is "自动（延迟最低）" and that is also the behaviour without this repair; picking a server turns the
+/// choice into a constraint ("only create on that server"), which is honoured by PoolCreateFix.
+///
+/// The section is inserted into the dialog body the host mod builds (LanConnectLobbyOverlay.cs:2480-2531), between the
+/// max-players row (:2498) and the error label (:2510-2514), collapsed by default. Expanding it probes the servers that
+/// have no fresh cache entry (PoolServerCatalog.ProbeAsync, 2 s total budget) and rewrites the latency column when the
+/// answers arrive; nothing blocks, and a failed probe leaves "未测" rather than a made-up number.
+///
+/// The selection lives in memory only, keyed by the overlay instance: config.json keeps holding one server address, and
+/// this is a per-session preference, not a persisted setting.
+/// </summary>
+internal sealed class CreateServerPickerFix : ICompatFix
+{
+    internal const string FixId = "server-pool-create-picker";
+
+    /// <summary>Budget for the latency refresh a single expand may trigger, matching the create path's probe budget.</summary>
+    internal const int ProbeBudgetMs = 2000;
+
+    private static PoolAnchors? _anchors;
+
+    /// <summary>One section per overlay, replaced when the dialog is rebuilt.</summary>
+    private static readonly ConditionalWeakTable<object, CreateServerPickerSection> Sections = new();
+
+    public string Id => FixId;
+
+    public FixGroup Group => FixGroup.Pool;
+
+    public bool Applies(out string reason)
+    {
+        _anchors = null;
+        Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
+        if (host == null)
+        {
+            reason = "host mod '" + Entry.HostModAssemblyName + "' is not loaded";
+            return false;
+        }
+
+        try
+        {
+            PoolAnchors? anchors = PoolAnchors.TryCapture(host, PoolAnchorScope.CreatePicker, out reason);
+            if (anchors == null)
+            {
+                return false;
+            }
+
+            _anchors = anchors;
+            reason = string.Empty;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            reason = "missing: anchor capture threw " + exception.GetType().Name + ": " + exception.Message;
+            return false;
+        }
+    }
+
+    public void Apply(Harmony harmony)
+    {
+        PoolAnchors anchors = _anchors
+            ?? throw new InvalidOperationException(
+                "server-pool: Apply ran without a captured anchor set; Applies must be consulted first.");
+
+        harmony.Patch(
+            anchors.BuildCreateDialog,
+            postfix: new HarmonyMethod(typeof(CreateServerPickerFix), nameof(BuildCreateDialogPostfix))
+            {
+                priority = Priority.Last
+            });
+
+        Entry.Info(
+            "[server-pool] the create dialog now offers a collapsible server picker (default 自动（延迟最低）); " +
+            "patched " + PoolAnchors.OverlayTypeName + ".BuildCreateDialog (LanConnectLobbyOverlay.cs:2480).");
+    }
+
+    // ReSharper disable once InconsistentNaming - Harmony binds these by their exact names.
+    public static void BuildCreateDialogPostfix(object? __instance, object? __result)
+    {
+        try
+        {
+            PoolAnchors? anchors = _anchors;
+            if (anchors == null || __instance == null || __result is not Control shell)
+            {
+                return;
+            }
+
+            if (anchors.CreateDialogBody?.GetValue(__instance) is not VBoxContainer body)
+            {
+                return;
+            }
+
+            // _createDialogBody is this dialog's body only because CreateDialogShell just assigned it (:3122). Any
+            // other shell built in between would leave a stale field, so the body has to belong to this shell.
+            if (!shell.IsAncestorOf(body))
+            {
+                return;
+            }
+
+            Control? errorLabel = anchors.CreateDialogErrorLabel?.GetValue(__instance) as Control;
+            CreateServerPickerSection section = Sections.GetValue(
+                __instance,
+                overlay => new CreateServerPickerSection(anchors, overlay, body, errorLabel));
+            section.Attach();
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce(
+                "create-picker",
+                "the server picker could not be added to the create dialog: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    internal static int ProbeBudget => ProbeBudgetMs;
+}
+
+/// <summary>
+/// The per-overlay remembered choice. <see cref="BaseUrl"/> null means 自动（延迟最低）; anything else is a normalized
+/// authority the create repair must switch to (and only to) before publishing.
+/// </summary>
+internal sealed class CreateServerPickerState
+{
+    internal string? BaseUrl;
+
+    internal bool Expanded;
+
+    private static readonly ConditionalWeakTable<object, CreateServerPickerState> States = new();
+
+    internal static CreateServerPickerState For(object overlay) => States.GetValue(overlay, _ => new CreateServerPickerState());
+
+    /// <summary>The server the player pinned, or null for 自动. Read by PoolCreateFix.</summary>
+    internal static string? SelectedBaseUrl(object overlay) => For(overlay).BaseUrl;
+}
+
+/// <summary>
+/// The collapsed header plus the expandable server list. Pure UI: it never switches servers itself, and every node
+/// write is guarded against a dialog that closed while a probe was still running.
+/// </summary>
+internal sealed class CreateServerPickerSection
+{
+    private const string RootNodeName = "LobbyEnhanceCreateServerPicker";
+
+    private const string CollapsedMark = "  ▸";
+
+    private const string ExpandedMark = "  ▾";
+
+    private const string SelectedBullet = "● ";
+
+    private const string UnselectedBullet = "○ ";
+
+    private const string RowBaseMeta = "pool_picker_base";
+
+    private const string RowLabelMeta = "pool_picker_label";
+
+    private readonly PoolAnchors _anchors;
+
+    private readonly object _overlay;
+
+    private readonly VBoxContainer _body;
+
+    private readonly Control? _errorLabel;
+
+    private readonly VBoxContainer _root;
+
+    private readonly Button _header;
+
+    private readonly VBoxContainer _rows;
+
+    private readonly Label? _hint;
+
+    private int _refreshing;
+
+    internal CreateServerPickerSection(
+        PoolAnchors anchors,
+        object overlay,
+        VBoxContainer body,
+        Control? errorLabel)
+    {
+        _anchors = anchors;
+        _overlay = overlay;
+        _body = body;
+        _errorLabel = errorLabel;
+
+        CreateServerPickerState state = CreateServerPickerState.For(overlay);
+
+        _root = new VBoxContainer
+        {
+            Name = RootNodeName,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+        };
+        _root.AddThemeConstantOverride("separation", 8);
+
+        _header = BuildHeader(state);
+        _root.AddChild(_header);
+
+        _rows = new VBoxContainer
+        {
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            Visible = state.Expanded
+        };
+        _rows.AddThemeConstantOverride("separation", 6);
+        _root.AddChild(_rows);
+
+        _hint = BuildHint();
+        _root.AddChild(_hint);
+
+        UpdateHeader();
+    }
+
+    /// <summary>Puts the section into the dialog body, before the error label when the host mod still has one.</summary>
+    internal void Attach()
+    {
+        try
+        {
+            foreach (Node existing in _body.GetChildren())
+            {
+                if (existing is not null && existing.Name == RootNodeName && !ReferenceEquals(existing, _root))
+                {
+                    _body.RemoveChild(existing);
+                    existing.QueueFree();
+                }
+            }
+
+            if (_root.GetParent() != null)
+            {
+                return;
+            }
+
+            _body.AddChild(_root);
+            if (_errorLabel != null && ReferenceEquals(_errorLabel.GetParent(), _body))
+            {
+                _body.MoveChild(_root, _errorLabel.GetIndex());
+            }
+
+            // The ctor's UpdateHeader ran while the section was still parentless, where every node write is skipped on
+            // purpose (IsInsideTree guard). Now that it is in the dialog, paint the real text.
+            UpdateHeader();
+            UpdateHint(CreateServerPickerState.For(_overlay));
+            if (CreateServerPickerState.For(_overlay).Expanded)
+            {
+                RebuildRows();
+            }
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce("create-picker-attach", "the picker could not be placed: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    private Button BuildHeader(CreateServerPickerState state)
+    {
+        Button? button = null;
+        if (_anchors.CreateActionButton is { } factory)
+        {
+            ParameterInfo[] parameters = factory.GetParameters();
+            object? glyph = parameters.Length >= 6 ? Enum.ToObject(parameters[5].ParameterType, 0) : null;
+            button = factory.Invoke(_overlay, new object?[]
+            {
+                string.Empty,
+                "选择房间发布到哪一台大厅服务器。默认自动：延迟最低且允许建房的那台。",
+                new Action(Toggle),
+                false,
+                false,
+                glyph
+            }) as Button;
+        }
+
+        if (button == null)
+        {
+            button = new Button { CustomMinimumSize = new Vector2(0f, 44f) };
+            button.Pressed += Toggle;
+        }
+
+        button.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        return button;
+    }
+
+    private Label? BuildHint()
+    {
+        Label? label = _anchors.CreateBodyLabel?.Invoke(null, new object?[] { string.Empty }) as Label;
+        if (label == null)
+        {
+            return null;
+        }
+
+        label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        label.AddThemeFontSizeOverride("font_size", 13);
+        label.AddThemeColorOverride("font_color", MutedColor());
+        label.Visible = false;
+        return label;
+    }
+
+    private void Toggle()
+    {
+        try
+        {
+            CreateServerPickerState state = CreateServerPickerState.For(_overlay);
+            state.Expanded = !state.Expanded;
+            if (IsLive(_rows))
+            {
+                _rows.Visible = state.Expanded;
+            }
+
+            UpdateHeader();
+            if (!state.Expanded)
+            {
+                return;
+            }
+
+            RebuildRows();
+            _ = RefreshAsync();
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce("create-picker-toggle", "the picker could not be expanded: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    /// <summary>Redraws the list from the current cache. Cheap: no network, only string building.</summary>
+    private void RebuildRows()
+    {
+        try
+        {
+            if (!IsLive(_rows))
+            {
+                return;
+            }
+
+            foreach (Node child in _rows.GetChildren())
+            {
+                _rows.RemoveChild(child);
+                child.QueueFree();
+            }
+
+            CreateServerPickerState state = CreateServerPickerState.For(_overlay);
+
+            AddRow(null, "自动（延迟最低）", "按延迟升序挑一台允许建房的服务器。", state.BaseUrl == null);
+
+            foreach (PoolServer server in CandidateServers(state.BaseUrl))
+            {
+                bool selected = state.BaseUrl != null && PoolAddress.Same(server.BaseUrl, state.BaseUrl);
+                AddRow(server.BaseUrl, server.ShortName(16) + " · " + LatencyLabel(server), server.BaseUrl, selected);
+            }
+
+            UpdateHint(state);
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce("create-picker-rows", "the server list could not be drawn: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    /// <summary>
+    /// One choice. The selected one borrows upstream's "primary" button styling (the same emphasis the CREATE button
+    /// uses) plus a filled bullet, so the state is visible without a toggle's pressed colour taking over the dialog.
+    /// </summary>
+    private void AddRow(string? baseUrl, string label, string tooltip, bool selected)
+    {
+        var row = new Button
+        {
+            TooltipText = tooltip,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            Alignment = HorizontalAlignment.Left
+        };
+
+        row.SetMeta(RowBaseMeta, baseUrl ?? string.Empty);
+        row.SetMeta(RowLabelMeta, label);
+        ApplyRowStyle(row, label, selected);
+        row.Pressed += () => Select(baseUrl);
+        _rows.AddChild(row);
+    }
+
+    private void ApplyRowStyle(Button row, string label, bool selected)
+    {
+        row.Text = (selected ? SelectedBullet : UnselectedBullet) + label;
+        _anchors.ApplyButtonStyle?.Invoke(null, new object?[] { row, selected, false });
+    }
+
+    /// <summary>Re-marks every row after a click, so exactly one carries the bullet and the primary styling.</summary>
+    private void RestyleRows(string? selectedBaseUrl)
+    {
+        if (!IsLive(_rows))
+        {
+            return;
+        }
+
+        foreach (Node child in _rows.GetChildren())
+        {
+            if (child is not Button row || !row.HasMeta(RowBaseMeta) || !row.HasMeta(RowLabelMeta))
+            {
+                continue;
+            }
+
+            string rowBase = row.GetMeta(RowBaseMeta).AsString();
+            string label = row.GetMeta(RowLabelMeta).AsString();
+            bool selected = string.IsNullOrEmpty(rowBase)
+                ? selectedBaseUrl == null
+                : selectedBaseUrl != null && PoolAddress.Same(rowBase, selectedBaseUrl);
+            ApplyRowStyle(row, label, selected);
+        }
+    }
+
+    private void Select(string? baseUrl)
+    {
+        try
+        {
+            CreateServerPickerState state = CreateServerPickerState.For(_overlay);
+            state.BaseUrl = baseUrl;
+            RestyleRows(baseUrl);
+            UpdateHeader();
+            UpdateHint(state);
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce("create-picker-select", "the selection could not be stored: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    private void UpdateHeader()
+    {
+        try
+        {
+            if (!IsLive(_header))
+            {
+                return;
+            }
+
+            CreateServerPickerState state = CreateServerPickerState.For(_overlay);
+            string current = state.BaseUrl == null
+                ? "自动（延迟最低）"
+                : PoolAddress.ShortName(null, state.BaseUrl, 16);
+            _header.Text = "服务器 · " + current + (state.Expanded ? ExpandedMark : CollapsedMark);
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce("create-picker-header", "the picker header could not be updated: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    /// <summary>
+    /// One muted line, only when the capability data for the pinned server actually exists: it says the server cannot
+    /// host this dialog's protocol profile. It is advisory - the create path still tries, because only the service's
+    /// own answer is authoritative.
+    /// </summary>
+    private void UpdateHint(CreateServerPickerState state)
+    {
+        try
+        {
+            Label? hint = _hint;
+            if (!IsLive(hint))
+            {
+                return;
+            }
+
+            string text = string.Empty;
+            if (state.BaseUrl != null)
+            {
+                PoolServer? selected = CandidateServers(state.BaseUrl)
+                    .FirstOrDefault(server => PoolAddress.Same(server.BaseUrl, state.BaseUrl));
+                (string? profile, int version) = ResolveOwnProfile();
+                if (selected != null && profile != null && PoolServerCatalog.IsCapabilityFresh(selected))
+                {
+                    text = PoolServerCatalog.SupportsProfile(selected, profile, version)
+                        ? string.Empty
+                        : "该服务器的协议能力与当前档位（" + profile + "）不匹配，可能无法建房；仍会按你的选择尝试。";
+                }
+            }
+
+            hint!.Text = text;
+            hint.Visible = text.Length > 0;
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce("create-picker-hint", "the protocol hint could not be updated: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    /// <summary>Probes only the servers whose latency/guard cache is stale, then rewrites the rows once.</summary>
+    private async Task RefreshAsync()
+    {
+        if (Interlocked.Exchange(ref _refreshing, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            IReadOnlyList<PoolServer> servers = PoolServerCatalog.GetServers(_anchors);
+            List<Task> pending = servers
+                .Where(server => !PoolServerCatalog.IsCoolingDown(server))
+                .Where(PoolServerCatalog.NeedsProbe)
+                .Select(server => PoolServerCatalog.ProbeAsync(
+                    _anchors,
+                    server,
+                    CreateServerPickerFix.ProbeBudget,
+                    CancellationToken.None))
+                .ToList();
+            if (pending.Count == 0)
+            {
+                return;
+            }
+
+            Task all = Task.WhenAll(pending);
+            Task budget = Task.Delay(CreateServerPickerFix.ProbeBudget);
+            Task finished = await Task.WhenAny(all, budget).ConfigureAwait(true);
+            if (ReferenceEquals(finished, all))
+            {
+                await all.ConfigureAwait(true);
+            }
+
+            // Redraw either way: the budget expiring is not a failure, it just means the slower nodes keep "未测" until
+            // the next expand. Without this the panel could stay blank even though the fast servers had already answered.
+            RebuildRows();
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce("create-picker-probe", "refreshing the latency column failed: " + PoolRoomClient.Describe(exception));
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _refreshing, 0);
+        }
+    }
+
+    /// <summary>Pool order, plus the pinned server when the catalog no longer lists it (never silently drop a choice).</summary>
+    private IReadOnlyList<PoolServer> CandidateServers(string? selectedBaseUrl)
+    {
+        List<PoolServer> servers = PoolServerCatalog.GetServers(_anchors).ToList();
+        if (!string.IsNullOrWhiteSpace(selectedBaseUrl)
+            && !servers.Exists(server => PoolAddress.Same(server.BaseUrl, selectedBaseUrl)))
+        {
+            servers.Add(new PoolServer(selectedBaseUrl));
+        }
+
+        return servers;
+    }
+
+    private string LatencyLabel(PoolServer server) =>
+        server.LatencyMs is { } latency and > 0 and < PoolServerFetch.UnknownLatency
+            ? latency + " ms"
+            : "未测";
+
+    private (string? Profile, int Version) ResolveOwnProfile()
+    {
+        try
+        {
+            if (_anchors.GetSelectedCreateProtocolId == null
+                || _anchors.ProtocolProfileFromCreateId == null
+                || _anchors.ProfileToCanonical == null)
+            {
+                return (null, 0);
+            }
+
+            if (_anchors.GetSelectedCreateProtocolId.Invoke(_overlay, null) is not int protocolId)
+            {
+                return (null, 0);
+            }
+
+            object? profile = _anchors.ProtocolProfileFromCreateId.Invoke(null, new object?[] { protocolId });
+            if (profile == null)
+            {
+                return (null, 0);
+            }
+
+            string? canonical = _anchors.ProfileToCanonical.Invoke(null, new object?[] { profile }) as string;
+            if (string.IsNullOrWhiteSpace(canonical))
+            {
+                return (null, 0);
+            }
+
+            int version = 0;
+            if (string.Equals(canonical, PoolServerCatalog.TailProfileCanonical, StringComparison.OrdinalIgnoreCase)
+                && _anchors.TailRuntimeAvailable?.GetValue(null) is true)
+            {
+                version = _anchors.TailLanProtocolVersion;
+            }
+
+            return (canonical, version);
+        }
+        catch (Exception)
+        {
+            return (null, 0);
+        }
+    }
+
+    private Color MutedColor()
+    {
+        try
+        {
+            if (_anchors.TextMutedColor?.GetValue(null) is Color color)
+            {
+                return color;
+            }
+        }
+        catch (Exception)
+        {
+            // Fall through to the literal.
+        }
+
+        return new Color(0.66f, 0.68f, 0.72f);
+    }
+
+    /// <summary>
+    /// Validity, not IsInsideTree: BuildCreateDialog's return value is added to the overlay *after* the method returns
+    /// (LanConnectLobbyOverlay.cs:1120), so every node of this section is still detached while it is being built. Text
+    /// and visibility work detached; only a freed node must not be touched.
+    /// </summary>
+    private static bool IsLive(Node? node) => node != null && GodotObject.IsInstanceValid(node);
+}

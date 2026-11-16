@@ -43,6 +43,7 @@ public sealed class FixRegistryTests
         "server-pool-refresh",
         "server-pool-join",
         "server-pool-create",
+        "server-pool-create-picker",
         "lobby-entry-direct",
         "room-chat-hint-passthrough"
     ];

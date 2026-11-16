@@ -4,7 +4,7 @@
 
 ## [2.1.0] - 2026-11-15
 
-目标游戏 **0.113**；依赖 `sts2_lan_connect` **0.6.4**。修复项 **5 → 14**，Harmony 分组 **4 → 9**。
+目标游戏 **0.113**；依赖 `sts2_lan_connect` **0.6.4**。修复项 **5 → 15**，Harmony 分组 **4 → 9**。
 
 这一版第一次做「扩展」而不只是「修补」：大厅列表不再只显示一台服务器的房间，聊天可以换服务器看，
 手机能正常滑动聊天。原有的 5 项修复一项没少。
@@ -80,6 +80,19 @@
 - 只做电脑端：手机端保持上游原样（`OS.HasFeature("mobile")` 在补丁体第一行判断）。
 - 不动布局：提示文字的位置、宽度、字号一律不改，只改鼠标过滤。
 
+#### 7. 建房时自己选服务器（`server-pool-create-picker`，组 `Pool`）
+
+- 创建房间面板多一节**可折叠**的「服务器」，默认折叠、默认「自动（延迟最低）」。
+- 折叠头一行：`服务器 · 自动（延迟最低）  ▸`；展开后列出池里每台服务器的**短名 + 延迟**（`28 ms`；没有探测数据就写「未测」，
+  不编数字），首项「自动（延迟最低）」并默认选中，当前项有可见选中态（`ButtonGroup` + `ToggleMode`，选中即上游的 pressed 样式）。
+- 展开时刷新一次延迟：复用 `PoolServerCatalog` 的缓存与 `ProbeAsync`，整轮预算 **2 s**，在 main thread 回填文本，不阻塞弹窗、不抛异常。
+- 选择**只存内存**，按 overlay 实例（`ConditionalWeakTable`），不写 `config.json`。
+- `CreateRoomAsync` 的 prefix 读这个选择：自动 → 原逻辑不变；手动 → **只切到指定那台，切成功才建房；切失败不创建**，
+  把原因写进对话框错误标签（`ShowCreateDialogError`，`:6845`）。
+- 手动选中的服务器若 `/probe` 的协议能力（已有缓存时）不支持当前档位，展开区给一行 muted 提示，但**不阻止创建**。
+- 注入点：`BuildCreateDialog`（`LanConnectLobbyOverlay.cs:2480-2531`）postfix，插在「最大人数」行（`:2498`）之后、
+  错误标签（`:2510-2514`）之前（`_createDialogBody`，`:190`/`:3122`）。
+
 ### 保留（5 项不变）
 
 `roster-rebaseline`、`load-join-order`、`new-run-button`、`new-run-save-binding`、`new-protocol-only`。
@@ -87,7 +100,7 @@
 ### 说明
 
 - 每个新修复都有自己的 `Shape.TryCapture` 锚点探针；任一锚点缺失就 clean skip 并把缺的成员写进日志，绝不半装。
-- `Applies()` / `Apply()` 里**零 Godot 调用**（平台判断、节点操作全在补丁体内），所以 `tools/smoke-test` 能在无 Godot 的进程里验证全部 14 项。
+- `Applies()` / `Apply()` 里**零 Godot 调用**（平台判断、节点操作全在补丁体内），所以 `tools/smoke-test` 能在无 Godot 的进程里验证全部 15 项。
 - 已知限制：跨服加入会切服（退房 + 重启频道 + 写默认服务器），这是上游 `SwitchLobbyServerAsync` 的语义，我们没有绕开它；
   池刷新沿用上游 8 s 节拍（只在大厅页面可见时跑）。
 

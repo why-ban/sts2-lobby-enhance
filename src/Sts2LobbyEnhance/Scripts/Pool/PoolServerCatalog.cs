@@ -259,6 +259,30 @@ internal sealed class PoolAnchors
     /// <summary>LanConnectLobbyOverlay._serverBaseUrlInput (:141) - repainted after a switch, like upstream does</summary>
     internal FieldInfo? ServerBaseUrlInput;
 
+    /// <summary>LanConnectLobbyOverlay.BuildCreateDialog() (:2480) - where the create dialog is assembled</summary>
+    internal MethodInfo BuildCreateDialog = null!;
+
+    /// <summary>LanConnectLobbyOverlay._createDialogBody (:190, assigned by CreateDialogShell :3122)</summary>
+    internal FieldInfo? CreateDialogBody;
+
+    /// <summary>LanConnectLobbyOverlay._createDialogErrorLabel (:191, created :2510)</summary>
+    internal FieldInfo? CreateDialogErrorLabel;
+
+    /// <summary>LanConnectLobbyOverlay.CreateActionButton(string, string, Action, bool, bool, GlyphIconKind) (:7413)</summary>
+    internal MethodInfo? CreateActionButton;
+
+    /// <summary>LanConnectLobbyOverlay.CreateSectionLabel(string) (:7949)</summary>
+    internal MethodInfo? CreateSectionLabel;
+
+    /// <summary>LanConnectLobbyOverlay.ApplyButtonStyle(Button, bool, bool) (:7991)</summary>
+    internal MethodInfo? ApplyButtonStyle;
+
+    /// <summary>LanConnectLobbyOverlay.ShowCreateDialogError(string, bool) (:6845)</summary>
+    internal MethodInfo? ShowCreateDialogError;
+
+    /// <summary>LanConnectLobbyOverlay.DangerColor (:78)</summary>
+    internal PropertyInfo? DangerColor;
+
     /// <summary>LanConnectLobbyOverlay._roomNameInput - the create dialog's name box, read for the cheap pre-check</summary>
     internal FieldInfo? RoomNameInput;
 
@@ -346,6 +370,12 @@ internal sealed class PoolAnchors
                 anchors.CaptureProtocolAnchors(missing, host);
                 break;
 
+            case PoolAnchorScope.CreatePicker:
+                anchors.BuildCreateDialog = ReflectScope.InstanceMethod(missing, anchors.Overlay, "BuildCreateDialog")!;
+                // The picker draws latency and a protocol hint, so it needs the same probe anchors the create repair has.
+                anchors.CaptureProtocolAnchors(missing, host);
+                break;
+
             default:
                 throw new ArgumentOutOfRangeException(nameof(scope));
         }
@@ -411,6 +441,15 @@ internal sealed class PoolAnchors
             .GetField("_serverBaseUrlInput", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         anchors.RoomNameInput = anchors.Overlay
             .GetField("_roomNameInput", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        anchors.CreateDialogBody = anchors.Overlay
+            .GetField("_createDialogBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        anchors.CreateDialogErrorLabel = anchors.Overlay
+            .GetField("_createDialogErrorLabel", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        anchors.CreateActionButton = FindSingleMethod(anchors.Overlay, "CreateActionButton", 6);
+        anchors.CreateSectionLabel = FindSingleMethod(anchors.Overlay, "CreateSectionLabel", 1, requireStatic: true);
+        anchors.ApplyButtonStyle = FindSingleMethod(anchors.Overlay, "ApplyButtonStyle", 3, requireStatic: true);
+        anchors.ShowCreateDialogError = FindSingleMethod(anchors.Overlay, "ShowCreateDialogError", 2);
+        anchors.DangerColor = ReflectScope.StaticProperty(new List<string>(), anchors.Overlay, "DangerColor");
         anchors.ConfigBaseUrlOverride = ReflectScope.StaticProperty(new List<string>(), config, "LobbyServerBaseUrlOverride");
         anchors.RoomSavedRun = OptionalProperty(anchors.RoomType, "SavedRun");
 
@@ -442,6 +481,20 @@ internal sealed class PoolAnchors
         if (scope == PoolAnchorScope.Create && anchors.RuntimeActiveRoomSession == null)
         {
             missing.Add(RuntimeTypeName + ".HasActiveRoomSession");
+        }
+
+        // The picker inserts itself into the dialog body and writes its own error line into the host mod's label.
+        if (scope == PoolAnchorScope.CreatePicker)
+        {
+            if (anchors.CreateDialogBody == null)
+            {
+                missing.Add(OverlayTypeName + "._createDialogBody");
+            }
+
+            if (anchors.CreateDialogErrorLabel == null)
+            {
+                missing.Add(OverlayTypeName + "._createDialogErrorLabel");
+            }
         }
 
         // The refresh takeover reproduces the whole method, so the four members it shares with the other scopes
@@ -672,6 +725,19 @@ internal sealed class PoolAnchors
         return matches.Length == 1 ? matches[0] : null;
     }
 
+    /// <summary>One method by name and arity, or null when the host mod has zero or several. Ambiguity is never
+    /// resolved by picking one: binding to the wrong overload is silent.</summary>
+    private static MethodInfo? FindSingleMethod(Type? owner, string name, int arity, bool requireStatic = false)
+    {
+        MethodInfo[] matches = owner?
+            .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal))
+            .Where(method => method.GetParameters().Length == arity)
+            .Where(method => !requireStatic || method.IsStatic)
+            .ToArray() ?? Array.Empty<MethodInfo>();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
     private static FieldInfo? OptionalField(Type? owner, string name) =>
         owner?.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
@@ -708,7 +774,10 @@ internal enum PoolAnchorScope
 
     Join,
 
-    Create
+    Create,
+
+    /// <summary>The create dialog's server picker: a UI repair, so it needs the dialog anchors and nothing that patches.</summary>
+    CreatePicker
 }
 
 /// <summary>One lobby server as the pool sees it: address, display name, measured latency, create guard.</summary>

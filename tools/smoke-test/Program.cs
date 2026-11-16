@@ -48,6 +48,7 @@ string[] expectedFixIds =
     "server-pool-refresh",
     "server-pool-join",
     "server-pool-create",
+    "server-pool-create-picker",
     "lobby-entry-direct",
     "room-chat-hint-passthrough"
 ];
@@ -70,6 +71,7 @@ string[] expectedFixIds =
     ("server-pool-refresh", "LanConnectLobbyOverlay",           "RefreshRoomsAsync"),
     ("server-pool-join",    "LanConnectLobbyOverlay",           "BeginJoinRoomAsync"),
     ("server-pool-create",  "LanConnectLobbyOverlay",           "CreateRoomAsync"),
+    ("server-pool-create-picker", "LanConnectLobbyOverlay",     "BuildCreateDialog"),
     ("lobby-entry-direct",  "LanConnectServerSelectionStartup", "Show"),
     ("room-chat-hint-passthrough", "LanConnectRoomChatOverlay", "RefreshFromSource")
 ];
@@ -262,6 +264,7 @@ if (applied.Count > expectedFixIds.Length)
     ("server-pool-refresh", "Pool"),
     ("server-pool-join", "Pool"),
     ("server-pool-create", "Pool"),
+    ("server-pool-create-picker", "Pool"),
     ("lobby-entry-direct", "Pool"),
     ("room-chat-hint-passthrough", "Chat")
 ];

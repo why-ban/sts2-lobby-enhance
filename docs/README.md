@@ -8,6 +8,13 @@
 > 原来那 6 个元数据断点已经不存在，围绕它们写的 8 项修复（join-flow / join-screen-modes / host-wire /
 > tail-error-paths / abandon-run / extra-game-modes / room-card-pill / unlock-extra-modes）全部删除。
 > **本版不再提供解锁极速 / 恐惧的捷径**，也不再接管任何 0.113 接口适配。依据见下节。
+>
+> **2.1.0 起本补丁又开始做加法**（修复项 5 → 15，详见 [`CHANGELOG.md`](CHANGELOG.md) 的 2.1.0 段）：
+> 服务器池（`server-pool-refresh` / `server-pool-join` / `server-pool-create`）、进大厅直达列表（`lobby-entry-direct`）、
+> 「相同版本」筛选（`room-version-filter`）、公共频道换服务器（`chat-server-switch`）、公告跟随频道（`announcement-source`）、
+> 手机滑聊天（`touch-chat-scroll`）、局内折叠提示不再挡鼠标（`room-chat-hint-passthrough`），
+> 以及**建房面板里的服务器选择**（`server-pool-create-picker`：默认「自动（延迟最低）」，可展开看每台延迟并锁定一台，
+> 锁定后只在那台建房）。下面「五项修复清单」描述的是 2.0.0 的 5 项，仍然全部保留。
 
 发布包按 `dist/sts2-lobby-enhance-v2.0.0.zip` 命名（打包步骤见 [`UPLOAD.md`](UPLOAD.md)）。
 `ReleasePackageTests.LatestReleaseZipShipsTheContentAssembly` 会断言 `dist/` 里那个包与
@@ -272,6 +279,16 @@ GPL-3.0，全文见 [`LICENSE`](../LICENSE)（与上游 `STS2-Game-Lobby` 的 LI
 ---
 
 ## English
+
+> **2.1.0 adds features again** (fixes 5 → 15; see the 2.1.0 section of [`CHANGELOG.md`](CHANGELOG.md)):
+> the server pool (`server-pool-refresh` / `server-pool-join` / `server-pool-create`), straight-to-list lobby entry
+> (`lobby-entry-direct`), the "same game version" filter (`room-version-filter`), switching which server the public chat
+> channel points at (`chat-server-switch`), announcements that follow that channel (`announcement-source`), touch
+> scrolling for the chat panel (`touch-chat-scroll`), the collapsed in-run hint no longer eating clicks
+> (`room-chat-hint-passthrough`), and **a server picker inside the create-room dialog**
+> (`server-pool-create-picker`: defaults to "automatic (lowest latency)", expands to show each server's latency and lets
+> you pin one — a pinned server is then the only one the room is created on). The "five fixes" list below describes the
+> 2.0.0 set, which is still shipped in full.
 
 ### Why there is no "six metadata breaks" story any more
 

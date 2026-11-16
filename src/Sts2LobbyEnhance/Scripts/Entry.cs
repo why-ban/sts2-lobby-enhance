@@ -428,6 +428,7 @@ internal static class CompatFixes
         yield return new PoolRefreshFix();
         yield return new PoolJoinFix();
         yield return new PoolCreateFix();
+        yield return new CreateServerPickerFix();
         yield return new LobbyEntryDirectFix();
         yield return new RoomChatHintPassthroughFix();
     }
