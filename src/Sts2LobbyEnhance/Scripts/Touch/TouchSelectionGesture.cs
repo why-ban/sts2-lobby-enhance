@@ -26,9 +26,10 @@ namespace Sts2LobbyEnhance;
 /// (rich_text_label.cpp:2940-3005). A finger drag arrives as exactly such a motion: each <c>InputEventScreenDrag</c> is
 /// re-dispatched as an <c>InputEventMouseMotion</c> carrying the left button mask (input.cpp:895-913).</item>
 /// <item>The injected press must carry <c>DEVICE_ID_INTERNAL</c> (-2): <c>Control::_call_gui_input</c> then skips the
-/// <c>gui_input</c> signal and the script virtual, i.e. neither this gesture nor the host mod's own input handler sees
-/// the event, while the engine's built-in <c>RichTextLabel::gui_input</c> still runs (control.cpp:1852-1867). That is
-/// what makes the injection invisible to everything except the selection.</item>
+/// <c>gui_input</c> signal and the script virtual, so neither this gesture nor the host mod's own input handler sees
+/// it, while the engine's built-in <c>RichTextLabel::gui_input</c> still runs (control.cpp:1852-1867). Not invisible
+/// everywhere: the event enters through <c>Viewport.PushInput</c>, so the engine's <c>_input</c> stage is offered it
+/// before the GUI sees it, and <c>_unhandled_input</c> is offered it if nothing handles it.</item>
 /// <item>While <c>MouseFilter = Stop</c> the label is the mouse focus and swallows the motions, so the enclosing
 /// <c>ScrollContainer</c> receives no motion and does not scroll (viewport.cpp:2079-2085, 2163-2165, 1755-1759). That
 /// decouples "drag to select" from "drag to scroll" without touching the container.</item>
@@ -87,9 +88,6 @@ internal sealed class TouchSelectionGesture
     /// </summary>
     private const int InternalDeviceId = -2;
 
-    /// <summary>Written by <c>LanConnectRichMessageView</c> on the view itself (LanConnectRichMessageView.cs:84)</summary>
-    private const string CopyTextMetaName = "lan_connect_copy_text";
-
     /// <summary>
     /// How many reference spans the message carries (LanConnectRichMessageView.cs:86). A message without one can never
     /// raise the preview, so arming the gate for it would only risk eating a later, unrelated activation.
@@ -102,6 +100,7 @@ internal sealed class TouchSelectionGesture
 
     private static int _pressWarned;
     private static int _holdWarned;
+    private static int _recoverWarned;
     private static int _copyWarned;
     private static int _exitWarned;
 
@@ -373,8 +372,8 @@ internal sealed class TouchSelectionGesture
             }
             catch (Exception exception)
             {
-                WarnOnce(ref _holdWarned, "recovering a long press without a timer failed: " +
-                                          exception.GetType().Name + ": " + exception.Message);
+                WarnOnce(ref _recoverWarned, "recovering a long press without a timer failed: " +
+                                             exception.GetType().Name + ": " + exception.Message);
             }
         }).CallDeferred();
     }
@@ -440,10 +439,10 @@ internal sealed class TouchSelectionGesture
     /// <summary>
     /// Pushes the one event that gives the label a selection anchor: a left mouse button press at the finger.
     ///
-    /// <para><c>DEVICE_ID_INTERNAL</c> is what keeps it invisible to every C# handler - the host mod's
-    /// <c>OnGuiInput</c> included - while leaving the engine's own <c>RichTextLabel::gui_input</c> running
-    /// (control.cpp:1852-1867). The position is passed already converted to the viewport's space, hence
-    /// <c>localCoords</c> true.</para>
+    /// <para><c>DEVICE_ID_INTERNAL</c> keeps the <c>gui_input</c> signal and the script virtual from firing - the host
+    /// mod's <c>OnGuiInput</c> included - while leaving the engine's own <c>RichTextLabel::gui_input</c> running
+    /// (control.cpp:1852-1867). The engine's <c>_input</c> stage still receives the event. The position is passed
+    /// already converted to the viewport's space, hence <c>localCoords</c> true.</para>
     /// </summary>
     private void InjectAnchorPress(Vector2 labelLocal) => Inject(labelLocal, pressed: true);
 
@@ -564,6 +563,6 @@ internal sealed class TouchSelectionGesture
             return;
         }
 
-        Entry.Warn("touch-chat-select: " + message);
+        Entry.Warn("touch-chat-scroll: " + message);
     }
 }

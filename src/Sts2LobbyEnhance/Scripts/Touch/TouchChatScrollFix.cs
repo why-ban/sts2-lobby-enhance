@@ -47,8 +47,9 @@ namespace Sts2LobbyEnhance;
 /// meta click (:171) and keyboard/joypad (:252) - skips exactly the one activation that press produced.</item>
 /// <item>The message scroll bar grows to the 44 px touch floor upstream already uses for buttons
 /// (LanConnectHudLegibility.cs:13) through a postfix on <c>ApplyLobbyScrollBarStyle</c>
-/// (LanConnectBasicChatPanel.cs:3022-3036, called at :919). It is the fallback surface when the log is too short to drag
-/// and a second place to end a selection from.</item>
+/// (LanConnectBasicChatPanel.cs:3022-3036, called at :919). It is the fallback surface when the log is too short to drag,
+/// and a press on it ends a selection too: the same handler is connected to the bar, because the bar keeps Control's
+/// default <c>MOUSE_FILTER_STOP</c> and stops that press before the container's hook can see it.</item>
 /// </list>
 ///
 /// <para>Attaching per view is deliberate: <c>Refresh()</c> drops and rebuilds every row
@@ -116,13 +117,14 @@ internal sealed class TouchChatScrollFix : ICompatFix
     private static int _viewWarned;
     private static int _scrollBarWarned;
     private static int _referenceWarned;
-    private static int _hookWarned;
+    private static int _attachWarned;
+    private static int _pressDropWarned;
 
     public string Id => "touch-chat-scroll";
 
     /// <summary>
-    /// The only repair that reads the platform, and the only one that patches the chat panel's message rows: a shape
-    /// change in either rolls back this repair and nothing else
+    /// Patches the message rows and the message scroll bar only: a shape change there rolls back this repair and
+    /// nothing else
     /// </summary>
     public FixGroup Group => FixGroup.Touch;
 
@@ -270,8 +272,11 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
             scrollBar.CustomMinimumSize = new Vector2(ScrollBarTouchWidth, 0f);
 
-            // The message bar's parent is the message ScrollContainer (LanConnectBasicChatPanel.cs:910 uses
-            // GetVScrollBar), i.e. the one place a press in the log's padding or on the bar itself can be observed.
+            // The bar keeps Control's default MOUSE_FILTER_STOP, so a press on it is stopped there and never reaches
+            // the ScrollContainer: without this second connection a press on the bar would leave the highlight on screen.
+            scrollBar.GuiInput += OnContainerGuiInput;
+
+            // Its parent is the message ScrollContainer (LanConnectBasicChatPanel.cs:910 uses GetVScrollBar).
             AttachSelectionExitHook(scrollBar);
         }
         catch (Exception exception)
@@ -309,14 +314,15 @@ internal sealed class TouchChatScrollFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce(ref _hookWarned, "could not watch the message scroll container for presses: " +
-                                      exception.GetType().Name + ": " + exception.Message);
+            WarnOnce(ref _attachWarned, "could not watch the message scroll container for presses: " +
+                                        exception.GetType().Name + ": " + exception.Message);
         }
     }
 
     /// <summary>
     /// Any new press inside the message log drops a selection that is still on screen, so "tap somewhere else" really
-    /// does clear it. Nothing is consumed: the container still scrolls exactly as before.
+    /// does clear it. Nothing is consumed: the container still scrolls exactly as before. Connected to the message
+    /// ScrollContainer and to its scroll bar, which stops its own presses before the container sees them.
     /// </summary>
     private static void OnContainerGuiInput(InputEvent input)
     {
@@ -329,8 +335,8 @@ internal sealed class TouchChatScrollFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce(ref _hookWarned, "could not drop the text selection on a press: " + exception.GetType().Name +
-                                      ": " + exception.Message);
+            WarnOnce(ref _pressDropWarned, "could not drop the text selection on a press: " + exception.GetType().Name +
+                                           ": " + exception.Message);
         }
     }
 
@@ -378,8 +384,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
-    /// The mod's only platform read, and the reason it is a property with a cache: <c>OS.HasFeature</c> crosses into
-    /// Godot's native layer, which exists only inside the game. A patch body is the only place that is guaranteed.
+    /// This repair's own platform read, cached because <c>OS.HasFeature</c> crosses into Godot's native layer, which
+    /// exists only inside the game: the patch bodies are the one place it is safe to call. Not a mod-wide answer - the
+    /// Chat group reads the platform for its own gate.
     /// </summary>
     internal static class Platform
     {
