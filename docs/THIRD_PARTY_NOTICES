@@ -6,7 +6,7 @@ This file covers every third-party work that this project (`sts2_lobby_enhance`)
 
 1. STS2 LAN Connect (the mod this patch repairs)
 -----------------------------------------------
-Project : STS2 LAN Connect / 游戏大厅, mod id `sts2_lan_connect`, version 0.6.3
+Project : STS2 LAN Connect / 游戏大厅, mod id `sts2_lan_connect`, version 0.6.4
 Author  : "mac"
 Licence : GNU General Public License v3.0
 Source  : https://github.com/emptylower/STS2-Game-Lobby
@@ -16,15 +16,11 @@ No file, binary or archive from that project is redistributed here. This mod is 
 separate Workshop item that *declares* the item above as a required dependency, and it locates the
 upstream assembly at runtime through `AppDomain.CurrentDomain.GetAssemblies()`.
 
-The source code, however, does contain logic ported from that project, and this is deliberate:
-
-  * `Scripts/Tail/TailErrorPathFix.cs` reimplements `LanConnectTailMessageRuntime.AbortActiveBinding`
-    and `RejectAndDisconnect` as line-for-line ports, changing only the game API calls whose
-    signatures 0.113 altered.
-  * `Scripts/Gameplay/AbandonRunFix.cs` replays the upstream "abandon current run" flow step by step,
-    calling the upstream mod's own helpers through reflection.
-  * `Scripts/Join/JoinTakeoverFix.cs` reuses the upstream mod's net-service factory and tail_v1
-    binding, again by reflection.
+The source code is nevertheless a derivative work of that project: every repair is written against its
+behaviour, and the repairs call its internal members by reflection (roster baseline, save binding, join
+order, lobby refresh, server switching, room chat). 1.x shipped literal ports of several upstream
+methods; those files were removed together with the compatibility layer in 2.0.0 and are not part of
+this release.
 
 Because those parts are derivative works of GPL-3.0 code, this project as a whole is distributed
 under GPL-3.0. The complete licence text is in `LICENSE`; it is byte-identical to the upstream copy.
@@ -79,7 +75,8 @@ to the STS2 LAN Connect author.
 --------
 * 本模组不打包社区模组 `sts2_lan_connect`（工坊物品 3749766330）的任何文件，只在工坊页面上声明依赖，
   运行时通过反射使用玩家已安装的那一份。
-* 但源码里确实含有从该 GPL-3.0 项目移植过来的逻辑（tail_v1 错误路径、放弃本局流程），
-  因此本项目整体以 GPL-3.0 发布；`LICENSE` 与上游副本逐字节一致。
+* 但源码是对该 GPL-3.0 项目的衍生作品（所有修复都针对它的行为编写，并通过反射调用它的内部成员），
+  因此本项目整体以 GPL-3.0 发布；`LICENSE` 与上游副本逐字节一致。1.x 里逐行移植的文件已在 2.0.0
+  随兼容层一并删除，不在这版里。
 * 游戏本体文件（sts2.dll / GodotSharp.dll / 0Harmony.dll / pck）与 Harmony、Godot 均未随本模组分发。
 * 本项目为社区补丁，与 MegaCrit Games 及社区模组作者无关，未获其背书。

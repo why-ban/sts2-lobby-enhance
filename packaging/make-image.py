@@ -39,7 +39,7 @@ DARK = (10, 6, 6)
 
 # --- layout (all values are 1x, multiplied by SCALE when drawn) -------------
 TITLE = "游戏大厅增强"
-SUBTITLE = "Game Lobby Enhance  ·  联机大厅扩展"
+SUBTITLE = "Game Lobby Enhance  ·  v2.1.0  ·  联机大厅扩展"
 EYEBROW = "SLAY THE SPIRE 2   ·   v0.113"
 FOOTER = "需游戏大厅 0.6.4  ·  联机双方都要安装"
 
@@ -48,17 +48,18 @@ TITLE_CY, TITLE_SIZE = 96, 62
 SUBTITLE_CY, SUBTITLE_SIZE = 148, 20
 DIVIDER_Y = 174
 CARD_X0, CARD_X1 = 34, 478
-CARD_TOP, CARD_HEIGHT, CARD_GAP = 186, 48, 7
+CARD_TOP, CARD_HEIGHT, CARD_GAP = 184, 40, 5
 CARD_TEXT_X = 90
-CARD_TEXT_SIZE = 23
+CARD_TEXT_SIZE = 21
 FOOTER_CY, FOOTER_SIZE = 474, 20
 
 FEATURES = [
-    ("play", "结算页新开一局", " 全房回准备页"),
-    ("check", "新开一局仍可续", " 存档不再失效"),
-    ("bolt", "踢人不废房", " 减员照样能开局"),
-    ("restart", "读档免排队", " 不必按原顺序"),
-    ("slider", "建房只留新协议", " 少一个选择题"),
+    ("play", "结算页一键新开", " 全房回准备页"),
+    ("bolt", "踢人不废房", " 掉线也能开"),
+    ("restart", "读档免排队", " 不必按顺序"),
+    ("grid", "所有服务器房间", " 一个列表"),
+    ("funnel", "相同版本筛选", " 建房可选服"),
+    ("phone", "手机滑聊天", " 长按框选复制"),
 ]
 
 FONT_DIR = Path("C:/Windows/Fonts")
@@ -223,7 +224,43 @@ def icon_slider(draw, cx, cy, s, colour, w) -> None:
                      fill=CHIP_BG, outline=colour, width=w)
 
 
+def icon_grid(draw, cx, cy, s, colour, w) -> None:
+    cell, gap = s * 0.36, s * 0.10
+    for dx in (-cell - gap, gap):
+        for dy in (-cell - gap, gap):
+            draw.rounded_rectangle(
+                (cx + dx, cy + dy, cx + dx + cell, cy + dy + cell),
+                radius=s * 0.07,
+                outline=colour,
+                width=w,
+            )
+
+
+def icon_funnel(draw, cx, cy, s, colour, w) -> None:
+    draw.polygon(
+        [
+            (cx - 0.66 * s, cy - 0.56 * s), (cx + 0.66 * s, cy - 0.56 * s),
+            (cx + 0.12 * s, cy + 0.02 * s), (cx + 0.12 * s, cy + 0.60 * s),
+            (cx - 0.12 * s, cy + 0.42 * s), (cx - 0.12 * s, cy + 0.02 * s),
+        ],
+        fill=colour,
+    )
+
+
+def icon_phone(draw, cx, cy, s, colour, w) -> None:
+    draw.rounded_rectangle(
+        (cx - 0.44 * s, cy - 0.88 * s, cx + 0.44 * s, cy + 0.88 * s),
+        radius=s * 0.22,
+        outline=colour,
+        width=w,
+    )
+    draw.line([(cx - 0.16 * s, cy + 0.58 * s), (cx + 0.16 * s, cy + 0.58 * s)], fill=colour, width=w)
+
+
 ICONS = {
+    "grid": icon_grid,
+    "funnel": icon_funnel,
+    "phone": icon_phone,
     "check": icon_check,
     "bolt": icon_bolt,
     "restart": icon_restart,
