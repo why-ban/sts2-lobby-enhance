@@ -5,56 +5,66 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Makes the chat log scroll with a finger on phones, turns a 400 ms press into "copy this message", and keeps that
-/// long press from also opening the item/combat reference preview.
+/// Makes the chat log scroll with a finger on phones, turns a 400 ms press into a text selection the player can shape
+/// with the same finger, and copies that selection when the finger comes up. A press that selected must not also open
+/// the item/combat reference preview; <see cref="ReferenceActivationGate"/> handles that.
 ///
-/// Why the phone cannot scroll today (engine level, not styling): every message row is a
+/// <para><b>Why the phone could not scroll, and why it then could not select either.</b> Every message row is a
 /// <c>LanConnectRichMessageView</c> whose <c>MegaRichTextLabel</c> is built with <c>SelectionEnabled = true</c>
 /// (LanConnectRichMessageView.cs:52) and <c>MouseFilter = Stop</c> (:55). Godot swallows a pointer event at a
-/// MOUSE_FILTER_STOP control, so the enclosing <c>ScrollContainer</c> (LanConnectBasicChatPanel.cs:891-900) never
-/// sees the drag; and because <c>emulate_mouse_from_touch</c> is on by default the same press lands on the label as
-/// a selection anchor and the drag extends that selection. That is exactly the reported behaviour: a finger drag
-/// selects text, and only the right-most sliver (the scroll bar itself) scrolls.
+/// MOUSE_FILTER_STOP control, so the enclosing <c>ScrollContainer</c> (LanConnectBasicChatPanel.cs:891-900) never saw the
+/// drag; and because <c>emulate_mouse_from_touch</c> is on by default the same press landed on the label as a selection
+/// anchor and the drag extended that selection. Turning selection off and the filter to Pass fixed the scroll and - for
+/// as long as nothing else was done - made a long press unable to select anything at all, which is the regression the
+/// players reported.</para>
 ///
-/// What this repair does, and only when <c>OS.HasFeature("mobile")</c> says so at runtime:
+/// <para><b>What this repair does, and only when <c>OS.HasFeature("mobile")</c> says so at runtime:</b></para>
 /// <list type="number">
-/// <item><c>SelectionEnabled = false</c> + <c>MouseFilter = Pass</c> on that label (:52, :55). Pass still delivers
-/// GuiInput to the label, but the event keeps bubbling towards the ScrollContainer, which is the component that
-/// implements drag scrolling — upstream expects exactly that, see its own comment at
+/// <item><c>SelectionEnabled = false</c> + <c>MouseFilter = Pass</c> on that label (:52, :55), so a plain drag bubbles to
+/// the <c>ScrollContainer</c> and the log scrolls. Upstream expects exactly that, see its own comment at
 /// LanConnectRichMessageView.cs:214 ("Leave presses/drags available to the enclosing chat scroll container"), which
-/// today cannot hold because of :55.</item>
-/// <item>One <see cref="LongPressCopyGesture"/> per view: a 400 ms hold within 16 px copies the whole message using
-/// the string upstream already assembles for Ctrl+C (meta <c>lan_connect_copy_text</c>,
-/// LanConnectRichMessageView.cs:84). 16 px is upstream's own tap/slide boundary
-/// (LanConnectReferenceTapGesture.cs:9), so a press that copies and a press that merely taps are decided by the
-/// same threshold the mod uses everywhere else. No partial selection is implemented on purpose: synthesising the
-/// drag that a text selection needs is a much larger change than this feature is worth.</item>
-/// <item>A press that copied must not also open the reference preview. Upstream decides "tap" purely by travel
-/// distance (<c>LanConnectReferenceTapGesture.cs:54-55</c>), so a motionless 400 ms press is a tap to it, and a
-/// message that carries a reference always activates — for a single reference regardless of where the finger
-/// landed (<c>LanConnectRichMessageView.cs:204-206</c>). <see cref="ReferenceActivationGate"/> closes that: the
-/// gesture arms it, and a prefix on <c>RaiseReferencePressed</c> — the one funnel every activation path goes
-/// through, touch release (:210), meta click (:171) and keyboard/joypad (:252) — skips exactly the one activation
-/// the armed press produced.</item>
+/// cannot hold while :55 says Stop.</item>
+/// <item>One <see cref="TouchSelectionGesture"/> per view. 400 ms of holding within 16 px - upstream's own tap/slide
+/// boundary (LanConnectReferenceTapGesture.cs:9) - flips the label into selection mode: selection on, filter Stop, a
+/// synthetic left-button press through <c>Viewport.PushInput</c> gives the engine the anchor that a selection needs
+/// (RichTextLabel only ever starts a selection from a mouse press, rich_text_label.cpp:2636-2674), and
+/// <c>SelectAll()</c> makes the message visibly highlighted right away. The finger's continuing drag then extends the
+/// range, because every <c>InputEventScreenDrag</c> is re-dispatched as an <c>InputEventMouseMotion</c> with the left
+/// button held (input.cpp:895-913) and <c>RichTextLabel</c> extends the selection on any such motion while the anchor is
+/// set (rich_text_label.cpp:2940-3005). Because the label is Stop for the duration, the <c>ScrollContainer</c> is handed
+/// none of those motions (viewport.cpp:2079-2085, 2163-2165) and does not scroll while the player selects.</item>
+/// <item>On release the selected text goes to the clipboard and the highlight stays on screen as the feedback (plus the
+/// row pulse this repair already had). The very next press ends selection mode from the emulated mouse press - in the
+/// signal phase, before the engine's own handling (control.cpp:1852-1867) - so that press is not anchored and still
+/// bubbles to the scroll container: the first drag after a copy scrolls, it does not need a second try. A press anywhere
+/// else in the message log ends it too (<see cref="TouchSelectionSession"/> plus the hook on the log's
+/// <c>ScrollContainer</c>).</item>
+/// <item>A press that selected must not also open the reference preview. Upstream decides "tap" purely by travel
+/// (LanConnectReferenceTapGesture.cs:54-55), so a motionless 400 ms press is a tap to it and a message carrying a
+/// reference activates on release for a single reference wherever the finger landed
+/// (LanConnectRichMessageView.cs:203-212). <see cref="ReferenceActivationGate"/> is armed when selection mode starts and
+/// the prefix on <c>RaiseReferencePressed</c> - the one funnel every activation path goes through, touch release (:210),
+/// meta click (:171) and keyboard/joypad (:252) - skips exactly the one activation that press produced.</item>
 /// <item>The message scroll bar grows to the 44 px touch floor upstream already uses for buttons
 /// (LanConnectHudLegibility.cs:13) through a postfix on <c>ApplyLobbyScrollBarStyle</c>
-/// (LanConnectBasicChatPanel.cs:3022-3036, called at :919). It is a backstop for the sliver that used to be the
-/// only reachable scroll surface.</item>
+/// (LanConnectBasicChatPanel.cs:3022-3036, called at :919). It is the fallback surface when the log is too short to drag
+/// and a second place to end a selection from.</item>
 /// </list>
 ///
-/// Attaching per view is deliberate: <c>Refresh()</c> drops and rebuilds every row
+/// <para>Attaching per view is deliberate: <c>Refresh()</c> drops and rebuilds every row
 /// (LanConnectBasicChatPanel.cs:1280-1303) each time the message fingerprint changes, so anything cached across a
-/// refresh would point at a freed node. <c>_Ready</c> runs once per newly inserted row and is therefore the seam
-/// that stays correct across rebuilds; the gesture holds the label only for as long as the label lives.
+/// refresh would point at a freed node. <c>_Ready</c> runs once per newly inserted row and is therefore the seam that
+/// stays correct across rebuilds; the gesture holds the label only for as long as the label lives.</para>
 ///
-/// Desktop must not change at all: every patch body returns before writing a single property or connecting a single
-/// callback, so text selection, reference clicks and every mouse behaviour stay exactly as upstream built them.
+/// <para>Desktop must not change at all: every patch body returns before writing a single property or connecting a
+/// single callback, so text selection, reference clicks and every mouse behaviour stay exactly as upstream built
+/// them.</para>
 ///
-/// The platform gate lives in the patch bodies and not in <see cref="Applies"/> on purpose: the smoke test drives
+/// <para>The platform gate lives in the patch bodies and not in <see cref="Applies"/> on purpose: the smoke test drives
 /// Applies()/Apply() in a plain .NET process with no Godot native layer, where <c>OS.HasFeature</c> is an access
-/// violation rather than a managed exception. Applies() also never touches this because whether the repair is
-/// installable has nothing to do with the platform it is installed on — the patches are installed on desktop too and
-/// simply decide per call that they have nothing to do.
+/// violation rather than a managed exception. Applies() also never touches this: whether the repair is installable has
+/// nothing to do with the platform it is installed on - the patches are installed on desktop too and simply decide per
+/// call that they have nothing to do.</para>
 /// </summary>
 internal sealed class TouchChatScrollFix : ICompatFix
 {
@@ -93,13 +103,20 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// Marks a view whose gesture is already attached. <c>_Ready</c> runs once per insertion into the tree, but a
     /// reparented node runs it again, and a second gesture would copy twice per press.
     /// </summary>
-    internal const string GestureAttachedMetaName = "lobby_enhance_long_press_copy_gesture";
+    internal const string GestureAttachedMetaName = "lobby_enhance_touch_selection_gesture";
+
+    /// <summary>
+    /// Marks a <c>ScrollContainer</c> that already reports its presses to <see cref="TouchSelectionSession"/>. Rows are
+    /// rebuilt on every message change, so without it each rebuild would add another connection to the same container.
+    /// </summary>
+    private const string SelectionExitHookMetaName = "lobby_enhance_selection_exit_hook";
 
     private static Shape? _shape;
 
     private static int _viewWarned;
     private static int _scrollBarWarned;
     private static int _referenceWarned;
+    private static int _hookWarned;
 
     public string Id => "touch-chat-scroll";
 
@@ -164,17 +181,19 @@ internal sealed class TouchChatScrollFix : ICompatFix
         Entry.Info(
             "touch-chat-scroll: patched " + ViewTypeName + "." + ViewReadyMethodName + ", " + PanelTypeName + "." +
             ScrollBarStyleMethodName + " and " + ViewTypeName + "." + ReferencePressedMethodName + ". On a mobile " +
-            "build the message labels stop capturing the pointer (a drag scrolls the log), a 400 ms press copies the " +
-            "message and does not open the reference preview it would otherwise have opened; on desktop every patch " +
-            "body returns without touching a property, so selection and dragging stay as upstream built them.");
+            "build the message labels stop capturing the pointer (a drag scrolls the log), a 400 ms press puts the row " +
+            "into text selection (drag to shape it, lift to copy) and does not open the reference preview it would " +
+            "otherwise have opened; on desktop every patch body returns without touching a property, so selection and " +
+            "dragging stay as upstream built them.");
     }
 
     /// <summary>
     /// One freshly inserted message row. Runs after upstream's own <c>_Ready</c> (a postfix always does), which is
     /// the first moment the label holds rendered text.
     ///
-    /// Two properties and one signal connection per row; nothing is cached, because the row is freed and rebuilt by
-    /// <c>Refresh()</c> (LanConnectBasicChatPanel.cs:1280-1303) whenever the message list changes.
+    /// Two properties, one gesture and one observer on the enclosing scroll container per row; nothing is cached, because
+    /// the row is freed and rebuilt by <c>Refresh()</c> (LanConnectBasicChatPanel.cs:1280-1303) whenever the message list
+    /// changes.
     /// </summary>
     // ReSharper disable once UnusedParameter.Local — Harmony binds by name.
     private static void ViewReadyPostfix(object __instance)
@@ -210,14 +229,18 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
             view.SetMeta(GestureAttachedMetaName, true);
 
-            // The gesture reads the copy text from the view (its parent) and pulses the view, so it outlives nothing:
-            // the connection lives on the label and dies with it.
-            new LongPressCopyGesture(label, view as CanvasItem).Attach();
+            // The gesture reads the selected text from the label and pulses the view (its parent), so it outlives
+            // nothing: the connection lives on the label and dies with it.
+            new TouchSelectionGesture(label, view as CanvasItem).Attach();
+
+            // A press anywhere in the message log has to be able to end a selection the row is showing, not only a press
+            // that happens to land on that same row.
+            AttachSelectionExitHook(view);
         }
         catch (Exception exception)
         {
-            WarnOnce(ref _viewWarned, "could not make the chat text draggable: " + exception.GetType().Name + ": " +
-                                      exception.Message);
+            WarnOnce(ref _viewWarned, "could not make the chat text scrollable and selectable: " +
+                                      exception.GetType().Name + ": " + exception.Message);
         }
     }
 
@@ -246,6 +269,10 @@ internal sealed class TouchChatScrollFix : ICompatFix
             }
 
             scrollBar.CustomMinimumSize = new Vector2(ScrollBarTouchWidth, 0f);
+
+            // The message bar's parent is the message ScrollContainer (LanConnectBasicChatPanel.cs:910 uses
+            // GetVScrollBar), i.e. the one place a press in the log's padding or on the bar itself can be observed.
+            AttachSelectionExitHook(scrollBar);
         }
         catch (Exception exception)
         {
@@ -255,10 +282,63 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
+    /// Connects one press observer to the nearest enclosing <c>ScrollContainer</c>, once per container. The hook only
+    /// ends a live selection; it never accepts an event, so scrolling is untouched (a handler on <c>GuiInput</c> runs
+    /// before the container's own handling, control.cpp:1852-1867).
+    /// </summary>
+    private static void AttachSelectionExitHook(Node from)
+    {
+        try
+        {
+            for (Node? node = from.GetParent(); node != null; node = node.GetParent())
+            {
+                if (node is not ScrollContainer container)
+                {
+                    continue;
+                }
+
+                if (container.HasMeta(SelectionExitHookMetaName))
+                {
+                    return;
+                }
+
+                container.SetMeta(SelectionExitHookMetaName, true);
+                container.GuiInput += OnContainerGuiInput;
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce(ref _hookWarned, "could not watch the message scroll container for presses: " +
+                                      exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Any new press inside the message log drops a selection that is still on screen, so "tap somewhere else" really
+    /// does clear it. Nothing is consumed: the container still scrolls exactly as before.
+    /// </summary>
+    private static void OnContainerGuiInput(InputEvent input)
+    {
+        try
+        {
+            if (input is InputEventMouseButton { Pressed: true } or InputEventScreenTouch { Pressed: true })
+            {
+                TouchSelectionSession.ExitAny();
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce(ref _hookWarned, "could not drop the text selection on a press: " + exception.GetType().Name +
+                                      ": " + exception.Message);
+        }
+    }
+
+    /// <summary>
     /// Upstream's single funnel for "open the item/combat reference preview" on a message
     /// (<c>LanConnectRichMessageView.cs:273-280</c>): every activation path ends here, so one guard covers all of
-    /// them. Returns <c>false</c> — skipping the original — for exactly one activation after a long press copied a
-    /// message that could have opened a preview.
+    /// them. Returns <c>false</c> — skipping the original — for exactly one activation after a long press put a message
+    /// into selection mode, when that message could have opened a preview on release.
     ///
     /// Anything else (no armed gate, a desktop build, a throwing body) falls through to <c>true</c>, i.e. upstream's
     /// behaviour is preserved: a plain tap on a reference still opens it.
@@ -333,13 +413,58 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
-    /// "The long press that just fired already copied this message, so the reference preview it would have opened
-    /// must not open."
+    /// "At most one message is in selection mode, and any new press anywhere must be able to end it."
+    ///
+    /// <para>The gesture cannot see a press that lands on a different row, and a highlight left on screen after the player
+    /// moved on is worse than no highlight at all - so the owner is tracked here instead of inside the label. Every
+    /// gesture asks <see cref="ExitAny"/> on a fresh press, and so does the message log's ScrollContainer through the hook
+    /// <see cref="TouchChatScrollFix"/> connects (see <c>AttachSelectionExitHook</c>).</para>
+    ///
+    /// <para>Single-threaded like the gate below: Godot delivers input and runs both sides of this on the main
+    /// thread.</para>
+    /// </summary>
+    internal static class TouchSelectionSession
+    {
+        private static TouchSelectionGesture? _active;
+
+        /// <summary>Makes <paramref name="gesture"/> the one live selection, ending whatever was showing before.</summary>
+        internal static void Begin(TouchSelectionGesture gesture)
+        {
+            TouchSelectionGesture? previous = _active;
+            _active = gesture;
+            if (previous != null && !ReferenceEquals(previous, gesture))
+            {
+                previous.ForceExit();
+            }
+        }
+
+        /// <summary>Forgets <paramref name="gesture"/> if it is the live one; called when it leaves selection mode.</summary>
+        internal static void End(TouchSelectionGesture gesture)
+        {
+            if (ReferenceEquals(_active, gesture))
+            {
+                _active = null;
+            }
+        }
+
+        /// <summary>Ends the live selection, if any. Safe to call on every press: it is a no-op when nothing is shown.</summary>
+        internal static void ExitAny()
+        {
+            TouchSelectionGesture? active = _active;
+            _active = null;
+            active?.ForceExit();
+        }
+    }
+
+    /// <summary>
+    /// "The long press that just fired already put this message into selection mode (and will copy it), so the
+    /// reference preview it would have opened must not open."
     ///
     /// A flag rather than a timestamp on purpose: the press boundary is what makes the state unambiguous. The gesture
-    /// arms it when it copies and clears it on the next press, so the gate can never swallow an activation belonging
-    /// to a *different* press — the later press clears it before it can activate anything — while a press whose copy
-    /// produced no activation (a message with no references at all) leaves nothing behind that matters.
+    /// arms it the moment selection mode starts - strictly before the release that could activate - and clears it on the
+    /// next press, so the gate can never swallow an activation belonging to a *different* press: the later press clears it
+    /// before it can activate anything, while a press whose selection produced no activation (a message with no references
+    /// at all) leaves nothing behind that matters.
     ///
     /// Single-threaded by construction: Godot delivers input and runs both sides of this on the main thread, so no
     /// interlocking is needed. Written as three named operations because the two call sites are in different files.
@@ -348,7 +473,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
     {
         private static bool _armed;
 
-        /// <summary>Arms the gate for the current press. Called by the gesture right after a successful copy.</summary>
+        /// <summary>Arms the gate for the current press. Called by the gesture when selection mode starts.</summary>
         internal static void Arm() => _armed = true;
 
         /// <summary>Forgets any armed gate. Called when a new press starts, before it can activate anything.</summary>
