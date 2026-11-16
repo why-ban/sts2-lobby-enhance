@@ -9,7 +9,8 @@ namespace Sts2LobbyEnhance;
     /// <summary>
     /// Puts ‹ › and a ⟳ button in the lobby chat panel's title row; they reattach the public channel to another
     /// server's channel. The lobby server, the room and config.json are untouched - only which server's public chat
-    /// this client is attached to changes.
+    /// this client is attached to changes. Also attaches that channel once when the sidebar first becomes visible,
+    /// because upstream only ever connects it from the picker's switch.
     /// </summary>
 internal sealed class ChatServerSwitchFix : ICompatFix
 {
@@ -977,7 +978,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         // hover/pressed stylebox.
         reset.Connect(Button.SignalName.Pressed, Callable.From(() => BeginReset(shape)));
 
-        // [reset][‹][›]: the reset sits left of the arrows, so the row reads [name … ⟳ ‹ ›].
         var built = new HBoxContainer { Name = SwitchRowNodeName };
         built.AddThemeConstantOverride("separation", RowSeparation);
         built.AddChild(reset);
