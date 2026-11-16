@@ -20,7 +20,7 @@
 | 5 | `new-protocol-only` | Modes | 建房对话框不再显示「联机协议」一节，固定新协议 | `LanConnectLobbyOverlay.BuildCreateDialog` / `GetSelectedCreateProtocolId` |
 | 6 | `room-version-filter` | Filter | 筛选弹窗加「相同游戏版本」chip | `LanConnectLobbyOverlay.GetFilteredRooms` |
 | 7 | `touch-chat-scroll` | Touch | 手机：滑动=滚动，长按=框选，松手复制选区 | `LanConnectRichMessageView._Ready` / `RaiseReferencePressed` |
-| 8 | `chat-server-switch` | Chat | 大厅聊天标题行：名称 + ⟳ + ‹ ›，切公共频道所连的服务器 | `LanConnectBasicChatPanel.UpdateAvailability` |
+| 8 | `chat-server-switch` | Chat | 大厅聊天标题行：名称 + ⟳ + ‹ ›，切公共频道所连的服务器；首次进入自动连一次本服 | `LanConnectBasicChatPanel.UpdateAvailability` |
 | 9 | `announcement-source` | Announce | 公告请求指向聊天频道当前那台服务器 | `LobbyApiClient.GetAnnouncementsAsync` |
 | 10 | `server-pool-refresh` | Pool | 房间列表 = 全服池，完全接管刷新 | `LanConnectLobbyOverlay.RefreshRoomsAsync` |
 | 11 | `server-pool-join` | Pool | 跨服加入：切服 → 复核房间仍在 → 走原加入流程 | `LanConnectLobbyOverlay.BeginJoinRoomAsync` |
@@ -36,7 +36,8 @@
 
 - **服务器池**：打开「游戏大厅」看到的是所有服务器的房间，卡片标出来源；点别的服务器的房间会切服加入。
 - **「相同版本」筛选**：只比游戏版本，不比 Mod 版本、不比协议档位。
-- **聊天换服务器**：标题行 ‹ › 切公共频道所连的服务器，⟳ 回置顶服；公告跟着频道走。
+- **聊天换服务器**：标题行 ‹ › 切公共频道所连的服务器，⟳ 回置顶服；公告跟着频道走。首次打开大厅时自动连一次本服
+  （上游只在「选服务器」对话框里连频道，而大厅入口已经不弹那个对话框）。
 - **建房选服务器**：面板里可折叠的一节，显示每台延迟；默认「自动（延迟最低）」，手动选中后只在那台建房，切不过去就不建；
   选择**不记忆**，每次打开都回到自动。
 - **建房对话框不再显示联机协议**：默认按新协议建房（没有独立 tail 运行时的那一侧仍保留上游选择，能建房优先）。

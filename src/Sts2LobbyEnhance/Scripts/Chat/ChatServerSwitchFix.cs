@@ -130,6 +130,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
     private static string? _observedConfigUrl;
 
+    /// <summary>One automatic first connect per process: after it, the button is the only way back to a channel.</summary>
+    private static int _firstConnectAttempted;
+
 
 
     private static int _warned;
@@ -233,7 +236,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
         Entry.Info(
             "chat-server-switch: the lobby public channel row now offers ‹ › to attach to another server's " +
-            "channel after a /probe preflight (capabilities.serverChatVersion == 1, cached 5 min). The lobby " +
+            "channel after a /probe preflight (capabilities.serverChatVersion == 1, cached 5 min). The first " +
+            "time the sidebar becomes visible the channel is also attached to the configured server once, because " +
+            "upstream only ever connects it from the pick a server dialog the lobby entry skips. The lobby " +
             "server, the room and config.json are untouched. The in-run chat panel is not touched at all: " +
             "switching the channel from a run used to cost the room history, so that entry point is gone.");
     }
@@ -335,6 +340,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         // that race on the next frame.
         string localName = ResolveLocalName(configUrl);
         string? actual = ReadLiveTargetAddress(shape) ?? state.TargetAddress;
+        ConnectFirstChannelOnce(shape, panel, configUrl, actual, state);
         bool busy = state.Phase is SwitchPhase.Probing or SwitchPhase.Connecting;
         string target = CurrentTargetLabel(state, localName, actual, configUrl);
         (string text, string tooltip) = Describe(state, target, configUrl, actual);
@@ -492,6 +498,141 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         catch (Exception)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Upstream connects the public channel only as part of a lobby-server switch, and that switch has one caller:
+    /// the pick a server dialog hands back. The lobby entry skips the dialog, so on a fresh start nothing ever
+    /// called the port and the sidebar stays empty until the player presses ⟳.
+    /// </summary>
+    private static void ConnectFirstChannelOnce(
+        Shape shape,
+        Control panel,
+        string configUrl,
+        string? actual,
+        SwitchState state)
+    {
+        if (Volatile.Read(ref _firstConnectAttempted) != 0 || !string.IsNullOrWhiteSpace(actual))
+        {
+            return;
+        }
+
+        // Only once the sidebar is on screen: at startup the overlay is hidden and nothing asked for a channel yet.
+        if (!panel.IsVisibleInTree() ||
+            state.Phase is SwitchPhase.Probing or SwitchPhase.Connecting ||
+            Volatile.Read(ref _busy) != 0 ||
+            !Uri.TryCreate(configUrl, UriKind.Absolute, out _))
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _firstConnectAttempted, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            object? runtime = shape.RuntimeInstance.GetValue(null);
+            string netId = runtime == null
+                ? string.Empty
+                : shape.ResolveNetId.Invoke(runtime, null) as string ?? string.Empty;
+            string playerName = shape.DisplayName.Invoke(null, null) as string ?? "玩家";
+            if (runtime == null || string.IsNullOrWhiteSpace(netId))
+            {
+                // The runtime is not up yet; leave the attempt for a later frame.
+                Interlocked.Exchange(ref _firstConnectAttempted, 0);
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+            {
+                Interlocked.Exchange(ref _firstConnectAttempted, 0);
+                return;
+            }
+
+            int generation = Interlocked.Increment(ref _stepGeneration);
+            SetState(new SwitchState(null, null, SwitchPhase.Probing, null), nudgeRefresh: false);
+            Entry.Info("chat-server-switch: 大厅首次打开，公共频道从未连过，自动连一次本服 " + configUrl + "。");
+            Task ignored = Task.Run(
+                () => FirstConnectAsync(shape, runtime, configUrl, netId, playerName, generation));
+        }
+        catch (Exception exception)
+        {
+            Interlocked.Exchange(ref _busy, 0);
+            WarnOnce("could not start the first channel connect: " +
+                     exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Connects to the configured server only after it advertises public channel v1, because the port replaces the
+    /// coordinator before it connects: a server without the protocol would leave the sidebar on upstream's
+    /// "unsupported" presentation instead of an empty list.
+    /// </summary>
+    private static async Task FirstConnectAsync(
+        Shape shape,
+        object runtime,
+        string address,
+        string netId,
+        string playerName,
+        int generation)
+    {
+        SwitchState previous = Volatile.Read(ref _state);
+        try
+        {
+            ProbeOutcome probe = await ChatServerCatalog.ProbeAsync(address).ConfigureAwait(false);
+            if (!IsCurrentGeneration(generation))
+            {
+                return;
+            }
+
+            if (!probe.Reachable)
+            {
+                SetState(FailureState(previous, replacedConnection: false, "本服探测不到"), nudgeRefresh: false);
+                DeferInfo("首次进入：本服 " + address + " 探测不到，公共频道没有连接，可点 ⟳ 重试。");
+                return;
+            }
+
+            if (!probe.Supported)
+            {
+                SetState(FailureState(previous, replacedConnection: false, "本服没有公共频道 v1"), nudgeRefresh: false);
+                DeferInfo("首次进入：本服 " + address + " 没有声明公共频道协议 v1，公共频道保持未连接。");
+                return;
+            }
+
+            SetState(new SwitchState(address, null, SwitchPhase.Connecting, null), nudgeRefresh: false);
+            string? rejected = await ConnectAndVerifyAsync(shape, runtime, address, netId, playerName)
+                .ConfigureAwait(false);
+            if (!IsCurrentGeneration(generation))
+            {
+                return;
+            }
+
+            if (rejected != null)
+            {
+                SetState(FailureState(previous, replacedConnection: true, rejected), nudgeRefresh: false);
+                DeferInfo("首次进入：连接本服的公共频道失败：" + rejected);
+                return;
+            }
+
+            SetState(new SwitchState(address, null, SwitchPhase.Idle, null), nudgeRefresh: false);
+            DeferInfo("首次进入：公共频道已连上本服 " + address + "。");
+        }
+        catch (Exception exception)
+        {
+            if (IsCurrentGeneration(generation))
+            {
+                SetState(
+                    FailureState(previous, replacedConnection: true,
+                        exception.GetType().Name + ": " + exception.Message),
+                    nudgeRefresh: false);
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
         }
     }
 
@@ -1541,10 +1682,10 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// </summary>
     internal static string? CurrentChatTargetAddress => Volatile.Read(ref _state).TargetAddress;
 
-    private static void SetState(SwitchState next)
+    private static void SetState(SwitchState next, bool nudgeRefresh = true)
     {
         Volatile.Write(ref _state, next);
-        if (next.Phase == SwitchPhase.Idle)
+        if (nudgeRefresh && next.Phase == SwitchPhase.Idle)
         {
             // AnnouncementSourceFix reads the settled target from CurrentChatTargetAddress; this flag only asks
             // the overlay to run one refresh right away instead of waiting out its 8 s timer.
