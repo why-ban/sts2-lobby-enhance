@@ -57,7 +57,7 @@ pwsh -NoProfile -File tools\pack-upload-kit\test-upload-kit.ps1
 `@
 
 期望值：build 0 警告 0 错误；smoke 打印 `OK (15 fixes applied)` 且 15 项 id / 分组 / 接缝全绿；
-`dotnet test` 59 通过 0 跳过；上传包验收 35 条全过（**不联系 Steam**）。
+`dotnet test` 61 通过 0 跳过；上传包验收 35 条全过（**不联系 Steam**）。
 
 - `build-content` 必须紧跟 `build`：测试断言"出货 DLL 与当前构建逐字节一致"。
 - `pack-release` 必须在 `dotnet test` 之前：那条「dist 里的 zip 与 content 逐字节一致」的测试在 dist 为空时会跳过，

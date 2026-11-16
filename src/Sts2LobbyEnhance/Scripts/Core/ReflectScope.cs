@@ -95,8 +95,10 @@ internal static class ReflectScope
             return null;
         }
 
+        // DeclaredOnly: an inherited member with the same name on a base type is a different member, and binding to it
+        // would patch a method the host does not call. Every anchor here names the type that declares it.
         MethodInfo[] byName = owner
-            .GetMethods(scope | BindingFlags.Public | BindingFlags.NonPublic)
+            .GetMethods(scope | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
             .Where(method => string.Equals(method.Name, name, StringComparison.Ordinal)
                              && method.GetParameters().Length == parameterTypeNames.Length)
             .ToArray();

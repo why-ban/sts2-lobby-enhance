@@ -109,7 +109,7 @@ dotnet run --project tools/smoke-test/smoke-test.csproj -c Release
 dotnet run --project tools/contract-check/contract-check.csproj -c Release
 `@
 
-- `dotnet test`：59 个用例。其中 30 个需要游戏 / 官方 DLL / 构建产物，缺输入时**不是静默跳过**——
+- `dotnet test`：61 个用例。其中 30 个需要游戏 / 官方 DLL / 构建产物，缺输入时**不是静默跳过**——
   覆盖率门禁会把缺的输入点名报出来。
 - `smoke-test`：加载**出货的** `packaging/content/sts2_lobby_enhance.dll`，跑 `Entry.RunSilently()`，
   断言 15 项 id、顺序、分组，以及每项至少有一处真实 Harmony 接缝。**它证明的是"补丁挂上了"，不证明行为正确**。

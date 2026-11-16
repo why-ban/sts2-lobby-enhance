@@ -375,7 +375,7 @@ pwsh -NoProfile -File tools/pack-upload-kit/test-upload-kit.ps1
 上传器 `steam_appid.txt` 是 `2868840`、`upload.ps1` 落盘时带 **UTF-8 BOM**（PS 5.1 没有 BOM 会整篇乱码）、
 打完后**重新解包**逐文件比对 sha256 与 `CHECKSUMS.txt`。任何一条不满足直接 exit 非 0。
 
-`test-upload-kit.ps1` 覆盖 6 组场景共 **34 条**断言：包内是否带 `workspace/mod_id.txt`（无 BOM、纯数字）、
+`test-upload-kit.ps1` 覆盖 6 组场景共 **35 条**断言：包内是否带 `workspace/mod_id.txt`（无 BOM、纯数字）、
 上传器返回 `k_EResultAccessDenied` 时失败必须被翻译成「换账号」、缺文件、文件被改坏、
 `visibility` 被改回 `private`、以及用假上传器验证**成功分支**（条目链接、`上传结果.txt`、`mod_id.txt`）。
 
@@ -422,9 +422,9 @@ sts2-lobby-enhance-upload-kit/
 | 首次上传用的包 | 6,439,500 B · sha256 `72FEFE34…17365D`（**不含** `mod_id.txt`，只能用于这一次新建） |
 | 2.0.0 上传包 | 6,418,628 B · sha256 `43234A0E…6457422190`（**含** `mod_id.txt`，上传即更新同一条目） |
 | **2.0.0 已上线** | 2026-11-15T06:38:05Z（本地 14:38），线上 `file_size = 160,841 B`，描述首行 `v2.0.0` |
-| **2.1.0 上传包（当前，待上传）** | 6,501,206 B · sha256 `C7528538CED63D3EDA3E7ED79B30D63BF2E2B1BED873FD2B713CA61C93223A27` |
-| 2.1.0 发布包 | 142,150 B · sha256 `C76CF2B67D26B71DEDE5A2FC8F94528CF45EAB6E127749A39F01529B4E2BDA2E` |
-| 2.1.0 内容 | 366,476 B = dll 325,632 + 清单 939 + LICENSE 35,825 + NOTICES 4,080 |
+| **2.1.0 上传包（当前，待上传）** | 6,501,548 B · sha256 `ADB9136BFB4493C2825B7D693C67801A29121B5E673AEFC6CEA46BEF83007564` |
+| 2.1.0 发布包 | 142,330 B · sha256 `E6696109BC50286F275D2826AEDABAE86F7503A5DBB3007B4459ECBC82051CC5` |
+| 2.1.0 内容 | 366,988 B = dll 326,144 + 清单 939 + LICENSE 35,825 + NOTICES 4,080 |
 | 首次上传内容（1.7.0） | 226,838 B = dll 186,368 + 清单 651 + LICENSE 35,825 + NOTICES 3,994 |
 | 2.0.0 内容 | 160,841 B = dll 120,320 + 清单 702 + LICENSE 35,825 + NOTICES 3,994 |
 | 可见性 | public（页面匿名可访问、有订阅按钮） |

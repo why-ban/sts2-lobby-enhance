@@ -76,10 +76,7 @@ $newestSource = Get-ChildItem -LiteralPath (Join-Path $projectDir 'Scripts') -Re
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (Test-Path -LiteralPath $builtDll -PathType Leaf) {
     $builtItem = Get-Item -LiteralPath $builtDll
-    if ($null -ne $newestSource -and $newestSource.LastWriteTime -gt $builtItem.LastWriteTime) {
-        throw ('The build is older than its sources: ' + $newestSource.Name + ' is newer than ' + $builtDll + '. ' +
-               'Run the build before packing.')
-    }
+
 }
 
 if ([string]::IsNullOrWhiteSpace($DistDirectory)) {
@@ -113,6 +110,15 @@ function Step([string] $Message) {
 
 function Get-Sha256([string] $Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+}
+
+# A build older than its sources is the one staleness content/ cannot reveal: this script compares content against
+# bin/, and the gate order builds first, so anything reaching here with a newer .cs is a hand-run mistake.
+if ($null -ne $newestSource -and (Test-Path -LiteralPath $builtDll -PathType Leaf)) {
+    $builtItem = Get-Item -LiteralPath $builtDll
+    if ($newestSource.LastWriteTime -gt $builtItem.LastWriteTime) {
+        Fail ('the build is older than its sources: ' + $newestSource.Name + ' is newer than the DLL. Build first.') 2
+    }
 }
 
 # ---------------------------------------------------------------- 1. fixed source

@@ -69,6 +69,8 @@ string[] expectedFixIds =
     ("chat-server-switch",  "LanConnectBasicChatPanel",         "UpdateAvailability"),
     ("announcement-source", "LobbyApiClient",                   "GetAnnouncementsAsync"),
     ("server-pool-refresh", "LanConnectLobbyOverlay",           "RefreshRoomsAsync"),
+    ("server-pool-refresh", "LanConnectLobbyOverlay",           "_Process"),
+    ("server-pool-refresh", "LanConnectLobbyOverlay",           "BuildRoomMetaRow"),
     ("server-pool-join",    "LanConnectLobbyOverlay",           "BeginJoinRoomAsync"),
     ("server-pool-create",  "LanConnectLobbyOverlay",           "CreateRoomAsync"),
     ("server-pool-create-picker", "LanConnectLobbyOverlay",     "BuildCreateDialog"),
@@ -337,20 +339,22 @@ Console.WriteLine();
 Console.WriteLine("---- one real seam per fix ----");
 
 bool seamsOk = true;
-// Two seams share a method name with an unrelated overload (LanConnectServerSelectionStartup.Show), so a name match
-// alone cannot say which one was patched. This pins the arity where it matters.
-var requiredSeamArity = new Dictionary<(string Type, string Method), int>
+// Two seams share a method name with an unrelated overload (LanConnectServerSelectionStartup.Show): both take four
+// parameters and differ only in the type of the second one, so the pin has to name that type.
+var requiredSeamParameter = new Dictionary<(string Type, string Method), (int Index, string TypeName)>
 {
-    [("LanConnectServerSelectionStartup", "Show")] = 4,
+    [("LanConnectServerSelectionStartup", "Show")] = (1, "Func`2"),
 };
 
 foreach ((string fixId, string declaringType, string methodName) in requiredSeams)
 {
-    int arity = requiredSeamArity.TryGetValue((declaringType, methodName), out int pinned) ? pinned : -1;
+    bool pinned = requiredSeamParameter.TryGetValue((declaringType, methodName), out (int Index, string TypeName) wanted);
     bool found = patched.Any(method =>
         string.Equals(method.DeclaringType?.Name, declaringType, StringComparison.Ordinal)
         && string.Equals(method.Name, methodName, StringComparison.Ordinal)
-        && (arity < 0 || method.GetParameters().Length == arity));
+        && (!pinned
+            || (method.GetParameters().Length > wanted.Index
+                && string.Equals(method.GetParameters()[wanted.Index].ParameterType.Name, wanted.TypeName, StringComparison.Ordinal))));
 
     seamsOk &= found;
     Console.WriteLine($"  {fixId,-20} {declaringType}::{methodName,-32} {(found ? "PATCHED" : "MISSING")}");

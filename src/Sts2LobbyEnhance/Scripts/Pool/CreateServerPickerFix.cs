@@ -200,6 +200,12 @@ internal sealed class CreateServerPickerSection
 
     private const string RowLabelMeta = "pool_picker_label";
 
+    /// <summary>Set once a row has been styled, so the first restyle cannot be skipped as "unchanged".</summary>
+    private const string RowStyledMeta = "pool_picker_styled";
+
+    /// <summary>The selection state the host styling call was last applied with.</summary>
+    private const string RowSelectedMeta = "pool_picker_selected";
+
     private readonly PoolAnchors _anchors;
 
     private readonly object _overlay;
@@ -420,8 +426,19 @@ internal sealed class CreateServerPickerSection
 
     private void ApplyRowStyle(Button row, string label, bool selected)
     {
+        // Upstream's styling call runs on every restyle of every row; skipping it when nothing changed keeps a click
+        // from restyling rows that keep their state (and from re-running whatever the host helper does internally)
+        bool known = row.HasMeta(RowStyledMeta) && row.GetMeta(RowStyledMeta).AsBool();
+        bool wasSelected = known && row.HasMeta(RowSelectedMeta) && row.GetMeta(RowSelectedMeta).AsBool();
+        if (known && wasSelected == selected && string.Equals(row.Text, Display((selected ? SelectedBullet : UnselectedBullet) + label), StringComparison.Ordinal))
+        {
+            return;
+        }
+
         row.Text = Display((selected ? SelectedBullet : UnselectedBullet) + label);
         _anchors.ApplyButtonStyle?.Invoke(null, new object?[] { row, selected, false });
+        row.SetMeta(RowStyledMeta, true);
+        row.SetMeta(RowSelectedMeta, selected);
     }
 
     /// <summary>Re-marks every row after a click, so exactly one carries the bullet and the primary styling.</summary>
