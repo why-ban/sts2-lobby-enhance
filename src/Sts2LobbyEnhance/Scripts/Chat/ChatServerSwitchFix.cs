@@ -277,6 +277,20 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             "chat-server-switch: the lobby public channel row now offers ‹ › to attach to another server's " +
             "channel after a /probe preflight (capabilities.serverChatVersion == 1, cached 5 min). The lobby " +
             "server, the room and config.json are untouched.");
+
+        if (shape.History == null)
+        {
+            Entry.Info(
+                "chat-server-switch: room history replay is off (" +
+                (shape.HistoryUnavailable.Length == 0 ? "no anchors" : shape.HistoryUnavailable) +
+                "); the in-run room binding is still restored after a switch.");
+        }
+        else
+        {
+            Entry.Info(
+                "chat-server-switch: room history replay is on - a channel switch re-enters the room and replays " +
+                "the confirmed messages into the replacement coordinator.");
+        }
     }
 
     /// <summary>
@@ -1345,16 +1359,143 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         }
     }
 
-    private static string? ReadActiveRoomId(Shape shape, object runtime)
+    /// <summary>What the room half of the chat looked like before the switch.</summary>
+    private sealed record RoomRecall(string? RoomId, bool OverlayOpen, List<RoomMessage> Messages)
     {
-        object? dual = shape.RuntimeChat.GetValue(runtime);
-        return dual == null ? null : shape.DualActiveRoomId.GetValue(dual) as string;
+        internal static readonly RoomRecall None = new(null, false, new List<RoomMessage>());
     }
 
-    private static bool ReadRoomOverlayOpen(Shape shape, object runtime)
+    /// <summary>One confirmed room message, enough to replay it as plain text.</summary>
+    private sealed record RoomMessage(
+        string Id,
+        string SenderName,
+        string? SenderNetId,
+        string Text,
+        DateTimeOffset SentAt,
+        bool IsLocal);
+
+    /// <summary>Upstream's own room history cap (<c>LanConnectChatRuntimePorts.cs:42</c>).</summary>
+    private const int RoomHistoryCap = 60;
+
+    private static RoomRecall CaptureRoom(Shape shape, object runtime)
     {
-        object? dual = shape.RuntimeChat.GetValue(runtime);
-        return dual != null && shape.DualRoomOverlayOpen.GetValue(dual) is bool open && open;
+        try
+        {
+            object? dual = shape.RuntimeChat.GetValue(runtime);
+            if (dual == null)
+            {
+                return RoomRecall.None;
+            }
+
+            return new RoomRecall(
+                shape.DualActiveRoomId.GetValue(dual) as string,
+                shape.DualRoomOverlayOpen.GetValue(dual) is bool open && open,
+                CaptureRoomMessages(shape, dual));
+        }
+        catch (Exception)
+        {
+            return RoomRecall.None;
+        }
+    }
+
+    /// <summary>
+    /// Reads the room messages that were actually delivered. Only <c>Confirmed</c> entries are kept: a pending or
+    /// reviewing message has no server id yet, and replaying it as confirmed would invent an ack the server never
+    /// gave (<c>ServerChatDeliveryState</c>, <c>LanConnectChatChannelState.cs:8-19</c>).
+    /// </summary>
+    private static List<RoomMessage> CaptureRoomMessages(Shape shape, object dual)
+    {
+        var messages = new List<RoomMessage>();
+        Shape.HistoryShape? history = shape.History;
+        if (history == null || shape.DualRoom.GetValue(dual) is not { } room)
+        {
+            return messages;
+        }
+
+        if (history.RoomMessages.GetValue(room) is not System.Collections.IEnumerable list)
+        {
+            return messages;
+        }
+
+        foreach (object? item in list)
+        {
+            if (item == null || messages.Count >= RoomHistoryCap)
+            {
+                continue;
+            }
+
+            if (!string.Equals(history.Delivery.GetValue(item)?.ToString(), "Confirmed", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string text = history.Text.GetValue(item) as string ?? string.Empty;
+            string id = history.MessageId.GetValue(item) as string ??
+                        history.ClientMessageId.GetValue(item) as string ??
+                        string.Empty;
+            if (text.Length == 0 || id.Length == 0)
+            {
+                continue;
+            }
+
+            messages.Add(new RoomMessage(
+                id,
+                history.SenderName.GetValue(item) as string ?? string.Empty,
+                history.SenderNetId.GetValue(item) as string,
+                text,
+                history.SentAt.GetValue(item) is DateTimeOffset sentAt ? sentAt : DateTimeOffset.UtcNow,
+                history.IsLocal.GetValue(item) is bool local && local));
+        }
+
+        return messages;
+    }
+
+    /// <summary>
+    /// Hands the captured history to the replacement coordinator through upstream's own room mutator
+    /// (<c>LanConnectChatRuntimePorts.cs:236-270</c>), which dedupes by message id - so a message that also arrives
+    /// live cannot be shown twice.
+    ///
+    /// What this can and cannot restore: the text, author, time and "was it mine" of every <c>Confirmed</c> message
+    /// (up to upstream's own cap) come back; rich payloads (item links, emoji segments) degrade to their plain
+    /// text, and unread counters start from zero. That is a display-level replay, not a state transplant.
+    /// </summary>
+    private static int ReplayRoomMessages(Shape shape, object coordinator, RoomRecall recall)
+    {
+        Shape.HistoryShape? history = shape.History;
+        if (history == null || recall.Messages.Count == 0)
+        {
+            return 0;
+        }
+
+        int replayed = 0;
+        foreach (RoomMessage message in recall.Messages)
+        {
+            try
+            {
+                history.AppendRoomConfirmed.Invoke(coordinator, new object?[]
+                {
+                    recall.RoomId!,
+                    message.Id,
+                    message.SenderName,
+                    message.SenderNetId,
+                    message.Text,
+                    message.SentAt,
+                    message.IsLocal
+                });
+                replayed++;
+            }
+            catch (Exception exception)
+            {
+                // One refused message must not abort the rest of the history.
+                if (replayed == 0)
+                {
+                    WarnOnce("could not replay the room history: " +
+                             exception.GetType().Name + ": " + exception.Message);
+                }
+            }
+        }
+
+        return replayed;
     }
 
     private static bool IsServerChannelUnsupported(Shape shape, object runtime)
@@ -1382,11 +1523,10 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         object runtime,
         object port,
         object? coordinatorBefore,
-        string? roomId,
-        bool roomOverlayWasOpen,
+        RoomRecall recall,
         bool serverSelectable)
     {
-        if (string.IsNullOrEmpty(roomId))
+        if (string.IsNullOrEmpty(recall.RoomId))
         {
             // No room was active (lobby, or a player who already left): nothing to restore.
             return;
@@ -1400,8 +1540,13 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 return;
             }
 
-            shape.CoordinatorEnterRoom.Invoke(coordinatorNow, new object?[] { roomId });
-            if (roomOverlayWasOpen)
+            // EnterRoom first: AppendRoomConfirmed refuses messages whose room id does not match the active one
+            // (LanConnectChatRuntimePorts.cs:247-250).
+            shape.CoordinatorEnterRoom.Invoke(coordinatorNow, new object?[] { recall.RoomId });
+
+            int replayed = ReplayRoomMessages(shape, coordinatorNow, recall);
+
+            if (recall.OverlayOpen)
             {
                 // The port swapped the state object, so the "was it open" flag must be re-applied to the new one.
                 object? dual = shape.RuntimeChat.GetValue(runtime);
@@ -1411,7 +1556,9 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 }
             }
 
-            DeferInfo("in-run chat: room channel restored after the channel switch (roomId=" + roomId + ").");
+            DeferInfo(
+                "in-run chat: room channel restored after the channel switch (roomId=" + recall.RoomId +
+                ", replayed=" + replayed + " message(s)).");
         }
         catch (Exception exception)
         {
@@ -1636,11 +1783,11 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         }
 
         // The room channel lives on the coordinator, and the port replaces the coordinator before it connects
-        // (:811-837). Without capturing it here, the in-run overlay loses ActiveRoomId, hides its root
-        // (LanConnectRoomChatOverlay.cs:613-617) and its hotkey refuses to reopen (:743).
+        // (:811-837), which throws the dual state away (:76). Capture the room binding, the open flag and the
+        // history here; without them the in-run overlay hides its root (LanConnectRoomChatOverlay.cs:613-617) and
+        // its hotkey refuses to reopen (:743).
         object? coordinatorBefore = shape.PortCurrent.GetValue(port);
-        string? roomId = ReadActiveRoomId(shape, runtime);
-        bool roomOverlayWasOpen = ReadRoomOverlayOpen(shape, runtime);
+        RoomRecall recall = CaptureRoom(shape, runtime);
         bool serverSelectable = !IsServerChannelUnsupported(shape, runtime);
 
         using var timeout = new CancellationTokenSource(ConnectTimeout);
@@ -1661,8 +1808,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         }
         finally
         {
-            RestoreRoomChannel(
-                shape, runtime, port, coordinatorBefore, roomId, roomOverlayWasOpen, serverSelectable);
+            RestoreRoomChannel(shape, runtime, port, coordinatorBefore, recall, serverSelectable);
         }
     }
 
@@ -1915,6 +2061,18 @@ internal sealed class ChatServerSwitchFix : ICompatFix
 
         internal MethodInfo CoordinatorEnterRoom = null!;
 
+        internal PropertyInfo DualRoom = null!;
+
+        /// <summary>
+        /// Optional: everything needed to replay the room history into the replacement state
+        /// (<c>LanConnectChatRuntimePorts.cs:236-270</c>). A miss leaves the history empty but keeps the room
+        /// binding, which is the difference between "old messages gone" and "the whole window gone".
+        /// </summary>
+        internal HistoryShape? History;
+
+        /// <summary>Why the replay is off, for the start-up line. Empty when the replay is available.</summary>
+        internal string HistoryUnavailable = string.Empty;
+
         internal FieldInfo CoordinatorClient = null!;
 
         internal FieldInfo ClientBaseUri = null!;
@@ -2009,6 +2167,12 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                         shape.PortCurrent = current;
                         shape.CoordinatorEnterRoom = ReflectScope.MethodOf(
                             current.PropertyType, "EnterRoom", 1, problems)!;
+                        var replayProblems = new List<string>();
+                        shape.History = HistoryShape.TryCapture(current.PropertyType, replayProblems);
+                        if (shape.History == null)
+                        {
+                            shape.HistoryUnavailable = string.Join("; ", replayProblems);
+                        }
                         FieldInfo? client = ReflectScope.Field(problems, current.PropertyType, CoordinatorClientFieldName);
                         if (client != null)
                         {
@@ -2044,6 +2208,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
                 shape.DualSelect = ReflectScope.MethodOf(shape.RuntimeChat.PropertyType, "Select", 1, problems)!;
                 shape.DualShowPreserving = ReflectScope.MethodOf(
                     shape.RuntimeChat.PropertyType, "ShowRoomOverlayPreservingSelection", 1, problems)!;
+                shape.DualRoom = ReflectScope.PropertyOf(shape.RuntimeChat.PropertyType, "Room", problems)!;
             }
 
             if (shape.RuntimeChat != null)
@@ -2101,6 +2266,81 @@ internal sealed class ChatServerSwitchFix : ICompatFix
             }
 
             return property;
+        }
+
+        /// <summary>
+        /// The members needed to read room messages and hand them to the replacement coordinator. Resolved into a
+        /// throwaway problem list on purpose: history replay is an extra, and costing the channel switch because a
+        /// message field was renamed would be the wrong trade.
+        /// </summary>
+        internal sealed class HistoryShape
+        {
+            internal PropertyInfo RoomMessages = null!;
+
+            internal PropertyInfo MessageId = null!;
+
+            internal PropertyInfo ClientMessageId = null!;
+
+            internal PropertyInfo SenderName = null!;
+
+            internal PropertyInfo SenderNetId = null!;
+
+            internal PropertyInfo Text = null!;
+
+            internal PropertyInfo IsLocal = null!;
+
+            internal PropertyInfo SentAt = null!;
+
+            internal PropertyInfo Delivery = null!;
+
+            internal MethodInfo AppendRoomConfirmed = null!;
+
+            internal static HistoryShape? TryCapture(Type coordinator, List<string> problems)
+            {
+                var scratch = new List<string>();
+                var history = new HistoryShape();
+
+                // Stage the coordinator's own mutator first: without it nothing else matters.
+                history.AppendRoomConfirmed = ReflectScope.MethodOf(coordinator, "AppendRoomConfirmed", 7, scratch)!;
+                if (history.AppendRoomConfirmed == null)
+                {
+                    problems.Add("AppendRoomConfirmed(7 parameters) (history replay disabled)");
+                    return null;
+                }
+
+                // The dual state's Room channel, and the message list on it, are reached through the coordinator's
+                // State property type, so a rename surfaces here instead of at call time.
+                PropertyInfo? state = ReflectScope.PropertyOf(coordinator, "State", scratch);
+                PropertyInfo? room = state == null ? null : ReflectScope.PropertyOf(state.PropertyType, "Room", scratch);
+                PropertyInfo? messages = room == null ? null : ReflectScope.PropertyOf(room.PropertyType, "Messages", scratch);
+                if (messages == null)
+                {
+                    problems.Add("State.Room.Messages (history replay disabled)");
+                    return null;
+                }
+
+                history.RoomMessages = messages;
+                Type messageType = messages.PropertyType.IsGenericType
+                    ? messages.PropertyType.GetGenericArguments()[0]
+                    : typeof(object);
+
+                history.MessageId = ReflectScope.PropertyOf(messageType, "MessageId", scratch)!;
+                history.ClientMessageId = ReflectScope.PropertyOf(messageType, "ClientMessageId", scratch)!;
+                history.SenderName = ReflectScope.PropertyOf(messageType, "SenderName", scratch)!;
+                history.SenderNetId = ReflectScope.PropertyOf(messageType, "SenderNetId", scratch)!;
+                history.Text = ReflectScope.PropertyOf(messageType, "Text", scratch)!;
+                history.IsLocal = ReflectScope.PropertyOf(messageType, "IsLocal", scratch)!;
+                history.SentAt = ReflectScope.PropertyOf(messageType, "SentAt", scratch)!;
+                history.Delivery = ReflectScope.PropertyOf(messageType, "Delivery", scratch)!;
+
+                if (scratch.Count > 0)
+                {
+                    problems.Add("room message shape (" + string.Join(", ", scratch) + ") (history replay disabled)");
+                    return null;
+                }
+
+                return history;
+            }
         }
 
         private static FieldInfo? RequireField(
