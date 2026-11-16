@@ -84,7 +84,8 @@
 
 - 创建房间面板多一节**可折叠**的「服务器」，默认折叠、默认「自动（延迟最低）」。
 - 折叠头一行：`服务器 · 自动（延迟最低）  ▸`；展开后列出池里每台服务器的**短名 + 延迟**（`28 ms`；没有探测数据就写「未测」，
-  不编数字），首项「自动（延迟最低）」并默认选中，当前项有可见选中态（`ButtonGroup` + `ToggleMode`，选中即上游的 pressed 样式）。
+  不编数字），首项「自动（延迟最低）」并默认选中；选中态是前缀 `●`/○ 加一条上游自己那套 primary 按钮样式
+  （`ApplyButtonStyle(row, primary: true, ...)`），不用 `ToggleMode`——上游的按钮样式里没有 toggle 态，硬塞会和对话框里其它按钮不一致。
 - 展开时刷新一次延迟：复用 `PoolServerCatalog` 的缓存与 `ProbeAsync`，整轮预算 **2 s**，在 main thread 回填文本，不阻塞弹窗、不抛异常。
 - 选择**只存内存**，按 overlay 实例（`ConditionalWeakTable`），不写 `config.json`。
 - `CreateRoomAsync` 的 prefix 读这个选择：自动 → 原逻辑不变；手动 → **只切到指定那台，切成功才建房；切失败不创建**，
