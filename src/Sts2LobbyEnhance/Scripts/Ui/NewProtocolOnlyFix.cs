@@ -10,11 +10,11 @@ namespace Sts2LobbyEnhance;
 /// The layer is redundant once the legacy profile is gone: upstream still renders a title, two choice buttons and a
 /// hint, while this mod offers only 新协议. Removing the section also gives the server picker the space back.
 ///
-/// Upstream resets the selection on every open (ShowCreateRoomDialog calls SelectDefaultCreateProtocol and then
+/// Upstream resets the selection on every open (OpenCreateDialogInternal calls SelectDefaultCreateProtocol and then
 /// RefreshProtocolProfileOptionAvailability), and its default is 兼容旧版 Mod whenever RitsuLib is absent, so the
 /// choice has to be overridden where it is read (GetSelectedCreateProtocolId) rather than once at build time.
 ///
-/// The section is detached, not freed: ShowCreateRoomDialog still calls RefreshProtocolProfileOptionAvailability,
+/// The section is detached, not freed: the open path still calls RefreshProtocolProfileOptionAvailability,
 /// which writes the buttons' Disabled state and repaints their styles. Detached nodes stay valid, so those writes
 /// keep working; freeing them would make every later open throw.
 /// </summary>
@@ -98,6 +98,7 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
             }
 
             body.RemoveChild(section);
+            Entry.Info("new-protocol-only: the 联机协议 section is out of the create dialog.");
         }
         catch (Exception exception)
         {
@@ -126,13 +127,13 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
 
             if (!tailUsable)
             {
-                RecordDecision(0, "[lobby-enhance] new-protocol-only: 新协议 is not selectable right now, so the room " +
+                RecordDecision(0, "new-protocol-only: 新协议 is not selectable right now, so the room " +
                                   "keeps upstream's legacy profile even though the section is hidden.");
                 return;
             }
 
             __result = TailProtocolId;
-            RecordDecision(1, "[lobby-enhance] new-protocol-only: rooms are published on 新协议 (301).");
+            RecordDecision(1, "new-protocol-only: rooms are published on 新协议 (301).");
         }
         catch (Exception exception)
         {

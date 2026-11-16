@@ -72,6 +72,7 @@ string[] expectedFixIds =
     ("server-pool-join",    "LanConnectLobbyOverlay",           "BeginJoinRoomAsync"),
     ("server-pool-create",  "LanConnectLobbyOverlay",           "CreateRoomAsync"),
     ("server-pool-create-picker", "LanConnectLobbyOverlay",     "BuildCreateDialog"),
+    ("server-pool-create-picker", "LanConnectLobbyOverlay",     "OpenCreateDialogInternal"),
     ("lobby-entry-direct",  "LanConnectServerSelectionStartup", "Show"),
     ("room-chat-hint-passthrough", "LanConnectRoomChatOverlay", "RefreshFromSource")
 ];
