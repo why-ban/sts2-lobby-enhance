@@ -3,94 +3,37 @@ using Godot;
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Long press on a chat message = enter text selection, drag the finger to shape the selection, lift the finger to
-/// copy it. Installed on the message label of one row by <see cref="TouchChatScrollFix"/> and alive only as long as
-/// that label is.
+/// Long press on a chat message enters text selection, dragging shapes it, lifting copies it. Installed on one row's
+/// label by <see cref="TouchChatScrollFix"/>, and its lifetime is that label's
 ///
-/// <para><b>Why the engine cannot do this on its own.</b> A plain finger drag must scroll the log, so the label is
-/// built with <c>SelectionEnabled = false</c> and <c>MouseFilter = Pass</c> (see the panel-level explanation in
-/// <see cref="TouchChatScrollFix"/>). With selection off, the press Godot emulates from a finger
-/// (<c>emulate_mouse_from_touch</c>, input.cpp:847-884) is deliberately not turned into a selection anchor, so by the
-/// time a long press is recognised there is no anchor to drag from. <c>RichTextLabel</c> exposes no positional
-/// selection API either: the only public entry point is <c>select_all()</c>. The anchor therefore has to be produced by
-/// the engine's own code path, which is <c>RichTextLabel::gui_input</c> handling a left mouse button press
-/// (rich_text_label.cpp:2636-2674). That is what a synthetic press injected with <c>Viewport.PushInput</c> does below.
-/// </para>
-///
-/// <para><b>Measured engine facts this file depends on</b> (Godot 4.5.1, probe <c>work/lead/touch-probe</c>, output in
-/// <c>work/lead/fix-touch-select.md</c>):</para>
-/// <list type="number">
-/// <item>A synthetic <c>InputEventMouseButton</c> pushed through <c>Viewport.PushInput(event, true)</c> while
-/// <c>SelectionEnabled</c> is true anchors the selection, and the next mouse motion extends it, because
-/// <c>RichTextLabel::gui_input</c> extends the selection on any mouse motion while the press anchor is set
-/// (rich_text_label.cpp:2940-3005). A finger drag arrives as exactly such a motion: each <c>InputEventScreenDrag</c> is
-/// re-dispatched as an <c>InputEventMouseMotion</c> carrying the left button mask (input.cpp:895-913).</item>
-/// <item>The injected press must carry <c>DEVICE_ID_INTERNAL</c> (-2): <c>Control::_call_gui_input</c> then skips the
-/// <c>gui_input</c> signal and the script virtual, so neither this gesture nor the host mod's own input handler sees
-/// it, while the engine's built-in <c>RichTextLabel::gui_input</c> still runs (control.cpp:1852-1867). Not invisible
-/// everywhere: the event enters through <c>Viewport.PushInput</c>, so the engine's <c>_input</c> stage is offered it
-/// before the GUI sees it, and <c>_unhandled_input</c> is offered it if nothing handles it.</item>
-/// <item>While <c>MouseFilter = Stop</c> the label is the mouse focus and swallows the motions, so the enclosing
-/// <c>ScrollContainer</c> receives no motion and does not scroll (viewport.cpp:2079-2085, 2163-2165, 1755-1759). That
-/// decouples "drag to select" from "drag to scroll" without touching the container.</item>
-/// <item>Lifting the finger keeps the selection text (<c>GetSelectedText()</c> needs only <c>selection.active</c> and
-/// <c>selection.enabled</c>, rich_text_label.cpp:6869-6872) and clears the drag anchor, so the copy point is the touch
-/// release and the highlight can stay on screen as the copy feedback.</item>
-/// <item>Turning <c>SelectionEnabled</c> off deselects (rich_text_label.cpp:6539-6553). That, plus setting
-/// <c>MouseFilter</c> back to <c>Pass</c>, is the whole exit: it runs from the emulated mouse press that starts the next
-/// gesture, in the signal phase before the engine's own press handling (control.cpp:1852-1867), so no new anchor is
-/// made and the press still bubbles to the scroll container.</item>
-/// </list>
-///
-/// <para><b>Immediate visible feedback.</b> Right after the anchor, <c>SelectAll()</c> highlights the whole message (a
-/// long press that never moves therefore copies the whole message, as before, but now visibly selected), and the first
-/// drag replaces that with the range the finger spans (probe: 491 chars -> 413 chars after one drag).</para>
-///
-/// <para><b>Why the press/selection split is decided by travel, not by a mode flag.</b> 16 px is upstream's own
-/// tap/slide boundary (<c>LanConnectReferenceTapGesture.cs:9</c>), so a press that drifts is a scroll here exactly as it
-/// is there; 400 ms is the added dimension.</para>
-///
-/// <para><b>A press that selected must not also open the item/combat reference preview.</b> Upstream decides "tap"
-/// purely by travel (<c>LanConnectReferenceTapGesture.cs:54-55</c>), so a motionless 400 ms press is a tap to it and a
-/// message carrying a reference activates on release (<c>LanConnectRichMessageView.cs:203-212</c>) - and that host
-/// handler is connected to the label's <c>gui_input</c> before this gesture is, so it runs first. The gate is therefore
-/// armed when selection mode starts, always before that release:
-/// <see cref="TouchChatScrollFix.ReferenceActivationGate"/> eats exactly that one activation and the prefix on
-/// <c>RaiseReferencePressed</c> applies it.</para>
-///
-/// This is deliberately a plain class and not a <c>Node</c>: Godot only dispatches <c>_Ready</c>/<c>_Process</c> to C#
-/// classes that went through its source generator (script classes), and a class that a mod instantiates by hand has no
-/// generated dispatch. Everything time-based here therefore rides on engine objects that do - a <c>SceneTreeTimer</c>
-/// for the hold threshold, a <c>Tween</c> for the feedback pulse and <c>Callable</c> for the one deferred recovery -
-/// which also means they die together with the row they belong to.
+/// A plain class rather than a <c>Node</c>: Godot dispatches <c>_Ready</c>/<c>_Process</c> to script classes, and a class
+/// a mod instantiates by hand is not one. The timing therefore rides on a <c>SceneTreeTimer</c>, a <c>Tween</c> and a
+/// <c>Callable</c>, which also die with the row
 /// </summary>
 internal sealed class TouchSelectionGesture
 {
-    /// <summary>How long the finger must stay down. The product decision behind the 2.1.0 request.</summary>
+    /// <summary>400 ms is the product decision, not a size the engine defines</summary>
     private const double HoldSeconds = 0.4;
 
-    /// <summary>The same number, for the release-time check that cannot use a timer.</summary>
     private const ulong HoldMilliseconds = 400;
 
     /// <summary>
-    /// 16 px, the tap/slide boundary upstream already uses (LanConnectReferenceTapGesture.cs:9). Reused rather than
-    /// re-invented so that "this is still a press" means the same thing everywhere in the chat.
+    /// 16 px, the tap/slide boundary upstream already uses, so "this is still a press" means the same thing in both
+    /// gesture handlers
     /// </summary>
     private const float MaxTravelSquared = 16f * 16f;
 
-    /// <summary>Length of the copy feedback: the row brightens, then fades back over this long.</summary>
     private const double FeedbackSeconds = 0.12;
 
     /// <summary>
-    /// <c>InputEvent::DEVICE_ID_INTERNAL</c>. Not exposed in C# (only <c>DEVICE_ID_EMULATION</c> is), and it is a fixed
-    /// engine constant, so it is duplicated here rather than reflected. -1 would be the emulated-device id and would
-    /// not be hidden from the host mod's input handler.
+    /// <c>InputEvent::DEVICE_ID_INTERNAL</c>, not exposed in C# (only <c>DEVICE_ID_EMULATION</c> is) and a fixed engine
+    /// constant, so duplicated here. -1 is the emulated device id and would still reach the host mod's handler
     /// </summary>
     private const int InternalDeviceId = -2;
 
     /// <summary>
-    /// How many reference spans the message carries (LanConnectRichMessageView.cs:86). A message without one can never
-    /// raise the preview, so arming the gate for it would only risk eating a later, unrelated activation.
+    /// How many reference spans the message carries. A message without one cannot raise the preview, so arming the gate
+    /// for it would only risk eating a later, unrelated activation
     /// </summary>
     private const string ReferenceCountMetaName = "lan_connect_reference_count";
 
@@ -107,8 +50,6 @@ internal sealed class TouchSelectionGesture
     private readonly RichTextLabel _label;
     private readonly CanvasItem? _row;
     private readonly Color _rowModulate;
-
-    /// <summary>Whether this message can open the reference preview at all; decides if a selection has to arm the gate.</summary>
     private readonly bool _raisesReference;
 
     private int? _touchIndex;
@@ -122,8 +63,6 @@ internal sealed class TouchSelectionGesture
     private int _press;
     private Tween? _feedback;
 
-    /// <param name="label">The message label; its <c>GuiInput</c> signal is what this subscribes to.</param>
-    /// <param name="row">What gets brightened on a copy: the view that owns the label, or null to skip the pulse.</param>
     internal TouchSelectionGesture(RichTextLabel label, CanvasItem? row)
     {
         _label = label;
@@ -132,11 +71,6 @@ internal sealed class TouchSelectionGesture
         _raisesReference = ReadReferenceCount(label) > 0;
     }
 
-    /// <summary>
-    /// Subscribes to the label. Called once per row, from the view's <c>_Ready</c> postfix, so the connection is
-    /// dropped by Godot when either end is freed - including every row that <c>Refresh()</c> rebuilds
-    /// (LanConnectBasicChatPanel.cs:1280-1303).
-    /// </summary>
     internal void Attach() => _label.GuiInput += OnGuiInput;
 
     private void OnGuiInput(InputEvent input)
@@ -145,9 +79,9 @@ internal sealed class TouchSelectionGesture
         {
             switch (input)
             {
-                // The engine emulates this from the finger going down, and it arrives before the ScreenTouch
-                // (input.cpp:882 then 983). Acting here - in the signal phase, before RichTextLabel's own handling
-                // (control.cpp:1852-1867) - is what turns the next gesture into a scroll instead of a new selection.
+                // The engine emulates this from the finger going down and it arrives before the ScreenTouch, so acting
+                // here, in the signal phase before RichTextLabel's own handling, is what turns the next gesture into a
+                // scroll instead of a new selection
                 case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } press
                     when press.Device != InternalDeviceId:
                     ExitSelection();
@@ -180,16 +114,15 @@ internal sealed class TouchSelectionGesture
 
             if (_selecting)
             {
-                // The finger that shaped the selection is up: this is the copy point. The engine has already run its
-                // own release handling (input.cpp:882 before 983), i.e. the drag anchor is cleared and the selected
-                // text is final (rich_text_label.cpp:2721-2753, 6869-6872).
+                // The finger that shaped the selection is up, so this is the copy point. The engine already ran its own
+                // release handling, which cleared the drag anchor and left the selected text final
                 FinishSelection();
                 return;
             }
 
-            // Same gesture, judged on release: covers a hold whose timer never fired (a tree that does not tick, a row
-            // built while the finger was already down). Deferred, so the synthetic press it needs is never delivered
-            // from inside an input dispatch.
+            // Same gesture judged on release, which covers a hold whose timer did not fire: a tree that does not tick, or
+            // a row built while the finger was already down. Deferred so the synthetic press it needs is not delivered
+            // from inside an input dispatch
             if (!_cancelled &&
                 !_copied &&
                 Time.GetTicksMsec() - _pressedAt >= HoldMilliseconds &&
@@ -210,13 +143,13 @@ internal sealed class TouchSelectionGesture
 
         if (_touchIndex.HasValue)
         {
-            // A second finger is never a selection gesture (same rule as LanConnectReferenceTapGesture.cs:23-27).
+            // A second finger is not part of a selection gesture, same rule as upstream's own tap gesture
             _cancelled = true;
             return;
         }
 
-        // A fresh press also ends a selection shown by an earlier one, in case the emulated mouse press above never
-        // reached us (a build with emulate_mouse_from_touch off).
+        // A fresh press also ends a selection shown by an earlier one, in case the emulated mouse press above did not
+        // reach us: a build with emulate_mouse_from_touch off
         ExitSelection();
 
         _touchIndex = touch.Index;
@@ -226,8 +159,8 @@ internal sealed class TouchSelectionGesture
         _copied = false;
         _selecting = false;
 
-        // This press has not copied anything yet, so it must not inherit the previous press's suppression. Clearing
-        // here (before anything can activate) is what bounds the gate to one press.
+        // This press has not copied anything, so it does not inherit the previous press's suppression. Clearing it here,
+        // before anything can activate, is what bounds the gate to one press
         TouchChatScrollFix.ReferenceActivationGate.Disarm();
         ArmHoldTimer(++_press);
     }
@@ -239,8 +172,8 @@ internal sealed class TouchSelectionGesture
             return;
         }
 
-        // While selecting, travel is the point: the engine extends the selection from the injected anchor and the
-        // label swallows the motion, so the log does not scroll underneath the finger.
+        // While selecting, travel is the point: the engine extends the selection from the injected anchor and the label
+        // swallows the motion, so the log does not scroll underneath the finger
         if (_selecting)
         {
             return;
@@ -248,22 +181,22 @@ internal sealed class TouchSelectionGesture
 
         if (drag.Position.DistanceSquaredTo(_origin) > MaxTravelSquared)
         {
-            // Sticky on purpose, like upstream's own travel limit (LanConnectReferenceTapGesture.cs:43): dragging away
-            // and back is a scroll that happened to end where it started, not a press.
+            // Sticky on purpose, like upstream's own travel limit: dragging away and back is a scroll that happened to end
+            // where it started, not a press
             _cancelled = true;
         }
     }
 
     /// <summary>
-    /// The 400 ms mark, on an engine timer rather than a frame counter: the chat is often open over a paused tree, and
-    /// <c>CreateTimer</c>'s default <c>processAlways</c> keeps counting there.
+    /// On an engine timer rather than a frame counter: the chat is often open over a paused tree, and <c>CreateTimer</c>
+    /// keeps counting there by default
     /// </summary>
     private void ArmHoldTimer(int press)
     {
         SceneTree? tree = _label.GetTree();
         if (tree == null)
         {
-            // Not in the tree: the release-time check still covers the gesture.
+            // Not in the tree, where the release-time check still covers the gesture
             return;
         }
 
@@ -294,10 +227,6 @@ internal sealed class TouchSelectionGesture
         }
     }
 
-    /// <summary>
-    /// Turns the row into a text selection: anchor at the finger, highlight the message, and stop the label from
-    /// passing the drag on to the scroll container.
-    /// </summary>
     private void EnterSelection(Vector2 labelLocal)
     {
         if (_selecting)
@@ -308,15 +237,15 @@ internal sealed class TouchSelectionGesture
         _selecting = true;
         _showingSelection = true;
 
-        // The release that ends this press would otherwise open the reference preview (upstream decides "tap" by travel
-        // alone and its own handler runs before this one, LanConnectRichMessageView.cs:203-212).
+        // The release that ends this press would otherwise open the reference preview, because upstream decides "tap" by
+        // travel alone and its own handler runs before this one
         if (_raisesReference)
         {
             TouchChatScrollFix.ReferenceActivationGate.Arm();
         }
 
-        // A selection can be dropped by a focus change (rich_text_label.cpp:2603-2607) and GetSelectedText() would then
-        // be empty at the copy point, so hold on to it for the duration; the previous value is restored on exit.
+        // A focus change can drop the selection, and GetSelectedText() would then be empty at the copy point, so hold on
+        // to it for the duration and restore the previous value on exit
         _deselectOnFocusLoss = _label.DeselectOnFocusLossEnabled;
         _label.DeselectOnFocusLossEnabled = false;
 
@@ -329,7 +258,7 @@ internal sealed class TouchSelectionGesture
         TouchChatScrollFix.TouchSelectionSession.Begin(this);
     }
 
-    /// <summary>Finger up after selecting: copy the selected text and keep the highlight as the visible feedback.</summary>
+    /// <summary>Finger up after selecting: copy the text and keep the highlight on screen as the feedback</summary>
     private void FinishSelection()
     {
         _selecting = false;
@@ -337,15 +266,15 @@ internal sealed class TouchSelectionGesture
 
         if (GodotObject.IsInstanceValid(_label))
         {
-            // No finger is down any more, so the label must stop blocking the pointer: the next touch scrolls again (it
-            // also ends this selection, see ExitSelection). The highlight stays visible on purpose.
+            // No finger is down any more, so the label stops blocking the pointer and the next touch scrolls again, and
+            // also ends this selection. The highlight stays visible on purpose
             _label.MouseFilter = Control.MouseFilterEnum.Pass;
         }
     }
 
     /// <summary>
-    /// The recovery path for a hold whose timer never fired: the finger is already up, so the anchor press and the copy
-    /// are deferred to the next idle frame instead of being pushed from inside the input dispatch.
+    /// The recovery path for a hold whose timer did not fire. The finger is already up, so the anchor press and the copy
+    /// are deferred to the next idle frame rather than pushed from inside the input dispatch
     /// </summary>
     private void DeferredSelectAndCopy(Vector2 labelLocal)
     {
@@ -362,8 +291,8 @@ internal sealed class TouchSelectionGesture
                 _selecting = false;
                 CopySelection();
 
-                // No finger will extend this selection: drop the anchor again so a later stray motion cannot reshape the
-                // highlight that is now feedback rather than input.
+                // No finger will extend this selection, so drop the anchor again: a later stray motion would otherwise
+                // reshape a highlight that is feedback rather than input
                 InjectAnchorRelease(labelLocal);
                 if (GodotObject.IsInstanceValid(_label))
                 {
@@ -379,9 +308,9 @@ internal sealed class TouchSelectionGesture
     }
 
     /// <summary>
-    /// Leaves selection mode. Called for the emulated press that starts the next gesture, so it runs before the engine's
-    /// own press handling: no new anchor is made, and the press keeps bubbling to the chat scroll container, which means
-    /// the very first drag after a copy scrolls again (probe step S7: ScrollVertical 160 -> 130).
+    /// Leaves selection mode. Runs on the emulated press that starts the next gesture, which is the signal phase, before
+    /// the engine's own press handling: no new anchor is made and the press still bubbles to the chat scroll container, so
+    /// the first drag after a copy scrolls (probe: scroll 160 -> 130 on that drag)
     /// </summary>
     internal void ExitSelection()
     {
@@ -401,11 +330,11 @@ internal sealed class TouchSelectionGesture
             }
 
             // A second finger can end a selection that is still being shaped, i.e. while this press's engine anchor is
-            // still set. Nothing is injected to clear it (a synthetic event pushed from inside an input dispatch would
-            // re-enter the viewport's gui state); the engine clears the anchor with the release of that same finger, and
-            // this press is cancelled so no copy and no gate arming survives it. The one visible residue is described in
-            // the report: if that release never arrives, RichTextLabel can repaint a highlight on a later motion
-            // (rich_text_label.cpp:2940 does not check selection.enabled) until the next press.
+            // still set. Nothing is injected to clear it, because a synthetic event pushed from inside an input dispatch
+            // re-enters the viewport's gui state. The engine clears the anchor when that finger is released, and this
+            // press is cancelled so no copy and no armed gate survive it. Known residue: if that release does not arrive,
+            // RichTextLabel can repaint a highlight on a later motion, since the motion branch does not check
+            // selection.enabled, until the next press
             if (_selecting)
             {
                 _selecting = false;
@@ -419,7 +348,7 @@ internal sealed class TouchSelectionGesture
             }
 
             _label.MouseFilter = Control.MouseFilterEnum.Pass;
-            _label.SelectionEnabled = false; // deselects (rich_text_label.cpp:6539-6553)
+            _label.SelectionEnabled = false; // turning selection off also deselects
             _label.Deselect();
         }
         catch (Exception exception)
@@ -429,7 +358,6 @@ internal sealed class TouchSelectionGesture
         }
     }
 
-    /// <summary>Forces the selection out of the way, whatever state it is in.</summary>
     internal void ForceExit()
     {
         _cancelled = true;
@@ -437,12 +365,12 @@ internal sealed class TouchSelectionGesture
     }
 
     /// <summary>
-    /// Pushes the one event that gives the label a selection anchor: a left mouse button press at the finger.
+    /// Pushes the one event that gives the label a selection anchor, a left mouse button press at the finger
     ///
-    /// <para><c>DEVICE_ID_INTERNAL</c> keeps the <c>gui_input</c> signal and the script virtual from firing - the host
-    /// mod's <c>OnGuiInput</c> included - while leaving the engine's own <c>RichTextLabel::gui_input</c> running
-    /// (control.cpp:1852-1867). The engine's <c>_input</c> stage still receives the event. The position is passed
-    /// already converted to the viewport's space, hence <c>localCoords</c> true.</para>
+    /// <c>DEVICE_ID_INTERNAL</c> keeps the <c>gui_input</c> signal and the script virtual quiet, the host mod's
+    /// <c>OnGuiInput</c> included, while the engine's own <c>RichTextLabel::gui_input</c> still runs. The event is not
+    /// invisible elsewhere: it goes through <c>Viewport.PushInput</c>, so the engine's <c>_input</c> stage sees it first,
+    /// and the position is already in the viewport's space, hence <c>localCoords</c> true
     /// </summary>
     private void InjectAnchorPress(Vector2 labelLocal) => Inject(labelLocal, pressed: true);
 
@@ -476,9 +404,8 @@ internal sealed class TouchSelectionGesture
     }
 
     /// <summary>
-    /// The clipboard write. Reads the selected text first: <c>get_selected_text()</c> returns an empty string once
-    /// selection is disabled (rich_text_label.cpp:6869-6872), so the text has to be taken while the selection is still
-    /// live - which is exactly the moment the finger comes up.
+    /// <c>get_selected_text()</c> returns an empty string once selection is disabled, so the text has to be read while the
+    /// selection is live, which is the moment the finger comes up
     /// </summary>
     private void CopySelection()
     {
@@ -490,8 +417,8 @@ internal sealed class TouchSelectionGesture
         string text = _label.GetSelectedText();
         if (string.IsNullOrEmpty(text))
         {
-            // The highlight is on screen but the engine reports nothing selected: ask for the whole message instead of
-            // copying nothing. Only reachable if the selection was dropped between anchor and lift.
+            // The highlight is on screen but the engine reports nothing selected, so ask for the whole message rather than
+            // copy nothing. Reachable if the selection was dropped between anchor and lift
             _label.SelectAll();
             text = _label.GetSelectedText();
         }
@@ -508,9 +435,7 @@ internal sealed class TouchSelectionGesture
     }
 
     /// <summary>
-    /// Upstream publishes how many spans carry a reference (LanConnectRichMessageView.cs:86); zero means no activation
-    /// can follow this press at all. Read once per row instead of per press: the meta is written in the view's
-    /// constructor and never changes.
+    /// Read once per row rather than per press, because the meta is written in the view's constructor and does not change
     /// </summary>
     private static int ReadReferenceCount(RichTextLabel label)
     {
@@ -524,8 +449,8 @@ internal sealed class TouchSelectionGesture
     }
 
     /// <summary>
-    /// One brightening per copy. The previous pulse is killed first so two quick presses cannot leave the row bright
-    /// (two live tweens on <c>modulate</c> resolve in the wrong order otherwise).
+    /// One brightening per copy. The previous pulse is killed first because two live tweens on <c>modulate</c> resolve in
+    /// the wrong order
     /// </summary>
     private void Pulse()
     {
@@ -543,7 +468,7 @@ internal sealed class TouchSelectionGesture
         }
         catch (Exception)
         {
-            // A finished tween is already gone; nothing to stop.
+            // A finished tween is already gone, so nothing to stop
         }
 
         _row.Modulate = FeedbackModulate;
@@ -553,8 +478,8 @@ internal sealed class TouchSelectionGesture
     }
 
     /// <summary>
-    /// One warning per call site, never one per message: the rows are rebuilt continuously, so an unguarded log here
-    /// would flood the log file from a single broken build.
+    /// One warning per call site. The rows are rebuilt continuously, so an unguarded log here would flood the log file
+    /// from a single broken build
     /// </summary>
     private static void WarnOnce(ref int warned, string message)
     {
