@@ -68,7 +68,7 @@
 
 #### 5. 公告跟随频道（`announcement-source`，组 `Announce`）
 
-- 公告条外观与上游完全一致（不加来源标签、不加服务器箭头），只保留**滚轮翻页**（`_frame` 才是收到事件的 Stop 控件，`:131`）。
+- 公告条外观与上游完全一致：不加来源标签、不加服务器箭头、也不加自己的翻页手势。
 - 内容跟随**聊天频道当前所连的服务器**：`chat-server-switch` 只换频道目标、不动 `LobbyServerBaseUrl`，
   所以给 `ApplyAnnouncements`（`:3503`）挂 prefix 改 `__0`——聊天目标与大厅当前服不同时，换成该服缓存的公告列表；
   相同或尚未缓存时原样放行。每台服务器的公告独立拉取、缓存 60 s。
@@ -83,7 +83,8 @@
   （`:1731-1774`，break 在 `:1755-1759`）。点击死在浮层里，后面的游戏按钮连事件都收不到。
 - 折叠时这三个容器一起置 `Ignore`（只撤 `Stop` 没用，拾取会移到行上），展开时按第一帧抓到的原值（实测 `Pass / Stop / Pass`）逐个还原。
   拾取先递归子节点再判断自身（`:1849-1859` 与 `:1862`），所以气泡按钮在 `Ignore` 父节点下照样能点。
-- 只做电脑端：手机端保持上游原样（`OS.HasFeature("mobile")` 在补丁体第一行判断）。
+- 只做电脑端：手机端保持上游原样（`OS.HasFeature("mobile")` 在补丁体第一行判断）。理由是维护者在手机上确认过没有这个遮挡——
+  手机上只有气泡，玩家拖动气泡就能开聊天，那行提示不构成问题；不是技术上不能做。
 - 不动布局：提示文字的位置、宽度、字号一律不改，只改鼠标过滤。
 
 #### 7. 建房时自己选服务器（`server-pool-create-picker`，组 `Pool`）
@@ -97,12 +98,22 @@
 - `CreateRoomAsync` 的 prefix 读这个选择：自动 → 原逻辑不变；手动 → **只切到指定那台，切成功才建房；切失败不创建**，
   把原因写进对话框错误标签（`ShowCreateDialogError`，`:6845`）。
 - 手动选中的服务器若 `/probe` 的协议能力（已有缓存时）不支持当前档位，展开区给一行 muted 提示，但**不阻止创建**。
+- 手动选择**不记忆**：每次打开面板都回到「自动（延迟最低）」，折叠状态也回默认。复位挂在 `ShowCreateRoomDialog`（每次打开都会走的方法），
+  不是 `BuildCreateDialog`（启动时只跑一次）。
+
+#### 8. 建房对话框不再显示「联机协议」（`new-protocol-only`，组 `Modes`）
+
+- 这一版只允许用新协议建房，那两行协议卡片（兼容旧版 / 新协议 + 说明）就是多出来的一道选择题，还占着服务器选择要用的高度。
+- 做法：`BuildCreateDialog` 之后把整节从对话框里摘掉——只摘不释放，因为上游每次打开都会调 `RefreshProtocolProfileOptionAvailability`
+  去写那两个按钮，释放掉会让它每次打开都抛；协议 ID 在读取点覆盖成 `301`（`GetSelectedCreateProtocolId` 的 postfix），
+  因为上游每次打开都会把选择重置成它自己的默认值（无 RitsuLib 时是「兼容旧版」）。
+- 新协议当前不可用时（没有独立 tail 运行时）不改上游的选择，房间仍按旧协议建出来——能建房比"只让新协议"重要，日志会说明这一次走的是哪种。
 - 注入点：`BuildCreateDialog`（`LanConnectLobbyOverlay.cs:2480-2531`）postfix，插在「最大人数」行（`:2498`）之后、
   错误标签（`:2510-2514`）之前（`_createDialogBody`，`:190`/`:3122`）。
 
 ### 保留（5 项不变）
 
-`roster-rebaseline`、`load-join-order`、`new-run-button`、`new-run-save-binding`、`new-protocol-only`。
+`roster-rebaseline`、`load-join-order`、`new-run-button`、`new-run-save-binding`（`new-protocol-only` 这一版行为变过：协议一节整个摘掉，见第 8 节）。
 
 ### 说明
 

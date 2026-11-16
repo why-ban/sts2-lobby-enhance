@@ -367,10 +367,13 @@ pwsh -NoProfile -File tools/pack-upload-kit/test-upload-kit.ps1
 上传器 `steam_appid.txt` 是 `2868840`、`upload.ps1` 落盘时带 **UTF-8 BOM**（PS 5.1 没有 BOM 会整篇乱码）、
 打完后**重新解包**逐文件比对 sha256 与 `CHECKSUMS.txt`。任何一条不满足直接 exit 非 0。
 
-`test-upload-kit.ps1` 覆盖 6 组场景共 28 条断言：包内是否带 `workspace/mod_id.txt`（无 BOM、纯数字）、
-干净解压（真实 Steam，本机必然停在 `k_EResultAccessDenied` → 必须被翻译成「换账号」）、缺文件、
-文件被改坏、`visibility` 被改回 `private`、以及用假上传器验证**成功分支**（条目链接、`上传结果.txt`、
-`mod_id.txt`）。场景 1 会先删掉包里的 `mod_id.txt`，避免对线上条目发写请求。
+`test-upload-kit.ps1` 覆盖 6 组场景共 **34 条**断言：包内是否带 `workspace/mod_id.txt`（无 BOM、纯数字）、
+上传器返回 `k_EResultAccessDenied` 时失败必须被翻译成「换账号」、缺文件、文件被改坏、
+`visibility` 被改回 `private`、以及用假上传器验证**成功分支**（条目链接、`上传结果.txt`、`mod_id.txt`）。
+
+**这个脚本从不联系 Steam**：需要上传器输出时一律换成假上传器（`-Fail` 产出与真实 AccessDenied 同样的文本）。
+以前的场景 1 会真跑上传器、并且先删掉 `mod_id.txt` 复现"首次上传"——那等于在一个有许可的账号上真的新建
+一个工坊条目，随后临时目录被删，条目 ID 也就丢了。现在场景 1 还额外断言 `mod_id.txt` 没被删、没被改写。
 
 ### 9.2 包里是什么
 
