@@ -43,7 +43,8 @@ public sealed class FixRegistryTests
         "server-pool-refresh",
         "server-pool-join",
         "server-pool-create",
-        "lobby-entry-direct"
+        "lobby-entry-direct",
+        "room-chat-hint-passthrough"
     ];
 
     private static string ScriptsDirectory =>

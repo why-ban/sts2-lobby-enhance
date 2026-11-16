@@ -48,7 +48,8 @@ string[] expectedFixIds =
     "server-pool-refresh",
     "server-pool-join",
     "server-pool-create",
-    "lobby-entry-direct"
+    "lobby-entry-direct",
+    "room-chat-hint-passthrough"
 ];
 
 // 每一项修复至少要有这一处 Harmony 接缝被真正打上。id 出现在 applied 里只证明 Apply() 没抛异常，
@@ -69,7 +70,8 @@ string[] expectedFixIds =
     ("server-pool-refresh", "LanConnectLobbyOverlay",           "RefreshRoomsAsync"),
     ("server-pool-join",    "LanConnectLobbyOverlay",           "BeginJoinRoomAsync"),
     ("server-pool-create",  "LanConnectLobbyOverlay",           "CreateRoomAsync"),
-    ("lobby-entry-direct",  "LanConnectServerSelectionStartup", "Show")
+    ("lobby-entry-direct",  "LanConnectServerSelectionStartup", "Show"),
+    ("room-chat-hint-passthrough", "LanConnectRoomChatOverlay", "RefreshFromSource")
 ];
 
 AppDomain.CurrentDomain.AssemblyResolve += (_, eventArgs) =>
@@ -260,7 +262,8 @@ if (applied.Count > expectedFixIds.Length)
     ("server-pool-refresh", "Pool"),
     ("server-pool-join", "Pool"),
     ("server-pool-create", "Pool"),
-    ("lobby-entry-direct", "Pool")
+    ("lobby-entry-direct", "Pool"),
+    ("room-chat-hint-passthrough", "Chat")
 ];
 
 Console.WriteLine();
