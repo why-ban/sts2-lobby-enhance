@@ -62,7 +62,7 @@ string[] expectedFixIds =
     ("load-join-order",    "LanConnectTailMessageRuntime",     "RestoreLoadJoin"),
     ("new-run-button",     "NGameOverScreen",                  "_Ready"),
     ("new-run-save-binding", "RunManager",                       "SetUpNewMultiplayer"),
-    ("new-protocol-only",  "LanConnectLobbyOverlay",           "RefreshProtocolProfileOptionAvailability"),
+    ("new-protocol-only",  "LanConnectLobbyOverlay",           "GetSelectedCreateProtocolId"),
     ("room-version-filter", "LanConnectLobbyOverlay",           "GetFilteredRooms"),
     ("touch-chat-scroll",   "LanConnectRichMessageView",        "_Ready"),
     ("touch-chat-scroll",   "LanConnectRichMessageView",        "RaiseReferencePressed"),
