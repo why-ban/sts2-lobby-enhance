@@ -162,6 +162,20 @@ namespace Sts2LobbyEnhance;
             }
         }
 
+        /// <summary>
+        /// Upstream's pinned server (<c>LanConnectServerListBootstrap.FeaturedServerAddress</c>,
+        /// <c>LanConnectServerListBootstrap.cs:43</c>), which the chat row's reset button returns to on the lobby
+        /// side. Empty when the anchor was never captured.
+        /// </summary>
+        internal static string FeaturedAddress
+        {
+            get
+            {
+                Handles? handles = _handles;
+                return handles == null ? string.Empty : ReadFeatured(handles);
+            }
+        }
+
         /// <summary>Drops the cached candidate list so the next call rebuilds it (the configured server changed).</summary>
         internal static void Invalidate()
         {
