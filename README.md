@@ -1,6 +1,6 @@
 # 游戏大厅增强 / Game Lobby Enhance
 
-《杀戮尖塔 2》**v0.113.0** 的联机大厅增强 —— 社区模组
+《杀戮尖塔 2》**v0.113.0 / 0.113.1** 的联机大厅增强 —— 社区模组
 [`sts2_lan_connect`（游戏大厅 / LAN Connect）](https://steamcommunity.com/sharedfiles/filedetails/?id=3749766330)
 的**伴生模组**（companion mod）。
 
@@ -20,29 +20,31 @@
 - 清单里 `affects_gameplay: false` —— 装与不装的两台机器**不会**因为模组列表不一致而互相拒绝进房；
 - 只读取游戏自身的公开 / 内部 API，**不改存档格式、不改协议、不伪造进度**。
 
-**2.1.0 做 9 件事：4 项扩展 + 5 项大厅自己没做的修复。**
+**2.1.0 一共 15 项修复、9 个回滚分组。** 社区模组 0.6.4 已经自己适配了游戏 0.113，所以兼容层、
+极速 / 恐惧的建房与准备页、房间卡片的模式标注都不再由本模组接手（1.x 里这些接管在 2.0.0 全部删除）。
 
-社区模组 0.6.4 已经自己适配了游戏 0.113，所以兼容层、极速 / 恐惧的建房与准备页、房间卡片的模式标注都不再由
-本模组接手（1.x 里这些接管在 2.0.0 全部删除）。
-
-扩展（2.1.0 新增）：
+2.1.0 新加的 10 项：
 
 1. **服务器池** —— 所有服务器的房间摆在同一个列表里，按「同版本 → 人多 → 延迟低」排序，卡片标出来源服务器；
-2. **「相同版本」筛选** —— 只显示与本机游戏版本相同的房间；
-3. **聊天换服务器** —— 标题右边的 `‹ ›` 换着看不同服务器的公共频道，不切服、不退房、不写配置；
-4. **手机滑动聊天** —— 滑动即滚动、长按 0.4 秒进入选区并拖动框选、松手复制选区；PC 上拖拽仍是框选。
+2. **跨服加入** —— 点别家服务器的房间会先切服、复核房间仍在，再走原来的加入流程；
+3. **建房自动选服** —— 建房前挑「延迟最低、允许建房、且能承载当前协议档位」的那台；
+4. **建房手动选服** —— 面板里可折叠的一节，显示每台延迟；默认「自动（延迟最低）」，手动选中后只在那台建房，切不过去就不建；
+5. **进大厅直达房间列表** —— 不再先弹服务器选择器（右上角 SERVER 仍能打开）；
+6. **「相同版本」筛选** —— 只显示与本机游戏版本相同的房间；
+7. **聊天换服务器** —— 标题右边的 `‹ ›` 换着看不同服务器的公共频道，`⟳` 一键回置顶服；不切服、不退房、不写配置；
+8. **公告跟随频道** —— 公告内容跟着聊天频道当前那台服务器走，外观与上游完全一致；
+9. **手机滑动聊天** —— 滑动即滚动、长按 0.4 秒进入选区并拖动框选、松手复制选区；PC 上拖拽仍是框选；
+10. **局内收起聊天不再挡鼠标** —— 那行「按下 Enter 打开聊天窗口」不再吞掉游戏右上角按钮的点击（仅电脑端）。
 
-修复（大厅仍未覆盖）：
+大厅自己没做的 5 项（2.0.0 就有，其中最后一项这一版行为变过）：
 
-5. **结算页一键新开一局** —— 房主点一下，全房回到准备页；
-6. **新开一局之后存档仍可续玩** —— 不会因为房间还记着上一局的存档键而读不回来；
-7. **踢人 / 掉线之后照样能开局** —— 大厅的名册只能表达"有人加入"，减员后客户端会被判「Mod 不匹配」；
-8. **读档不必按最初加入顺序进房** —— 大厅按"加入序 vs 存档序"逐位比较，同队换序就失败；
-9. **建房只留「新协议」** —— 0.113 里只有新协议支持 RitsuLib，新旧协议联机体验无差别。
+11. **结算页一键新开一局** —— 房主点一下，全房回到准备页；
+12. **新开一局之后存档仍可续玩** —— 不会因为房间还记着上一局的存档键而读不回来；
+13. **踢人 / 掉线之后照样能开局** —— 大厅的名册只能表达"有人加入"，减员后客户端会被判「Mod 不匹配」；
+14. **读档不必按最初加入顺序进房** —— 大厅按"加入序 vs 存档序"逐位比较，同队换序就失败；
+15. **建房只按新协议** —— 这一版把建房对话框里「联机协议」那一节整个摘掉：只剩新协议一条路，那一节是多余的选择题。
 
-另有两处顺带改动：公告标出红字来源并支持滚轮翻页。
-
-完整清单见 [技术文档](docs/README.md)（14 项修复，每项都有 id、注入点与替代方案），
+完整清单见 [技术文档](docs/README.md)（15 项，每项都有 id、分组与注入点），
 逐版本改动见 [更新日志](docs/CHANGELOG.md)。
 
 ## 可靠性设计
@@ -50,26 +52,28 @@
 每个版本、每次社区模组更新，最常见的失败模式不是崩溃，而是**补丁悄悄没装上**。
 所以这一版把「版本开关」整个拆掉了：
 
-- 14 项修复各自实现 `ICompatFix`，自己解析锚点（类型 / 方法 / 参数类型逐个比对）；
+- 15 项修复各自实现 `ICompatFix`，在 `Applies()` 里一次性解析全部锚点（类型 / 方法 / 字段名逐个比对），缺哪个报哪个；
 - 9 个 `FixGroup`，每组一个 Harmony id，某组失败只回滚自己那组，其它照常工作；
-- 对不上时日志里明确写 `skipped: <id>: missing: <具体锚点>`，而不是整体静默失效。
+- 对不上时启动日志明确写 `skip <id>: missing: <具体锚点>`，而不是整体静默失效。
 
 启动日志里能看到一行汇总：
 
-```
-[lobby-enhance] summary: applied=14[...] skipped=0[] failed=0
-```
+`@
+[lobby-enhance] summary: applied=15[...] skipped=0[] failed=0
+`@
 
 ## 环境要求
 
 | 项 | 要求 |
 |---|---|
-| 游戏 | Slay the Spire 2 **0.113.0**（Windows 桌面版 / Android 第三方启动器） |
+| 游戏 | Slay the Spire 2 **0.113.0 / 0.113.1**（Windows 桌面版 / Android 第三方启动器） |
 | 社区模组「游戏大厅」 | `sts2_lan_connect` **0.6.4 或更新**（创意工坊必需物品，订阅本模组会自动装上） |
-| 联机双方 | **都要装**本模组。只装一边能用，但「新开一局」等新功能不对等 |
 
-> **2.0.0 依赖「游戏大厅」0.6.4。** 从 1.x 升级时请把大厅一并更新，否则本补丁打不上任何一项。
-> 大厅 0.6.4 与更早的 0.6.3 房间不互通（上游自己改了消息布局），所以房间里所有人要一起升。
+> **谁需要装**：本机想看到这些改动就得装（服务器池、筛选、聊天、选服、手机操作都是本机补丁）。
+> 其中三项与对局另一侧有关：「踢人 / 掉线后照样开局」「读档免排队」要求加入的那一端也装，
+> 「一键新开一局」要求房主与加入方都装，否则只有装的那一边会回准备页。
+
+> **0.6.4 起与更早的 0.6.3 房间不互通**（上游自己改了消息布局），房间里所有人要一起升。
 
 ## 安装
 
@@ -84,30 +88,34 @@
 
 需要 .NET 9 SDK，以及已经安装的游戏（构建只**读取**游戏程序集）。
 
-```powershell
+`@powershell
 dotnet build src/Sts2LobbyEnhance/Sts2LobbyEnhance.csproj -c Release -p:SkipModCopy=true
-```
+`@
 
 打发布件（写入 `packaging/content/` 与 `dist/`）：
 
-```powershell
+`@powershell
 pwsh -File packaging/build-content.ps1 -SkipBuild
 pwsh -File tools/pack-release/pack-release.ps1
-```
+`@
 
 `-p:Sts2Root=` 可以指向别的游戏安装目录。构建默认**不会**把产物复制进游戏的 `mods/`。
 
 ## 验证
 
-```powershell
+`@powershell
 dotnet test tests/Sts2LobbyEnhance.Tests/Sts2LobbyEnhance.Tests.csproj -c Release
 dotnet run --project tools/smoke-test/smoke-test.csproj -c Release
-```
+dotnet run --project tools/contract-check/contract-check.csproj -c Release
+`@
 
-`tools/` 下另有几个离线复现工具（`roster-probe` / `loadjoin-probe` / `savebinding-probe` /
-`contract-check`），每个都能对着社区模组与游戏的真实程序集复现对应的上游缺陷——
-它们对应的正是仍然保留的那 5 项修复。
-详见 [`tests/README.md`](tests/README.md) 与 [`docs/README.md`](docs/README.md)。
+- `dotnet test`：59 个用例。其中 30 个需要游戏 / 官方 DLL / 构建产物，缺输入时**不是静默跳过**——
+  覆盖率门禁会把缺的输入点名报出来。
+- `smoke-test`：加载**出货的** `packaging/content/sts2_lobby_enhance.dll`，跑 `Entry.RunSilently()`，
+  断言 15 项 id、顺序、分组，以及每项至少有一处真实 Harmony 接缝。**它证明的是"补丁挂上了"，不证明行为正确**。
+- `tools/` 下另有离线复现工具（`roster-probe` / `loadjoin-probe` / `savebinding-probe`），
+  对着真实的社区模组与游戏程序集复现对应缺陷；发版前手工各跑一次（见 [上传流程](docs/UPLOAD.md)）。
+- 上传包验收 `tools/pack-upload-kit/test-upload-kit.ps1` 有 35 条断言，**全程不联系 Steam**（需要上传器输出时用假上传器）。
 
 **测试覆盖的边界（诚实说明）**：Windows 桌面版作房主 + Android 作客户端是反复验证过的；
 Android 作房主验证过一次；**PC 作为加入方（客户端）尚未验证**。
@@ -116,8 +124,8 @@ Android 作房主验证过一次；**PC 作为加入方（客户端）尚未验�
 
 | 路径 | 内容 |
 |---|---|
-| `src/Sts2LobbyEnhance/` | 模组本体（`Scripts/` 按注入点分目录：Join / Wire / Tail / Gameplay / Restart / Ui / Unlock / Core） |
-| `tests/` | xUnit 套件：契约、断点、发布件、UI 布局 |
+| `src/Sts2LobbyEnhance/` | 模组本体（`Scripts/` 按注入点分目录：Core / Restart / Tail / Filter / Pool / Chat / Touch / Ui） |
+| `tests/` | xUnit 套件：契约、断点扫描、发布件、UI 几何、覆盖率门禁 |
 | `tools/` | 离线复现与验证工具（每个都是独立可运行项目） |
 | `packaging/` | 创意工坊上传工作区（`workshop.json`、封面、内容文件、条目 ID） |
 | `docs/` | [技术文档](docs/README.md)、[更新日志](docs/CHANGELOG.md)、[上传流程](docs/UPLOAD.md)、调研记录 |
@@ -133,9 +141,9 @@ Android 作房主验证过一次；**PC 作为加入方（客户端）尚未验�
   结算页「新开一局」的设计与实现要点（该 issue 最初还提过「局中重开本层」，我们后来撤回了，
   原因见 issue 里的评论：房间中途有人掉线时它本来就失效，而那正是最需要它的场景）。
 
-代码里对每一处上游行为都标了 `文件:行号`（以「游戏大厅」**0.6.4 的 GitHub 源码**为基准；0.6.3 时代引用的
-反编译行号已随 2.0.0 一并清理）。
-如果有用得上的地方，按 GPL-3.0 直接取用即可，不需要额外授权。
+代码里对每一处上游行为都用**方法名与行为描述**标出来（不写行号：行号会随上游每次提交漂移，
+而且本项目自己的注释规范不允许把行号写进源码）。默认基准是「游戏大厅」**0.6.4 的 GitHub 源码**；
+需要引用具体位置时以该版本为准。如果有用得上的地方，按 GPL-3.0 直接取用即可，不需要额外授权。
 
 ## 关于 AI 参与
 
@@ -144,15 +152,15 @@ Android 作房主验证过一次；**PC 作为加入方（客户端）尚未验�
 
 因为 AI 生成内容需要人来担保，所以：
 
-- 每一次发版前必须跑通 `dotnet test` + `tools/smoke-test`，且 `smoke-test` 会**真的调用**
-  关键方法（不只是检查补丁挂上没有）；
+- 每一次发版前必须跑通门禁（构建 → 内容 → 发布包 → 冒烟 → 测试 → 上传包验收），顺序见 [技术文档](docs/README.md)；
 - 提交给上游的 issue / PR 都会在正文开头注明是 AI 提交；
 - 发现 AI 写错的地方，会在对应文档里留下更正记录，而不是改掉历史。
 
 ## 许可
 
 GPL-3.0，全文见 [`LICENSE`](LICENSE)（与上游 `STS2-Game-Lobby` 的 LICENSE 逐字节一致）。
-本模组不打包社区模组的任何文件，但源码中含从该 GPL-3.0 项目移植的逻辑，因此整体以 GPL-3.0 发布。
+本模组不打包社区模组的任何文件，但源码是对该 GPL-3.0 项目的衍生作品（所有修复都针对它的行为编写，
+并通过反射调用它的内部成员），因此整体以 GPL-3.0 发布。
 第三方声明见 [`docs/THIRD_PARTY_NOTICES`](docs/THIRD_PARTY_NOTICES)。
 
 ---
@@ -165,12 +173,15 @@ It ships no file of the official mod and replaces nothing: at runtime it Harmony
 official mod, which keeps updating from the Workshop as usual. `affects_gameplay: false`, so a patched
 and an unpatched machine still join each other.
 
-**Since 2.1.0 it does nine things**, because the lobby mod's own 0.6.4 already supports game 0.113: the
-compatibility layer, Blitz / Dread hosting and room-card labels are no longer ours (all of that was removed
-in 2.0.0). What remains is what the lobby does not do yet: one-click "new run" from the game-over screen,
-keeping that new run's save loadable, re-baselining a shrunken roster, reordering a save-load join, and
-offering only the new protocol when creating a room. Five repairs across four isolated Harmony groups;
-anything that no longer resolves disables only itself and says so in the log.
+**2.1.0 is fifteen repairs in nine rollback groups.** The lobby mod's own 0.6.4 already supports game
+0.113, so the compatibility layer, Blitz / Dread hosting and room-card labels are no longer ours (all of
+that was removed in 2.0.0). Ten of the fifteen are new in 2.1.0: a server pool that lists every server's
+rooms in one place (joining across servers switches the lobby, as the lobby itself does), straight-to-list
+lobby entry, a same-game-version filter, switching which server the public chat channel points at, a
+collapsible server picker inside the create-room dialog (defaults to the lowest-latency server, never
+remembers a manual pick), and touch scrolling with long-press selection and copy. The other five were
+already in 2.0.0: one-click "new run" from the game-over screen, keeping that new run's save loadable,
+re-baselining a shrunken roster, reordering a save-load join, and creating rooms on the new protocol only.
 
 Build with `dotnet build src/Sts2LobbyEnhance/Sts2LobbyEnhance.csproj -c Release -p:SkipModCopy=true`,
 verify with `dotnet test` plus `tools/smoke-test`. Details in [`docs/README.md`](docs/README.md).

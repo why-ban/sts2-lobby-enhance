@@ -229,6 +229,14 @@ cd <解压目录>
 
    `dotnet test` 必须是 **0 skipped**。有跳过就说明游戏依赖型用例没跑（`GameDependentCoverageTests`
    会因为这一点直接失败），"全绿"必须在"全跑过"的前提下才成立。
+
+   另外**手工**跑三个离线探针（各几秒，需要游戏目录；不放进 `dotnet test`，因为它们要加载真实二进制）：
+
+   - `dotnet run --project tools/roster-probe -c Release` —— 期望 `OK: unpatched rejects …, patched accepts …`
+   - `dotnet run --project tools/loadjoin-probe -c Release` —— 期望 `PASS: join order … rejected before, accepted after`
+   - `dotnet run --project tools/savebinding-probe -c Release` —— 期望五种情形与发布记录一致
+
+   它们验的是这几项修复的**行为**，而 `smoke-test` 只验接缝挂没挂上——这是两者互补的地方。
 3. 打包发布件 —— **只准用这一条命令**（输入写死为 `packaging/content`，会自校验并打印 size/sha256）：
 
    ```powershell

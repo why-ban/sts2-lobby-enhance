@@ -11,7 +11,7 @@
 
 分组决定"一起失败的接缝"：组内任一项装不上就整组回滚（每组一个 Harmony id，`sts2_lobby_enhance.<组名小写>`）。
 
-| # | id | 组 | 做什么 | 注入点（0.6.4 / 游戏 0.113） |
+| # | id | 组 | 做什么 | 主要注入点（0.6.4 / 游戏 0.113；有的修复挂多处） |
 |---|---|---|---|---|
 | 1 | `roster-rebaseline` | Roster | 减员后把本地名册重新基线化 | `LanConnectRosterAuthorityState.Accept` |
 | 2 | `load-join-order` | LoadOrder | 读档加入前按存档下标原地重排 | `LanConnectTailMessageRuntime.RestoreLoadJoin` |
@@ -29,8 +29,8 @@
 | 14 | `lobby-entry-direct` | Pool | 点「游戏大厅」直达房间列表，不弹服务器选择器 | `LanConnectServerSelectionStartup.Show` |
 | 15 | `room-chat-hint-passthrough` | Chat | 局内收起聊天时那行提示不再吞点击（仅电脑端） | `LanConnectRoomChatOverlay.RefreshFromSource` |
 
-每个修复都在 `Applies()` 里一次性解析全部反射锚点，缺哪个报哪个（clean skip），补丁体全部 try/catch；
-`Applies()` / `Apply()` 里没有任何 Godot 调用，所以冒烟测试能在没有 Godot 的进程里跑它们。
+每个修复都在 `Applies()` 里一次性解析全部反射锚点，缺哪个报哪个（clean skip）；补丁体各自 try/catch 包住节点读写，
+只有取参与前置判断在 try 外。`Applies()` / `Apply()` 里没有任何 Godot 调用，所以冒烟测试能在没有 Godot 的进程里跑它们。
 
 ## 玩家看到的变化（2.1.0）
 
@@ -39,7 +39,7 @@
 - **聊天换服务器**：标题行 ‹ › 切公共频道所连的服务器，⟳ 回置顶服；公告跟着频道走。
 - **建房选服务器**：面板里可折叠的一节，显示每台延迟；默认「自动（延迟最低）」，手动选中后只在那台建房，切不过去就不建；
   选择**不记忆**，每次打开都回到自动。
-- **建房对话框不再显示联机协议**：只剩新协议这一条路，那一节没有意义。
+- **建房对话框不再显示联机协议**：默认按新协议建房（没有独立 tail 运行时的那一侧仍保留上游选择，能建房优先）。
 - **手机**：滑动即滚动；长按 0.4 秒让这条消息进入选中态，接着拖动就是框选，松手复制选区。
 - **局内**：收起聊天后那行提示不再挡住游戏右上角的按钮（只改鼠标过滤，不动布局）。
 - **结算页**：一键新开一局、全房回准备页；新开之后存档仍可续；踢人/掉线后照样能开局；读档不必按原顺序进房。
@@ -57,7 +57,7 @@ pwsh -NoProfile -File tools\pack-upload-kit\test-upload-kit.ps1
 `@
 
 期望值：build 0 警告 0 错误；smoke 打印 `OK (15 fixes applied)` 且 15 项 id / 分组 / 接缝全绿；
-`dotnet test` 59 通过 0 跳过；上传包验收 34 条全过（**不联系 Steam**）。
+`dotnet test` 59 通过 0 跳过；上传包验收 35 条全过（**不联系 Steam**）。
 
 - `build-content` 必须紧跟 `build`：测试断言"出货 DLL 与当前构建逐字节一致"。
 - `pack-release` 必须在 `dotnet test` 之前：那条「dist 里的 zip 与 content 逐字节一致」的测试在 dist 为空时会跳过，

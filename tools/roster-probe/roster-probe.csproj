@@ -10,7 +10,6 @@
 
   <PropertyGroup>
     <Sts2DataDir Condition="'$(Sts2DataDir)' == ''">D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</Sts2DataDir>
-    <HostModDll Condition="'$(HostModDll)' == ''">D:\zhuanban\sts2m\work\lobby\STS2-Game-Lobby\releases\sts2_lan_connect\sts2_lan_connect.dll</HostModDll>
   </PropertyGroup>
 
   <!--

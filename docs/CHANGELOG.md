@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 的结构，版本号遵循语义化版本。
 
-## [2.1.0] - 2026-11-15
+## [2.1.0] - 2026-11-16
 
 目标游戏 **0.113**；依赖 `sts2_lan_connect` **0.6.4**。修复项 **5 → 15**，Harmony 分组 **4 → 9**。
 
@@ -13,7 +13,7 @@
 
 #### 1. 服务器池（`server-pool-refresh` / `server-pool-join` / `server-pool-create` / `lobby-entry-direct`，组 `Pool`）
 
-- 房间列表变成**所有服务器的池**：客户端并发拉每台的 `GET /rooms`，逐台回填，哪台先回来先显示。
+- 房间列表变成**所有服务器的池**：客户端并发拉每台的 `GET /rooms`，整轮结算后**一次性提交**（不画残缺的房间数）。
 - 数据键是 `(baseUrl, roomId)`：`roomId` 是各服独立的 UUIDv4，没有服务器命名空间（`lobby-service/src/store.ts:361`），
   只存 roomId 必然 404。
 - 排序：与本机游戏版本相同优先 → `currentPlayers` 降序 → 该服延迟升序 → 上游原顺序。
@@ -24,8 +24,8 @@
 - 单台 **2 s** 硬顶（用 `CancellationToken`，不是 `HttpClient.Timeout`——后者写死 10 s 改不了），死节点静默跳过，全失败保留上一轮。
 - **死节点冷却退避**：连续失败按 10 / 30 / 90 / 300 秒冷却（成功清零），冷却期内本轮直接跳过、不再吃它的超时。
   依据实测：同一时刻含 2 台死节点时整轮 **2,013–2,110 ms**，把它们剔出轮次后 **247–333 ms**。
-- **重绘合并 + 稳定排序**：旧实现把「到达顺序」当最后排序键，一轮里列表内容会换 15–17 次（看起来像在跳）；
-  现在 120 ms 合并 + 固定排序键（同版本 → 人数降序 → 延迟升序 → 地址），一轮只重绘 1–2 次。
+- **整轮一次提交 + 稳定排序**：旧实现把「到达顺序」当最后排序键，一轮里列表内容会换 15–17 次（看起来像在跳）；
+  现在每轮只提交一次，排序键固定（同版本 → 人数降序 → 延迟升序 → 地址），内容没变就一次都不重建。
 - **刷新节奏保持 8 秒**：不做自适应加速。实测 4 秒节奏等于把服务器带宽压力翻倍（忙服 40 人同时开列表 ≈ 3.6 → 7.1 Mbps），
   而「秒开」的收益已经由死节点退出轮次拿到了。
 
@@ -34,8 +34,8 @@
 - 筛选弹窗新增「版本」节，一个 chip「相同游戏版本」；**只比游戏版本**（`LobbyRoomSummary.Version`），不比 Mod 版本、不比协议档位。
 - 谓词落在 `GetFilteredRooms` 的 postfix（`:7036`，5 个调用点全覆盖），原地删元素，不换 List 实例。
 - 上游没有排序（`Sort`/`OrderBy` 全仓 0 命中），筛选顺序即服务端返回顺序。
-- 弹窗原本是固定 360 px 高（`CreateDialogShell:3158-3175` 的 `OffsetTop/Bottom = ∓180`），加一节会溢出，
-  所以同时把 `MarginContainer` 上下各放大 43 px。
+- 弹窗不需要为这一节改尺寸：它的 `CenterContainer` 会按内容的最小尺寸摆，实测 561×392 px（宽=卡片 560，高按内容走）。
+  早期版本曾给 `MarginContainer` 加过 ±43 px，实测对布局毫无作用，已删除。
 
 #### 3. 聊天换服务器（`chat-server-switch`，组 `Chat`）
 
@@ -70,8 +70,9 @@
 
 - 公告条外观与上游完全一致：不加来源标签、不加服务器箭头、也不加自己的翻页手势。
 - 内容跟随**聊天频道当前所连的服务器**：`chat-server-switch` 只换频道目标、不动 `LobbyServerBaseUrl`，
-  所以给 `ApplyAnnouncements`（`:3503`）挂 prefix 改 `__0`——聊天目标与大厅当前服不同时，换成该服缓存的公告列表；
-  相同或尚未缓存时原样放行。每台服务器的公告独立拉取、缓存 60 s。
+  所以给 `LobbyApiClient.GetAnnouncementsAsync`（两条公告路径的唯一收口）挂 prefix，把请求地址换成频道当前那台；
+  同服时原样放行。替身客户端**不带本服 token**——这些凭据属于玩家所在的那台，而 `/announcements` 不需要鉴权。
+  没有额外的公告缓存层：上游本来每次刷新都会拉。
 
 #### 6. 局内折叠提示不再挡鼠标（`room-chat-hint-passthrough`，组 `Chat`）
 
@@ -98,7 +99,7 @@
 - `CreateRoomAsync` 的 prefix 读这个选择：自动 → 原逻辑不变；手动 → **只切到指定那台，切成功才建房；切失败不创建**，
   把原因写进对话框错误标签（`ShowCreateDialogError`，`:6845`）。
 - 手动选中的服务器若 `/probe` 的协议能力（已有缓存时）不支持当前档位，展开区给一行 muted 提示，但**不阻止创建**。
-- 手动选择**不记忆**：每次打开面板都回到「自动（延迟最低）」，折叠状态也回默认。复位挂在 `ShowCreateRoomDialog`（每次打开都会走的方法），
+- 手动选择**不记忆**：每次打开面板都回到「自动（延迟最低）」，折叠状态也回默认。复位挂在 `OpenCreateDialogInternal`（每次打开都会走的方法），
   不是 `BuildCreateDialog`（启动时只跑一次）。
 
 #### 8. 建房对话框不再显示「联机协议」（`new-protocol-only`，组 `Modes`）
@@ -108,10 +109,9 @@
   去写那两个按钮，释放掉会让它每次打开都抛；协议 ID 在读取点覆盖成 `301`（`GetSelectedCreateProtocolId` 的 postfix），
   因为上游每次打开都会把选择重置成它自己的默认值（无 RitsuLib 时是「兼容旧版」）。
 - 新协议当前不可用时（没有独立 tail 运行时）不改上游的选择，房间仍按旧协议建出来——能建房比"只让新协议"重要，日志会说明这一次走的是哪种。
-- 注入点：`BuildCreateDialog`（`LanConnectLobbyOverlay.cs:2480-2531`）postfix，插在「最大人数」行（`:2498`）之后、
-  错误标签（`:2510-2514`）之前（`_createDialogBody`，`:190`/`:3122`）。
+- 注入点：`BuildCreateDialog` 的 postfix（把整节摘下）+ `GetSelectedCreateProtocolId` 的 postfix（在读取点覆盖成 `301`）。
 
-### 保留（5 项不变）
+### 保留的 5 项（其中一项这一版行为变过）
 
 `roster-rebaseline`、`load-join-order`、`new-run-button`、`new-run-save-binding`（`new-protocol-only` 这一版行为变过：协议一节整个摘掉，见第 8 节）。
 

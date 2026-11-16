@@ -30,7 +30,7 @@ string gameDir = args.Length > 0
 
 string hostDll = args.Length > 1
     ? args[1]
-    : @"D:\zhuanban\sts2m\work\lobby\STS2-Game-Lobby\releases\sts2_lan_connect\sts2_lan_connect.dll";
+    : @"D:\SteamLibrary\steamapps\workshop\content\2868840\3749766330\sts2_lan_connect.dll";
 
 string? explicitPatchDll = args.Length > 2 ? args[2] : null;
 

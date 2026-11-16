@@ -541,7 +541,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
     private static string NoBindingLookup(string detail) =>
         $"the client/host check is unavailable ({detail}), so a roster snapshot reaching a host binding would " +
         "also be re-baselined. Re-baselining itself is unaffected: Accept is only reached from the client-side " +
-        "restore handlers (LanConnectTailMessageRuntime.cs:1064).";
+        "restore handlers.";
 
     private static string Describe(ParameterInfo[] parameters) =>
         string.Join(", ", parameters.Select(parameter => parameter.ParameterType.FullName ?? parameter.ParameterType.Name));

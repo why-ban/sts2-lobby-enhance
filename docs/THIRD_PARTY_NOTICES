@@ -43,8 +43,9 @@ by, or supported by MegaCrit Games.
 Project : Harmony, https://github.com/pardeike/Harmony
 Licence : MIT
 
-Harmony is used to install the runtime patches. It is shipped with Slay the Spire 2 and is not
-redistributed here; this project only references it at compile time and expects the game to load it.
+Harmony is what installs the runtime patches: the mod creates one `Harmony` instance per rollback group at
+startup and calls `Patch` on it. The assembly ships with Slay the Spire 2 and is not redistributed here — the
+mod references it at compile time and uses the copy the game has already loaded.
 
 
 4. Godot Engine / GodotSharp
@@ -52,8 +53,9 @@ redistributed here; this project only references it at compile time and expects 
 Project : Godot Engine, https://godotengine.org
 Licence : MIT
 
-`GodotSharp.dll` is part of the game installation and is not redistributed here. The patch uses it only
-for the types that appear in game method signatures (for example `Godot.SceneTree`).
+`GodotSharp.dll` is part of the game installation and is not redistributed here. The patch uses it at
+runtime to read and write Control properties and to build the few widgets it adds (a header row, a scroll-bar
+hook), all inside the game's own Godot host.
 
 
 5. Build and test tooling
