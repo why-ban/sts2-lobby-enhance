@@ -972,11 +972,11 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         Button previous = CreateArrowButton(shape, panel, "‹", "切换到上一台服务器的公共频道");
         Button next = CreateArrowButton(shape, panel, "›", "切换到下一台服务器的公共频道");
         Button reset = CreateResetButton(shape, panel);
-        previous.Connect(Button.SignalName.Pressed, Callable.From(() => BeginStep(-1)));
-        next.Connect(Button.SignalName.Pressed, Callable.From(() => BeginStep(1)));
+        Wire(previous, () => BeginStep(-1));
+        Wire(next, () => BeginStep(1));
         // No animation of any kind: a press only starts the switch. Visual feedback is the button's own
         // hover/pressed stylebox.
-        reset.Connect(Button.SignalName.Pressed, Callable.From(() => BeginReset(shape)));
+        Wire(reset, () => BeginReset(shape));
 
         var built = new HBoxContainer { Name = SwitchRowNodeName };
         built.AddThemeConstantOverride("separation", RowSeparation);
@@ -991,6 +991,24 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         var widgets = new RowWidgets(reset, previous, next);
         Rows.Add(built, widgets);
         return widgets;
+    }
+
+    /// <summary>
+    /// On a phone this row sits inside the compact sidebar's scroll, so a drag over one of these buttons has to move that
+    /// sidebar instead of switching the channel it happened to land on. The drag is swallowed, a press still switches
+    /// </summary>
+    private static void Wire(Button button, Action action)
+    {
+        TouchDragScroll? drag = TouchChatScrollFix.Platform.IsMobile ? TouchDragScroll.Attach(button) : null;
+        button.Connect(Button.SignalName.Pressed, Callable.From(() =>
+        {
+            if (drag?.ConsumeActivation() == true)
+            {
+                return;
+            }
+
+            action();
+        }));
     }
 
     /// <summary>

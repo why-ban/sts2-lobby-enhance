@@ -206,6 +206,13 @@ internal sealed class CreateServerPickerSection
     /// <summary>The selection state the host styling call was last applied with.</summary>
     private const string RowSelectedMeta = "pool_picker_selected";
 
+    /// <summary>Share of the viewport height the expanded list may take on a phone before it scrolls on its own</summary>
+    private const float ListHeightFraction = 0.38f;
+
+    private const float MinListHeight = 160f;
+
+    private const float FallbackRowHeight = 44f;
+
     private readonly PoolAnchors _anchors;
 
     private readonly object _overlay;
@@ -219,6 +226,12 @@ internal sealed class CreateServerPickerSection
     private readonly Button _header;
 
     private readonly VBoxContainer _rows;
+
+    /// <summary>The scrolling shell around the rows on a phone, absent on a desktop where the dialog scrolls instead</summary>
+    private readonly ScrollContainer? _listScroll;
+
+    /// <summary>Whichever node carries "the list is expanded": the scroll when there is one, else the rows</summary>
+    private readonly Control _listHost;
 
     private readonly Label? _hint;
 
@@ -249,11 +262,29 @@ internal sealed class CreateServerPickerSection
 
         _rows = new VBoxContainer
         {
-            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            Visible = state.Expanded
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
         };
         _rows.AddThemeConstantOverride("separation", 6);
-        _root.AddChild(_rows);
+
+        if (TouchChatScrollFix.Platform.IsMobile)
+        {
+            _listScroll = new ScrollContainer
+            {
+                HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+                VerticalScrollMode = ScrollContainer.ScrollMode.Auto,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                Visible = state.Expanded
+            };
+            _listScroll.AddChild(_rows);
+            _root.AddChild(_listScroll);
+            _listHost = _listScroll;
+        }
+        else
+        {
+            _rows.Visible = state.Expanded;
+            _root.AddChild(_rows);
+            _listHost = _rows;
+        }
 
         _hint = BuildHint();
         _root.AddChild(_hint);
@@ -303,6 +334,17 @@ internal sealed class CreateServerPickerSection
 
     private Button BuildHeader(CreateServerPickerState state)
     {
+        TouchDragScroll? drag = null;
+        Action toggle = () =>
+        {
+            if (drag?.ConsumeActivation() == true)
+            {
+                return;
+            }
+
+            Toggle();
+        };
+
         Button? button = null;
         if (_anchors.CreateActionButton is { } factory)
         {
@@ -312,7 +354,7 @@ internal sealed class CreateServerPickerSection
             {
                 string.Empty,
                 "选择房间发布到哪一台大厅服务器。默认自动：延迟最低且允许建房的那台。",
-                new Action(Toggle),
+                toggle,
                 false,
                 false,
                 glyph
@@ -322,10 +364,17 @@ internal sealed class CreateServerPickerSection
         if (button == null)
         {
             button = new Button { CustomMinimumSize = new Vector2(0f, 44f) };
-            button.Pressed += Toggle;
+            button.Pressed += toggle;
         }
 
         button.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+
+        // A drag over the header is an attempt to scroll the dialog, not a request to fold the section
+        if (TouchChatScrollFix.Platform.IsMobile)
+        {
+            drag = TouchDragScroll.Attach(button);
+        }
+
         return button;
     }
 
@@ -350,9 +399,9 @@ internal sealed class CreateServerPickerSection
         {
             CreateServerPickerState state = CreateServerPickerState.For(_overlay);
             state.Expanded = !state.Expanded;
-            if (IsLive(_rows))
+            if (IsLive(_listHost))
             {
-                _rows.Visible = state.Expanded;
+                _listHost.Visible = state.Expanded;
             }
 
             UpdateHeader();
@@ -396,12 +445,50 @@ internal sealed class CreateServerPickerSection
                 AddRow(server.BaseUrl, server.ShortName(16) + " · " + LatencyLabel(server), server.BaseUrl, selected);
             }
 
+            ApplyListHeight();
             UpdateHint(state);
         }
         catch (Exception exception)
         {
             PoolRefreshFix.WarnOnce("create-picker-rows", "the server list could not be drawn: " + PoolRoomClient.Describe(exception));
         }
+    }
+
+    /// <summary>
+    /// Gives the list a height of its own on a phone, as tall as its content but never more than a share of the screen.
+    /// The dialog rebuilt nothing when the section expanded - its card is sized once from the collapsed body - so without
+    /// a cap the only way to the rest of the dialog is the dialog's own scrollbar
+    /// </summary>
+    private void ApplyListHeight()
+    {
+        try
+        {
+            ScrollContainer? scroll = _listScroll;
+            if (scroll == null || !GodotObject.IsInstanceValid(scroll) || !scroll.IsInsideTree())
+            {
+                return;
+            }
+
+            float cap = Mathf.Max(MinListHeight, scroll.GetViewportRect().Size.Y * ListHeightFraction);
+            scroll.CustomMinimumSize = new Vector2(0f, Mathf.Min(ListContentHeight(), cap));
+        }
+        catch (Exception exception)
+        {
+            PoolRefreshFix.WarnOnce(
+                "create-picker-height",
+                "the server list could not be given a height: " + PoolRoomClient.Describe(exception));
+        }
+    }
+
+    private float ListContentHeight()
+    {
+        if (!IsLive(_rows))
+        {
+            return 0f;
+        }
+
+        float height = _rows.GetCombinedMinimumSize().Y;
+        return height > 0f ? height : Mathf.Max(1, _rows.GetChildCount()) * FallbackRowHeight;
     }
 
     /// <summary>
@@ -420,7 +507,20 @@ internal sealed class CreateServerPickerSection
         row.SetMeta(RowBaseMeta, baseUrl ?? string.Empty);
         row.SetMeta(RowLabelMeta, label);
         ApplyRowStyle(row, label, selected);
-        row.Pressed += () => Select(baseUrl);
+
+        // The row stops the pointer, so it is also the row that has to move the list and then refuse the activation a
+        // swipe would otherwise produce
+        TouchDragScroll? drag = TouchChatScrollFix.Platform.IsMobile ? TouchDragScroll.Attach(row, _listScroll) : null;
+        row.Pressed += () =>
+        {
+            if (drag?.ConsumeActivation() == true)
+            {
+                return;
+            }
+
+            Select(baseUrl);
+        };
+
         _rows.AddChild(row);
     }
 
@@ -470,7 +570,16 @@ internal sealed class CreateServerPickerSection
         try
         {
             CreateServerPickerState state = CreateServerPickerState.For(_overlay);
+
+            // Picking a server answers the question this section asks, so the list folds and the header carries the
+            // choice; the selection itself outlives the fold and is what the create path reads
             state.BaseUrl = baseUrl;
+            state.Expanded = false;
+            if (IsLive(_listHost))
+            {
+                _listHost.Visible = false;
+            }
+
             RestyleRows(baseUrl);
             UpdateHeader();
             UpdateHint(state);
@@ -695,9 +804,9 @@ internal sealed class CreateServerPickerSection
         try
         {
             CreateServerPickerState state = CreateServerPickerState.For(_overlay);
-            if (IsLive(_rows))
+            if (IsLive(_listHost))
             {
-                _rows.Visible = state.Expanded;
+                _listHost.Visible = state.Expanded;
             }
 
             UpdateHeader();
