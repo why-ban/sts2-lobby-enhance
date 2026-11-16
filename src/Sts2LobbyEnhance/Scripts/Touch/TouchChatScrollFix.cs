@@ -52,6 +52,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// </summary>
     private const string SelectionExitHookMetaName = "lobby_enhance_selection_exit_hook";
 
+    /// <summary>Marks a scroll bar that already reports its presses, so the two attach paths cannot double-connect it</summary>
+    private const string ScrollBarHookMetaName = "lobby_enhance_selection_exit_bar";
+
     private static Shape? _shape;
 
     private static int _viewWarned;
@@ -160,6 +163,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
             // would extend it, which is the "drag selects text" symptom the players reported
             label.SelectionEnabled = false;
 
+            // Turning selection off also lowers focus_mode to Accessibility, so put back what upstream built the label with
+            label.FocusMode = Control.FocusModeEnum.All;
+
             if (view.HasMeta(GestureAttachedMetaName))
             {
                 return;
@@ -201,7 +207,11 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
             // The bar keeps Control's default MOUSE_FILTER_STOP, so a press on it is stopped at the bar and does not
             // bubble to the ScrollContainer. Without this connection a press on the bar leaves the highlight on screen
-            scrollBar.GuiInput += OnContainerGuiInput;
+            if (!scrollBar.HasMeta(ScrollBarHookMetaName))
+            {
+                scrollBar.SetMeta(ScrollBarHookMetaName, true);
+                scrollBar.GuiInput += OnContainerGuiInput;
+            }
 
             // The bar's parent is the message ScrollContainer
             AttachSelectionExitHook(scrollBar);
@@ -228,13 +238,20 @@ internal sealed class TouchChatScrollFix : ICompatFix
                     continue;
                 }
 
-                if (container.HasMeta(SelectionExitHookMetaName))
+                if (!container.HasMeta(SelectionExitHookMetaName))
                 {
-                    return;
+                    container.SetMeta(SelectionExitHookMetaName, true);
+                    container.GuiInput += OnContainerGuiInput;
                 }
 
-                container.SetMeta(SelectionExitHookMetaName, true);
-                container.GuiInput += OnContainerGuiInput;
+                // The in-run HUD style never calls ApplyLobbyScrollBarStyle, so its bar is only reachable from here
+                ScrollBar? bar = container.GetVScrollBar();
+                if (bar != null && GodotObject.IsInstanceValid(bar) && !bar.HasMeta(ScrollBarHookMetaName))
+                {
+                    bar.SetMeta(ScrollBarHookMetaName, true);
+                    bar.GuiInput += OnContainerGuiInput;
+                }
+
                 return;
             }
         }

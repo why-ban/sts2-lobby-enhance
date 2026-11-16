@@ -198,6 +198,23 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
                 missing.Add("LanConnectProtocolOffer.CreateCurrent");
             }
 
+            // A renamed member is caught by the lookups above; a member that kept its name and changed its type would
+            // not be, and every patch body here would then quietly do nothing
+            if (build != null && !string.Equals(build.ReturnType.Name, "Control", StringComparison.Ordinal))
+            {
+                missing.Add(BuildDialogMethodName + " returns " + build.ReturnType.Name);
+            }
+
+            if (selected != null && !string.Equals(selected.ReturnType.Name, "Int32", StringComparison.Ordinal))
+            {
+                missing.Add(SelectedIdMethodName + " returns " + selected.ReturnType.Name);
+            }
+
+            if (compat != null && !string.Equals(compat.FieldType.Name, "Button", StringComparison.Ordinal))
+            {
+                missing.Add(CompatButtonFieldName + " is " + compat.FieldType.Name);
+            }
+
             if (missing.Count > 0)
             {
                 reason = "missing: " + string.Join(", ", missing);

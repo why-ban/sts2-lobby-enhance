@@ -349,6 +349,7 @@ internal sealed class TouchSelectionGesture
 
             _label.MouseFilter = Control.MouseFilterEnum.Pass;
             _label.SelectionEnabled = false; // turning selection off also deselects
+            _label.FocusMode = Control.FocusModeEnum.All;
             _label.Deselect();
         }
         catch (Exception exception)
