@@ -35,12 +35,6 @@ internal static class Reflect
         type.GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, binder: null, types: parameters, modifiers: null)
         ?? throw new MissingMemberException(type.FullName, name);
 
-    /// <summary>Upstream parameter types are internal here, so only the name is usable</summary>
-    internal static MethodInfo RequireMethodByName(Type type, string name) =>
-        type.GetMethods(AnyMember)
-            .FirstOrDefault(method => string.Equals(method.Name, name, StringComparison.Ordinal))
-        ?? throw new MissingMemberException(type.FullName, name);
-
     internal static MethodInfo RequireMethodByName(Type type, string name, int parameterCount)
     {
         MethodInfo[] matches = type.GetMethods(AnyMember)

@@ -534,8 +534,6 @@ internal sealed class ChatServerSwitchFix : ICompatFix
     /// public channel v1 throws <see cref="NotSupportedException"/> out of the whole switch after the address is
     /// already saved. Any other exception still faults the task.
     /// </summary>
-    private static Task SwallowUnsupportedAsync(Task task) => SwallowCoreAsync(task);
-
     private static async Task SwallowCoreAsync(Task task)
     {
         try
@@ -559,7 +557,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         {
             if (__result is Task task)
             {
-                __result = SwallowUnsupportedAsync(task);
+                __result = SwallowCoreAsync(task);
             }
         }
         catch (Exception exception)
@@ -849,7 +847,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         // (before them) and keeps shrinking to zero on a narrow panel instead of pushing the arrows out.
         titleRow.AddChild(built);
 
-        var widgets = new RowWidgets(built, reset, previous, next);
+        var widgets = new RowWidgets(reset, previous, next);
         Rows.Add(built, widgets);
         return widgets;
     }
@@ -1585,10 +1583,8 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         internal static SwitchState Initial { get; } = new(null, null, SwitchPhase.Idle, null);
     }
 
-    private sealed class RowWidgets(HBoxContainer row, Button reset, Button previous, Button next)
+    private sealed class RowWidgets(Button reset, Button previous, Button next)
     {
-        internal HBoxContainer Row { get; } = row;
-
         internal Button Reset { get; } = reset;
 
         internal Button Previous { get; } = previous;

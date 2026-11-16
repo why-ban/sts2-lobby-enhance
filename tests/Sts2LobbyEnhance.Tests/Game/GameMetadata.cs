@@ -121,9 +121,6 @@ internal sealed class GameMetadata : IDisposable
     internal bool HasField(string @namespace, string typeName, string fieldName) =>
         GetFieldNames(@namespace, typeName).Contains(fieldName, StringComparer.Ordinal);
 
-    /// <summary>Simple names of every type the assembly defines. Useful in failure messages.</summary>
-    internal int TypeDefinitionCount => Reader.TypeDefinitions.Count;
-
     public void Dispose()
     {
         _peReader.Dispose();

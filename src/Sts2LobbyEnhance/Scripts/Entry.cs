@@ -206,14 +206,10 @@ public static class Entry
         {
             group.Harmony.UnpatchAll(group.HarmonyId);
             group.RolledBack = true;
-            report.RolledBack = true;
         }
         catch (Exception exception)
         {
             group.RollbackFailure = DescribeException(exception);
-            report.RollbackFailure = report.RollbackFailure == null
-                ? $"{GroupName(group.Group)}: {group.RollbackFailure}"
-                : $"{report.RollbackFailure}; {GroupName(group.Group)}: {group.RollbackFailure}";
             return;
         }
 
@@ -370,10 +366,6 @@ internal sealed class StartupReport
     internal List<string> Failed { get; } = new();
 
     internal IReadOnlyList<GroupReport> Groups => _groups;
-
-    internal bool RolledBack { get; set; }
-
-    internal string? RollbackFailure { get; set; }
 
     internal GroupReport GroupFor(FixGroup group)
     {

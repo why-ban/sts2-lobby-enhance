@@ -89,9 +89,6 @@ namespace Sts2LobbyEnhance;
         /// <summary>Bumped by <see cref="Invalidate"/> so a build that started earlier cannot repopulate the cache.</summary>
         private static long _generation;
 
-        /// <summary>True once <see cref="TryCapture"/> resolved every anchor this class reads.</summary>
-        internal static bool Captured => _handles != null;
-
         /// <summary>Every anchor this class reads, resolved once and never again.</summary>
         internal sealed class Handles
         {

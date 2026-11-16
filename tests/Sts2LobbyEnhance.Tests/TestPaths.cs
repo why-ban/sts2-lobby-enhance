@@ -15,7 +15,7 @@ internal static class TestPaths
     /// <summary>Data directory of Slay the Spire 2, i.e. the folder holding sts2.dll.</summary>
     internal const string GameDirectoryVariable = "STS2_GAME_DATA_DIR";
 
-    /// <summary>Path of the official sts2_lan_connect 0.6.3 DLL to scan.</summary>
+    /// <summary>Path of the official sts2_lan_connect DLL to scan. Resolves to the 0.6.4 bundle by default.</summary>
     internal const string OfficialModVariable = "STS2_LAN_CONNECT_DLL";
 
     /// <summary>Root of the companion project (work/companion).</summary>
@@ -31,8 +31,6 @@ internal static class TestPaths
     /// </summary>
     internal const string PinnedOfficialModSha256 =
         "E9644876FF9F563E7784AE21C10F2B67C6EEBE2FAB53C8106D0D6AE1D3814AE9";
-
-    internal const long PinnedOfficialModSize = 2_506_752L;
 
     /// <summary>
     /// The official sts2_lan_connect <b>0.6.4</b> DLL: the build this mod requires since 2.0.0. Both the
@@ -69,8 +67,6 @@ internal static class TestPaths
     internal static string DocumentationSource(string name) =>
         name == "LICENSE" ? Path.Combine(CompanionRoot, name) : Path.Combine(DocsDirectory, name);
 
-    internal static string TestsDirectory => Path.Combine(CompanionRoot, "tests");
-
     /// <summary>
     /// The data directory of the installed game, or <c>null</c> when it cannot be found. Searched in
     /// order: environment override, the layout used by this project, then the two standard Steam
@@ -78,7 +74,7 @@ internal static class TestPaths
     /// </summary>
     internal static string? GameDirectory { get; } = ResolveGameDirectory();
 
-    /// <summary>The official 0.6.3 DLL, or <c>null</c> when it is not on this machine.</summary>
+    /// <summary>The official DLL, or <c>null</c> when it is not on this machine. Resolves to the 0.6.4 build.</summary>
     internal static string? OfficialModDll { get; } = ResolveOfficialModDll();
 
     /// <summary>The official 0.6.4 DLL, or <c>null</c> when it is not on this machine.</summary>

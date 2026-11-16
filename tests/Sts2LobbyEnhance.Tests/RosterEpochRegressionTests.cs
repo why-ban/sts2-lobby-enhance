@@ -8,7 +8,7 @@ namespace Sts2LobbyEnhance.Tests;
 
 /// <summary>
 /// Offline reproduction of the P0 field failure and of the repair, using the *real* shipped types on both
-/// sides: the roster authority/codec/carrier/snapshot classes out of the pinned 0.6.3 binary
+/// sides: the roster authority/codec/carrier/snapshot classes out of the pinned 0.6.4 binary
 /// (<see cref="TestPaths.PinnedOfficialModSha256"/>) and the real <c>StartRunLobbyPlayer</c> /
 /// <c>LoadRunLobbyPlayer</c> / <c>PacketWriter</c> serializers out of the installed game.
 ///
@@ -21,7 +21,7 @@ namespace Sts2LobbyEnhance.Tests;
 /// Production evidence for the expected message, phone client log line 566639
 /// (<c>work/logs/new-report-2/internal-files/instances/v0.113.0-16ac0fe3--d32b3370/logs/godot.log</c>):
 /// <code>
-/// [ERROR] [lobby-enhance] tail-error-paths: ... reason=lan_protocol_version_mismatch:
+/// [ERROR] [0113fix] tail-error-paths: ... reason=lan_protocol_version_mismatch:
 ///   Current-state snapshots must repeat the accepted revision byte-for-byte.. The frame was received ...
 /// </code>
 /// The detail is the exception message (which ends in its own period) followed by the reporter's period,
@@ -122,7 +122,7 @@ public sealed class RosterEpochRegressionTests
         Assert.Equal(1u, lab.RevisionOf(lab.Current(client)!));
 
         // Reset() is the very method TailRoster.Reset invokes through reflection
-        // (Core/TailRoster.cs:97 -> LanConnectRosterAuthorityState.Reset, LanConnectRosterAuthorityState.cs:128).
+        // (Core/TailRoster.cs:86 -> LanConnectRosterAuthorityState.Reset).
         lab.Reset(client);
         Assert.Null(lab.Current(client));
 
@@ -240,7 +240,7 @@ public sealed class RosterEpochRegressionTests
 }
 
 /// <summary>
-/// Reflection harness over the pinned 0.6.3 binary plus the installed game, so the regression tests above
+/// Reflection harness over the pinned 0.6.4 binary plus the installed game, so the regression tests above
 /// drive the real implementation instead of a model of it.
 ///
 /// Two constraints shape it:
@@ -548,7 +548,7 @@ internal sealed class RosterLab : IDisposable
     /// Why not the game's own bootstrap: <c>ModelDb.Init()</c> instantiates every model in the game, and
     /// <c>ModelIdSerializationCache.Init()</c> ends with a <c>Log.Info</c> call
     /// (ModelIdSerializationCache.cs:126). MegaCrit's logger resolves <c>Godot.OS</c> in its static
-    /// constructor, which is an uncatchable access violation outside a Godot process (see Entry.cs:28-35),
+    /// constructor, which is an uncatchable access violation outside a Godot process (see Entry.cs:32-38),
     /// so calling it here would kill the test host instead of failing a test.
     ///
     /// What this seeds is only the id table that <c>WriteModelEntry</c> consults: one entry mapped to netId 1

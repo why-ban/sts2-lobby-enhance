@@ -1027,21 +1027,6 @@ internal sealed class PoolRefreshSession
         }
     }
 
-    private void WriteRooms()
-    {
-        if (_anchors.Rooms.GetValue(Overlay) is not IList target)
-        {
-            return;
-        }
-
-        IReadOnlyList<object> rooms = PoolRoomStore.Instance.Rooms;
-        target.Clear();
-        foreach (object room in rooms)
-        {
-            target.Add(room);
-        }
-    }
-
     private async Task RunAsync()
     {
         try

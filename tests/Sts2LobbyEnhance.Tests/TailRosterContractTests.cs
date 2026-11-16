@@ -6,16 +6,16 @@ namespace Sts2LobbyEnhance.Tests;
 /// <summary>
 /// Locks the reflection contract of the shared <c>TailRoster</c> component
 /// (<c>src/Sts2LobbyEnhance/Scripts/Core/TailRoster.cs</c>) against the shipped sts2_lan_connect
-/// 0.6.3 binary.
+/// 0.6.4 binary.
 ///
 /// Why this needs a test of its own: the roster reset is pure reflection into internal members of the
 /// host mod, so a rename or a re-shape cannot fail the patch build — it would only make the reset return
 /// <c>false</c> at runtime, and the visible symptom would be the very protocol mismatch this component
 /// exists to prevent ("Current-state snapshots must repeat the accepted revision byte-for-byte",
-/// LanConnectRosterAuthorityState.cs:86 in the decompiled 0.6.3 binary). Pinning the five anchors here
+/// LanConnectRosterAuthorityState.cs:86 in the decompiled 0.6.4 binary). Pinning the five anchors here
 /// turns that silent degradation into a red test.
 ///
-/// Anchors pinned (decompiled 0.6.3, <c>work/lobby/dec-official/Sts2LanConnect.Scripts/</c>):
+/// Anchors pinned (decompiled 0.6.4, <c>work/lobby/dec-official/Sts2LanConnect.Scripts/</c>):
 /// <list type="bullet">
 /// <item><c>LanConnectRosterAuthorityState.Reset()</c> — LanConnectRosterAuthorityState.cs:128</item>
 /// <item><c>LanConnectTailMessageRuntime.Shared</c> — LanConnectTailMessageRuntime.cs:459</item>

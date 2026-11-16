@@ -127,10 +127,6 @@ internal sealed class PoolAnchors
 
     internal PropertyInfo? EntryDisplayName;
 
-    internal PropertyInfo? EntryPinned;
-
-    internal PropertyInfo? EntryRooms;
-
     internal PropertyInfo? EntryGuardStatus;
 
     internal MethodInfo? GatherCloudflareCandidates;
@@ -143,8 +139,6 @@ internal sealed class PoolAnchors
     internal PropertyInfo? MetricsGuardStatus;
 
     internal PropertyInfo? MetricsDisplayName;
-
-    internal PropertyInfo? MetricsRooms;
 
     internal PropertyInfo? ConfigReadToken;
 
@@ -362,8 +356,6 @@ internal sealed class PoolAnchors
 
         Type? entry = OptionalType(host, EntryTypeName, optional);
         anchors.EntryDisplayName = OptionalProperty(entry, "DisplayName", optional);
-        anchors.EntryPinned = OptionalProperty(entry, "IsPinned", optional);
-        anchors.EntryRooms = OptionalProperty(entry, "Rooms", optional);
         anchors.EntryGuardStatus = OptionalProperty(entry, "CreateRoomGuardStatus", optional);
 
         Type? metricsClient = OptionalType(host, MetricsClientTypeName, optional);
@@ -378,7 +370,6 @@ internal sealed class PoolAnchors
         Type? metrics = anchors.SnapshotMetrics?.PropertyType;
         anchors.MetricsGuardStatus = OptionalProperty(metrics, "CreateRoomGuardStatus", optional);
         anchors.MetricsDisplayName = OptionalProperty(metrics, "DisplayName", optional);
-        anchors.MetricsRooms = OptionalProperty(metrics, "Rooms", optional);
 
         Type? config = OptionalType(host, ConfigTypeName, optional);
         anchors.ConfigReadToken = ReflectScope.StaticProperty(optional, config, "LobbyReadAccessToken");
@@ -823,8 +814,6 @@ internal sealed class PoolServer
 
     internal string? DisplayName { get; set; }
 
-    internal bool IsPinned { get; set; }
-
     /// <summary>
     /// Round trip of the last request that actually answered: GET /rooms during a refresh, /peers/metrics during a
     /// create probe. A failed or timed-out probe leaves it alone, so null means "never measured", not "slow".
@@ -832,8 +821,6 @@ internal sealed class PoolServer
     internal int? LatencyMs { get; set; }
 
     internal string GuardStatus { get; set; } = "allow";
-
-    internal int? RoomCount { get; set; }
 
     /// <summary>
     /// When /peers/metrics was last attempted, answered or not. Deliberately NOT written by a /rooms fetch: the two
@@ -952,7 +939,7 @@ internal static class PoolServerCatalog
                     }
                 }
 
-                Replace(merged, carryProbe: true, discovered: false);
+                Replace(merged, discovered: false);
             }
         }
 
@@ -1044,8 +1031,7 @@ internal static class PoolServerCatalog
 
                 additions.Add(new PoolServer(normalized)
                 {
-                    DisplayName = anchors.EntryDisplayName?.GetValue(entry) as string,
-                    IsPinned = anchors.EntryPinned?.GetValue(entry) is true
+                    DisplayName = anchors.EntryDisplayName?.GetValue(entry) as string
                 });
             }
 
@@ -1064,7 +1050,7 @@ internal static class PoolServerCatalog
                 }
             }
 
-            Replace(merged, carryProbe: true, discovered: true);
+            Replace(merged, discovered: true);
         }
         catch (OperationCanceledException)
         {
@@ -1095,7 +1081,7 @@ internal static class PoolServerCatalog
     /// failure: a node that does not publish metrics cannot be verified for hosting, so re-asking it on every click
     /// would only cost the dialog two seconds per try.
     /// </summary>
-    internal static void RecordMetricsProbe(PoolServer server, int? latencyMs, string? displayName, string? guardStatus, int? rooms)
+    internal static void RecordMetricsProbe(PoolServer server, int? latencyMs, string? displayName, string? guardStatus)
     {
         if (latencyMs is > 0)
         {
@@ -1110,11 +1096,6 @@ internal static class PoolServerCatalog
         if (!string.IsNullOrWhiteSpace(guardStatus))
         {
             server.GuardStatus = guardStatus;
-        }
-
-        if (rooms is >= 0)
-        {
-            server.RoomCount = rooms;
         }
 
         server.ProbedAt = DateTimeOffset.UtcNow;
@@ -1373,7 +1354,7 @@ internal static class PoolServerCatalog
                 // Upstream answers a cancelled or timed-out /peers/metrics request with an empty snapshot instead of
                 // throwing, so "no metrics" cannot tell "too slow" from "does not publish it". Either way this round trip measured nothing: it must not become the latency the
                 // dialog caches for ProbeTtlSeconds, or a node that never answered is shown as a fast one.
-                RecordMetricsProbe(server, null, null, "unknown", null);
+                RecordMetricsProbe(server, null, null, "unknown");
                 PoolRefreshFix.WarnOnce(
                     "probe-metrics:" + server.BaseUrl,
                     "no /peers/metrics answer from " + server.BaseUrl + " within " + timeoutMs +
@@ -1385,14 +1366,13 @@ internal static class PoolServerCatalog
                 server,
                 latency,
                 anchors.MetricsDisplayName?.GetValue(metrics) as string,
-                anchors.MetricsGuardStatus?.GetValue(metrics) as string,
-                anchors.MetricsRooms?.GetValue(metrics) as int?);
+                anchors.MetricsGuardStatus?.GetValue(metrics) as string);
         }
         catch (Exception exception)
         {
             // No OperationCanceledException branch: the snapshot call is a no-throw contract, so a cancellation and a
             // timeout both arrive as a null metrics payload above. Anything reaching here is a real defect.
-            RecordMetricsProbe(server, null, null, "unknown", null);
+            RecordMetricsProbe(server, null, null, "unknown");
             PoolRefreshFix.WarnOnce(
                 "probe-metrics-exception:" + server.BaseUrl,
                 "probing " + server.BaseUrl + " failed: " + PoolRoomClient.Describe(exception));
@@ -1497,8 +1477,6 @@ internal static class PoolServerCatalog
             var server = new PoolServer(normalized)
             {
                 DisplayName = anchors.EntryDisplayName?.GetValue(entry) as string,
-                IsPinned = anchors.EntryPinned?.GetValue(entry) is true,
-                RoomCount = anchors.EntryRooms?.GetValue(entry) as int?,
                 GuardStatus = anchors.EntryGuardStatus?.GetValue(entry) as string ?? "allow"
             };
 
@@ -1513,28 +1491,25 @@ internal static class PoolServerCatalog
         return servers;
     }
 
-    private static void Replace(List<PoolServer> servers, bool carryProbe, bool discovered)
+    private static void Replace(List<PoolServer> servers, bool discovered)
     {
-        if (carryProbe)
+        Dictionary<string, PoolServer> known = new(StringComparer.OrdinalIgnoreCase);
+        lock (Gate)
         {
-            Dictionary<string, PoolServer> known = new(StringComparer.OrdinalIgnoreCase);
-            lock (Gate)
+            foreach (PoolServer existing in _servers)
             {
-                foreach (PoolServer existing in _servers)
-                {
-                    known[existing.BaseUrl] = existing;
-                }
+                known[existing.BaseUrl] = existing;
+            }
+        }
+
+        foreach (PoolServer server in servers)
+        {
+            if (!known.TryGetValue(server.BaseUrl, out PoolServer? previous))
+            {
+                continue;
             }
 
-            foreach (PoolServer server in servers)
-            {
-                if (!known.TryGetValue(server.BaseUrl, out PoolServer? previous))
-                {
-                    continue;
-                }
-
-                CarryState(server, previous);
-            }
+            CarryState(server, previous);
         }
 
         lock (Gate)
