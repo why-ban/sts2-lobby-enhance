@@ -58,7 +58,7 @@ internal static class PoolRoomClient
     /// <summary>Ceiling for the room list that re-checks a room after a cross-server switch.</summary>
     internal const int VerifyTimeoutMs = 4000;
 
-    /// <summary>Fetches one server's rooms. Never throws; a failure is reported through the result.</summary>
+    /// <summary>Fetches one server's rooms. A failure is reported through the result instead of thrown.</summary>
     internal static async Task<PoolServerFetch> FetchAsync(
         PoolAnchors anchors,
         PoolServer server,

@@ -9,15 +9,13 @@ namespace Sts2LobbyEnhance;
 /// Cross-server join: a room card can belong to any server in the pool, so clicking it has to move the game to
 /// that server first.
 ///
-/// The shape is the host mod's own invite flow, LanConnectInviteServerJoinCoordinator.cs:63-150: switch with a
-/// context lease, re-read that server's room list, find the room by id, then hand the lease to the join so the
-/// lease outlives the switch. Two differences, both from the brief:
+/// The shape is the host mod's own invite flow: switch with a context lease, re-read that server's room list, find the
+/// room by id, then hand the lease to the join so the lease outlives the switch. Two differences, both deliberate:
 ///
-/// - No confirmation dialog. By the time a room card is clicked the character-select session is already gone, so
-///   there is no live room to lose.
-/// - Every failure path switches the player back. Ending up on a stranger's server with no room is the one
-///   outcome that is worse than a failed join, and LanConnectServerSwitchCoordinator.LeaveActiveRoomAsync
-///   (:1160-1163) means a switch is not a no-op once anything is running.
+/// - No confirmation dialog. By the time a room card is clicked the character-select session is already gone, so there
+///   is no live room to lose.
+/// - Every failure path switches the player back. Ending up on a stranger's server with no room is the one outcome
+///   that is worse than a failed join, and a switch is not a no-op once anything is running.
 ///
 /// A lease already present on the call (the invite path) means upstream is mid-flow and is left alone.
 /// </summary>
@@ -36,7 +34,7 @@ internal sealed class PoolJoinFix : ICompatFix
 
     /// <summary>
     /// Blocks a second join while a cross-server switch is in flight. The switch coordinator cancels the superseded
-    /// generation (LanConnectChatRuntimePorts.cs:1154), so two clicks would abort the first join instead of the second.
+    /// generation, so two clicks would abort the first join instead of the second.
     /// </summary>
     private static int _inFlight;
 
@@ -181,7 +179,7 @@ internal sealed class PoolJoinFix : ICompatFix
             cancellationToken.ThrowIfCancellationRequested();
             PoolRefreshFix.SetStatus(overlay, "正在切换到房间所在的服务器：" + origin.ShortName + "…");
             // Own budget, not the caller's token: a click passes CancellationToken.None, and a switch that parks on the
-            // coordinator's gate (LanConnectChatRuntimePorts.cs:1156) would otherwise never return and leave _inFlight
+            // coordinator's gate would otherwise never return and leave _inFlight
             // set, turning every later cross-server click into a silent no-op.
             using var switchBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             switchBudget.CancelAfter(SwitchTimeoutMs);
@@ -206,8 +204,8 @@ internal sealed class PoolJoinFix : ICompatFix
                 return;
             }
 
-            // The lease is handed over but kept in scope: the original disposes it in its own finally
-            // (LanConnectLobbyOverlay.cs:4786-4789), and disposing a lease twice is a no-op
+            // The lease is handed over but kept in scope: the original disposes it in its own finally, and disposing a
+            // lease twice is a no-op
             // (LanConnectServerContextLease.Dispose uses Interlocked.Exchange), so our finally is the safety net for
             // the path where the reflective call fails before the original's body ever ran.
             object targetRoom = fresh ?? room;
@@ -218,18 +216,18 @@ internal sealed class PoolJoinFix : ICompatFix
                     password,
                     cancellationToken,
                     lease,
-                    // No trailing slash: upstream compares this against NormalizeAuthority(...) with OrdinalIgnoreCase
-                    // (LanConnectLobbyOverlay.cs:5358-5365), and ".../" never equals that.
+                    // No trailing slash: upstream compares this against NormalizeAuthority(...) with OrdinalIgnoreCase,
+                    // and ".../" never equals that.
                     expectedServer ?? origin.BaseUrl)
                 .ConfigureAwait(true);
 
             if (!PoolServerSwitch.HasActiveRoomSession(anchors))
             {
-                // A saved-run room with more than one free slot opens the slot picker and returns WITHOUT joining
-                // (:4749-4762), so switching back there would void the lease the player is about to pick a slot with.
+                // A saved-run room with more than one free slot opens the slot picker and returns WITHOUT joining, so
+                // switching back there would void the lease the player is about to pick a slot with.
                 // The open dialog is the condition, not the room carrying a saved run: a room whose slots are all
                 // taken, or a single-slot room whose join failed, also has a saved run and opens nothing at all, and
-                // those are exactly the paths that used to leave the player on a stranger's server.
+                // those are exactly the paths that need the switch back to keep the player on their own server.
                 if (ResumeSlotDialogPending(anchors, overlay, targetRoom))
                 {
                     return;
@@ -283,8 +281,8 @@ internal sealed class PoolJoinFix : ICompatFix
     }
 
     /// <summary>
-    /// Whether the room carries a saved run (LanConnectLobbyModels.cs:41). Such a join may legally stop at the slot
-    /// dialog instead of connecting, which is why "no session yet" is not by itself a failure.
+    /// Whether the room carries a saved run. Such a join may legally stop at the slot dialog instead of connecting,
+    /// which is why "no session yet" is not by itself a failure.
     /// </summary>
     private static bool HasSavedRun(PoolAnchors anchors, object room)
     {
@@ -300,8 +298,8 @@ internal sealed class PoolJoinFix : ICompatFix
 
     /// <summary>
     /// Re-reads the target server's rooms and picks the room by id, the same way the invite coordinator verifies an
-    /// invite (:117-133). A failed re-read is not a missing room: verified stays false and the caller proceeds with
-    /// the pooled room object, so a flaky list request cannot fake a deletion.
+    /// invite. A failed re-read is not a missing room: verified stays false and the caller proceeds with the pooled room
+    /// object, so a flaky list request cannot fake a deletion.
     /// </summary>
     private static async Task<(object? Room, bool Verified)> FindRoomAsync(
         PoolAnchors anchors,
@@ -382,10 +380,9 @@ internal sealed class PoolJoinFix : ICompatFix
 /// Server switching, shared by the join and the create-room repairs. Both need the same three steps: switch, know
 /// whether the switch landed, and get back to where the player started.
 ///
-/// Switching is never free: LanConnectServerSwitchCoordinator.SwitchCoreAsync leaves an active room (:1160-1163),
-/// stops and reconnects the public chat (:1166, :1178) and persists the new address into the config (:1174). The
-/// callers therefore switch only when they have decided to, and always put the address back when the reason for
-/// switching went away.
+/// Switching is never free: it leaves an active room, stops and reconnects the public chat and persists the new address
+/// into the config. The callers therefore switch only when they have decided to, and always put the address back when
+/// the reason for switching went away.
 /// </summary>
 internal static class PoolServerSwitch
 {
@@ -528,8 +525,8 @@ internal static class PoolServerSwitch
         PoolAddress.ShortName(null, url, PoolText.SourceNameMaxLength);
 
     /// <summary>
-    /// Mirrors what the host mod does after its own switch (LanConnectLobbyOverlay.cs:6392-6399): repaint the
-    /// server field and the network summary, otherwise the dialog keeps advertising the previous address.
+    /// Mirrors what the host mod does after its own switch: repaint the server field and the network summary, otherwise
+    /// the dialog keeps advertising the previous address.
     /// </summary>
     internal static void RefreshServerUi(PoolAnchors anchors, object overlay)
     {
@@ -537,9 +534,8 @@ internal static class PoolServerSwitch
         {
             if (anchors.ServerBaseUrlInput?.GetValue(overlay) is LineEdit input)
             {
-                // The box mirrors the OVERRIDE, not the resolved address (upstream :6395 writes
-                // LobbyServerBaseUrlOverride). Writing the resolved value there would let the player persist it as an
-                // override by pressing the box's own apply button.
+                // The box mirrors the OVERRIDE, not the resolved address. Writing the resolved value there would let
+                // the player persist it as an override by pressing the box's own apply button.
                 input.Text = (anchors.ConfigBaseUrlOverride?.GetValue(null) as string)
                              ?? anchors.ConfigBaseUrl.GetValue(null) as string
                              ?? string.Empty;
@@ -567,7 +563,7 @@ internal static class PoolServerSwitch
         }
     }
 
-    /// <summary>The hosted half of "a room session is live" (upstream :267, :4450-4455).</summary>
+    /// <summary>The hosted half of "a room session is live", which is upstream's own create refusal</summary>
     internal static bool HasActiveHostedRoom(PoolAnchors anchors)
     {
         try

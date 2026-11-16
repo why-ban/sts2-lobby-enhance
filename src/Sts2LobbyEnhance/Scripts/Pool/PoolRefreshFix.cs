@@ -9,27 +9,15 @@ namespace Sts2LobbyEnhance;
 /// Turns the room list into a pool: every known server's rooms, on one stage, with the owning server printed on
 /// each card.
 ///
-/// RefreshRoomsAsync is taken over completely (LanConnectLobbyOverlay.cs:3362-3481). It is not wrapped and the
-/// original body never runs: the overlay's own refresh republishes the *current* server's room list, and two
-/// writers on _rooms means the stage flips between the pool and one server on every eight second tick. So the
-/// prefix answers false, hands back a task of its own, and reproduces the method's contract section by section:
+/// RefreshRoomsAsync is taken over completely instead of wrapped: the overlay's own refresh republishes the current
+/// server's list, and two writers on _rooms flip the stage between the pool and that one server every eight seconds.
+/// The prefix answers false and reproduces the whole method, guards and error texts included.
 ///
-/// <list type="bullet">
-/// <item>the three guards and their false return (:3367-3371)</item>
-/// <item>PersistSettings, the in-flight flag, the auto-refresh timer (:3373-3376)</item>
-/// <item>the status line and the action buttons (:3377-3382)</item>
-/// <item>the current server's /probe and /announcements, which the pool does not replace (:3388-3407)</item>
-/// <item>the room list itself, which is where the pool goes (:3391-3399)</item>
-/// <item>selection repair and the "did the stage change" decision (:3409-3430)</item>
-/// <item>the lobby-error and generic-error status texts (:3441-3474)</item>
-/// <item>the finally that clears the flag and re-enables the buttons (:3475-3480)</item>
-/// </list>
+/// The _Process postfix only keeps the cold-start loading text honest (a round is painted once, when it settles), and
+/// the BuildRoomMetaRow postfix appends the source badge.
 ///
-/// Two other patches: _Process (:725) is the repaint pump, the one main-thread tick that can touch the scene tree
-/// while the fan-out is streaming in; BuildRoomMetaRow (:3943) appends the source badge.
-///
-/// Nothing in Applies or Apply touches Godot, the config, the network or the engine: this repair is installed from
-/// a headless harness that only knows reflection.
+/// Nothing in Applies or Apply touches Godot, the config, the network or the engine: this repair is installed from a
+/// headless harness that only knows reflection.
 /// </summary>
 internal sealed class PoolRefreshFix : ICompatFix
 {
@@ -43,15 +31,12 @@ internal sealed class PoolRefreshFix : ICompatFix
     /// </summary>
     private const int CurrentServerQueryBudgetMs = 3000;
 
-    /// <summary>
-    /// Rebuilds the stage per refresh round. A round is allowed the cold-start paints plus the one final draw; anything
-    /// beyond that is the flicker regression and gets a log line of its own for on-device checking.
-    /// </summary>
+    /// <summary>A round may rebuild the stage this often: the cold-start paints plus the one final draw</summary>
     private const int MaxRebuildsPerRound = 3;
 
     /// <summary>
     /// Hard ceiling for one pooled round. The per-server fetch already stops at 2 s; this bounds the whole round
-    /// (probe + announcements + fan-out) so the first paint can never wait longer than this.
+    /// (probe + announcements + fan-out), so the paint waits at most this long.
     /// </summary>
     private const int RoundBudgetMs = 2500;
 
@@ -59,18 +44,14 @@ internal sealed class PoolRefreshFix : ICompatFix
 
     private static PoolAnchors? _anchors;
 
-    /// <summary>
-    /// Warnings already printed, keyed by their call signature. This used to be a single global flag, which made the
-    /// whole group go silent for the rest of the process after its first warning - every other repair in the group
-    /// shares this one exit.
-    /// </summary>
+    /// <summary>Warnings already printed, keyed by their call signature: one kind of trouble must not silence the rest</summary>
     private static readonly object WarnGate = new();
 
     private static readonly HashSet<string> WarnedSignatures = new(StringComparer.Ordinal);
 
     private const int MaxWarnedSignatures = 32;
 
-    /// <summary>The round currently being painted. Read by the _Process postfix, set and cleared on the main thread.</summary>
+    /// <summary>The round in flight. Read by the _Process postfix, set and cleared on the main thread.</summary>
     internal static PoolRefreshSession? ActiveSession;
 
     public string Id => FixId;
@@ -170,10 +151,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
     }
 
-    /// <summary>
-    /// The body of LanConnectLobbyOverlay.RefreshRoomsAsync (:3362-3481) with the pool as the room source.
-    /// Section comments carry the upstream line each block reproduces, so a diff against upstream stays possible.
-    /// </summary>
+    /// <summary>The host mod's whole refresh, with the pool as the room source instead of one server's list.</summary>
     private static async Task<bool> RefreshAsync(
         PoolAnchors anchors,
         object overlay,
@@ -183,7 +161,7 @@ internal sealed class PoolRefreshFix : ICompatFix
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        // :3368-3371 - the same three short circuits, with the same false.
+        // The same three short circuits, with the same false.
         if (ReadBool(anchors.RefreshInFlight!, overlay)
             || ReadBool(anchors.ServerPickerOpen, overlay)
             || (ReadBool(anchors.ActionInFlight, overlay) && !allowActionInFlight))
@@ -191,12 +169,12 @@ internal sealed class PoolRefreshFix : ICompatFix
             return false;
         }
 
-        anchors.PersistSettings.Invoke(overlay, null);                                   // :3373
-        anchors.RefreshInFlight!.SetValue(overlay, true);                                // :3374
-        anchors.TimeUntilAutoRefresh.SetValue(overlay, anchors.RefreshIntervalSeconds);   // :3376
-        if (userInitiated || RoomCount(anchors, overlay) == 0)                           // :3377
+        anchors.PersistSettings.Invoke(overlay, null);
+        anchors.RefreshInFlight!.SetValue(overlay, true);
+        anchors.TimeUntilAutoRefresh.SetValue(overlay, anchors.RefreshIntervalSeconds);
+        if (userInitiated || RoomCount(anchors, overlay) == 0)
         {
-            SetStatus(overlay, "正在刷新大厅列表...");                                     // :3379
+            SetStatus(overlay, "正在刷新大厅列表...");
         }
 
         if (RoomCount(anchors, overlay) == 0)
@@ -205,22 +183,22 @@ internal sealed class PoolRefreshFix : ICompatFix
             ShowLoadingPlaceholder(anchors, overlay);
         }
 
-        anchors.UpdateActionButtons!.Invoke(overlay, null);                              // :3382
+        anchors.UpdateActionButtons!.Invoke(overlay, null);
 
         PoolRefreshSession? session = null;
         object? apiClient = null;
         try
         {
-            string? selectedRoomId = CurrentSelection(anchors, overlay);                 // :3387
+            string? selectedRoomId = CurrentSelection(anchors, overlay);
             Interlocked.Exchange(ref _roundRebuilds, 0);
 
-            // :3388-3390 - the current server's probe and announcements. The pool does not replace these: the
-            // announcements belong to the server the player is on, and AnnouncementSourceFix rides on the same call.
+            // The current server's probe and announcements, which the pool does not replace: the announcements belong
+            // to the server the player is on, and AnnouncementSourceFix rides on the same call.
             apiClient = TryCreateConfiguredClient(anchors);
             Task<double?> probeTask = MeasureRttAsync(anchors, apiClient, cancellationToken);
             Task<object?> announcementTask = FetchAnnouncementsAsync(anchors, apiClient, cancellationToken);
 
-            // :3391-3393 - the room source, which is the pool instead of one server's list.
+            // The room source, which is the pool instead of one server's list.
             session = new PoolRefreshSession(anchors, overlay, cancellationToken);
             ActiveSession = session;
             session.Start();
@@ -241,17 +219,17 @@ internal sealed class PoolRefreshFix : ICompatFix
                 NoteRoundBudgetSpent(session);
             }
 
-            // :3437-3440 - a caller that withdrew the round leaves it cancelled, before the commit and before any
-            // failure is counted. Upstream rethrows at the same point and the switch flow answers "服务器切换已取消".
+            // A caller that withdrew the round leaves it cancelled, before the commit and before any failure is
+            // counted. Upstream rethrows at the same point and the switch flow answers "服务器切换已取消".
             cancellationToken.ThrowIfCancellationRequested();
 
             double? measuredProbeRtt = probeTask.IsCompletedSuccessfully ? probeTask.Result : null;
             object? announcements = announcementTask.IsCompletedSuccessfully ? announcementTask.Result : null;
 
-            anchors.LastLobbyRttMs.SetValue(overlay, measuredProbeRtt ?? -1d);            // :3396
-            anchors.ConsecutiveRefreshFailures.SetValue(overlay, 0);                     // :3397
+            anchors.LastLobbyRttMs.SetValue(overlay, measuredProbeRtt ?? -1d);
+            anchors.ConsecutiveRefreshFailures.SetValue(overlay, 0);
 
-            if (announcements != null)                                                   // :3400-3407
+            if (announcements != null)
             {
                 anchors.ApplyAnnouncements.Invoke(overlay, new[] { announcements });
             }
@@ -265,10 +243,9 @@ internal sealed class PoolRefreshFix : ICompatFix
             IReadOnlyList<object> previousRooms = Snapshot(anchors, overlay);
             string? selectionBefore = CurrentSelection(anchors, overlay) ?? selectedRoomId;
 
-            // The round is committed exactly once, here, after it settled or after its ceiling expired. Nothing is
-            // written into _rooms while servers are still answering: that is what used to clamp the page
-            // (RebuildRoomStage -> ClampCurrentPage on a short list), flash the stage a dozen times per round, and
-            // paint a room count that was true only for the servers that had replied so far.
+            // The round is committed exactly once, here, after it settled or after its ceiling expired. Writing into
+            // _rooms while servers are still answering would clamp the page against a short list, repaint the stage once
+            // per answer and print a room count that is true only for the servers that replied so far.
             IReadOnlyList<object> rooms = session.CommitRound();
             if (rooms.Count > 0)
             {
@@ -276,11 +253,11 @@ internal sealed class PoolRefreshFix : ICompatFix
             }
 
             int pageBefore = ReadCurrentPage(anchors, overlay);
-            WriteRooms(anchors, overlay, rooms);                                         // :3398-3399
+            WriteRooms(anchors, overlay, rooms);
 
-            string? nextSelection = ApplySelection(anchors, overlay, rooms, selectionBefore); // :3409-3416
+            string? nextSelection = ApplySelection(anchors, overlay, rooms, selectionBefore);
 
-            // :3418-3420 exactly, and nothing about painting: "unchanged" has to mean "do not rebuild".
+            // Nothing about painting here: "unchanged" has to mean "do not rebuild".
             bool roomStageChanged = userInitiated
                                     || !AreVisuallyEquivalent(anchors, previousRooms, rooms)
                                     || !string.Equals(selectionBefore, nextSelection, StringComparison.Ordinal);
@@ -291,13 +268,13 @@ internal sealed class PoolRefreshFix : ICompatFix
                 // that did not make it invalid.
                 RestoreCurrentPage(anchors, overlay, pageBefore);
                 NoteRebuild();
-                anchors.RebuildRoomStage.Invoke(overlay, null);                          // :3423
+                anchors.RebuildRoomStage.Invoke(overlay, null);
             }
             else
             {
-                anchors.UpdateHealthIndicator.Invoke(overlay, null);                     // :3427
-                anchors.UpdatePageControls.Invoke(overlay, new object[] { FilteredCount(anchors, overlay) }); // :3428
-                anchors.RefreshSelectedRoomDetails.Invoke(overlay, null);                // :3429
+                anchors.UpdateHealthIndicator.Invoke(overlay, null);
+                anchors.UpdatePageControls.Invoke(overlay, new object[] { FilteredCount(anchors, overlay) });
+                anchors.RefreshSelectedRoomDetails.Invoke(overlay, null);
             }
 
             if (Volatile.Read(ref _roundRebuilds) > MaxRebuildsPerRound)
@@ -330,29 +307,29 @@ internal sealed class PoolRefreshFix : ICompatFix
                 ShowEmptyText(anchors, overlay);
             }
 
-            SetStatus(overlay, string.Empty);                                            // :3434
-            return true;                                                                 // :3435
+            SetStatus(overlay, string.Empty);
+            return true;
         }
-        catch (OperationCanceledException)                                               // :3437-3440
+        catch (OperationCanceledException)
         {
             throw;
         }
         catch (Exception exception) when (anchors.LobbyServiceExceptionType.IsInstanceOfType(exception))
         {
-            MarkRefreshFailed(anchors, overlay);                                         // :3443-3447
+            MarkRefreshFailed(anchors, overlay);
             string message = ExceptionMessage(exception);
-            if (userInitiated || RoomCount(anchors, overlay) == 0)                       // :3448-3451
+            if (userInitiated || RoomCount(anchors, overlay) == 0)
             {
                 SetStatus(overlay, "大厅服务不可用：" + message);
             }
             else
             {
-                SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：" + message + "\n" + FailureHint(anchors)); // :3454
+                SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：" + message + "\n" + FailureHint(anchors));
             }
 
             return false;
         }
-        catch (Exception exception)                                                      // :3458-3474
+        catch (Exception exception)
         {
             MarkRefreshFailed(anchors, overlay);
             string message = ExceptionMessage(exception);
@@ -369,17 +346,16 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         finally
         {
-            anchors.RefreshInFlight!.SetValue(overlay, false);                           // :3477
-            anchors.UpdateActionButtons!.Invoke(overlay, null);                          // :3479
+            anchors.RefreshInFlight!.SetValue(overlay, false);
+            anchors.UpdateActionButtons!.Invoke(overlay, null);
             session?.Finish();
             (apiClient as IDisposable)?.Dispose();
         }
     }
 
     /// <summary>
-    /// Main-thread pump. It no longer paints rooms: a round is committed and drawn exactly once, when it settles, so
-    /// the stage never shows a half-finished count. What is left is keeping the cold-start text honest while the first
-    /// round is still loading.
+    /// Main-thread pump. A round is drawn once, when it settles, so the only work left is keeping the cold-start text
+    /// honest while the first round is still loading.
     /// </summary>
     public static void ProcessPostfix(object? __instance)
     {
@@ -400,8 +376,8 @@ internal sealed class PoolRefreshFix : ICompatFix
     }
 
     /// <summary>
-    /// Appends the owning server to the card's meta row. The row is an HFlowContainer (LanConnectLobbyOverlay.cs:3945)
-    /// so a long server name wraps instead of squeezing the player count.
+    /// Appends the owning server to the card's meta row. The row is an HFlowContainer, so a long server name wraps
+    /// instead of squeezing the player count.
     /// </summary>
     public static void BuildRoomMetaRowPostfix(object? __result, object? room)
     {
@@ -575,7 +551,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
     }
 
-    /// <summary>:3398-3399 - _rooms.Clear() then AddRange(pool), through the non-generic list interface.</summary>
+    /// <summary>_rooms.Clear() then AddRange(pool), through the non-generic list interface.</summary>
     private static void WriteRooms(PoolAnchors anchors, object overlay, IReadOnlyList<object> rooms)
     {
         if (anchors.Rooms.GetValue(overlay) is not IList target)
@@ -590,7 +566,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
     }
 
-    /// <summary>:3409-3416 - keep the selection while it is still in the list, otherwise fall back to the first room.</summary>
+    /// <summary>Keep the selection while it is still in the list, otherwise fall back to the first room.</summary>
     private static string? ApplySelection(PoolAnchors anchors, object overlay, IReadOnlyList<object> rooms, string? selectedRoomId)
     {
         string? next = null;
@@ -609,15 +585,15 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception)
         {
-            // The stage rebuild clamps the selection anyway (:3618-3621).
+            // The stage rebuild clamps the selection anyway.
         }
 
         return next;
     }
 
     /// <summary>
-    /// :3419 - AreRoomListsVisuallyEquivalent takes IReadOnlyList of LobbyRoomSummary, so both sides are rebuilt into
-    /// that exact type. Matched through reflection because the element type only exists at runtime.
+    /// AreRoomListsVisuallyEquivalent takes IReadOnlyList of LobbyRoomSummary, so both sides are rebuilt into that
+    /// exact type. Matched through reflection because the element type only exists at runtime.
     /// </summary>
     private static bool AreVisuallyEquivalent(PoolAnchors anchors, IReadOnlyList<object> previous, IReadOnlyList<object> current)
     {
@@ -689,7 +665,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception)
         {
-            // Falls through to the raw field, which is what upstream falls back to as well (:3387).
+            // Falls through to the raw field, which is what upstream falls back to as well.
         }
 
         return anchors.SelectedRoomId?.GetValue(overlay) as string;
@@ -708,8 +684,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         return false;
     }
 
-    /// <summary>Upstream's own empty-pool texts (LanConnectLobbyOverlay.cs:3572, :3579). Matching them is what keeps this
-    /// rewrite to the one state it is meant for.</summary>
+    /// <summary>Upstream's own empty-pool texts. Matching them is what keeps this rewrite to the one state it is for.</summary>
     private const string EmptySummaryPrefix = "大厅当前没有房间";
 
     private const string EmptyHintPrefix = "刷新大厅后，你也可以在右侧直接创建一个新的公开房间";
@@ -812,7 +787,6 @@ internal sealed class PoolRefreshFix : ICompatFix
         return text.StartsWith(LoadingHint, StringComparison.Ordinal) ? EmptyHintPrefix + "。" : text;
     }
 
-    /// <summary>Remembers that a round hit its ceiling, so a recurring slow round cannot flood the log.</summary>
     private static void NoteRoundBudgetSpent(PoolRefreshSession session)
     {
         if (Interlocked.Increment(ref _budgetLogs) > 3)
@@ -928,12 +902,9 @@ internal sealed class PoolRefreshFix : ICompatFix
 }
 
 /// <summary>
-/// One pooled refresh round, from the fan-out to the scene tree.
-///
-/// The fan-out is the room source of the refresh, and it is incremental: every server that answers marks the round
-/// dirty and the _Process pump repaints, which is what keeps one slow node from leaving the stage empty. The final
-/// write and the stage decision belong to RefreshAsync, because those are the parts of upstream's refresh that also
-/// touch the status line, the selection and the page controls.
+/// One pooled refresh round: the fan-out, and the single commit that becomes the stage. Nothing is drawn from a
+/// partial round; the write and the stage decision belong to RefreshAsync, which also owns the status line, the
+/// selection and the page controls.
 /// </summary>
 internal sealed class PoolRefreshSession
 {
@@ -945,7 +916,7 @@ internal sealed class PoolRefreshSession
 
     private readonly CancellationToken _callerToken;
 
-    /// <summary>One line in the log for the first round of the session, and nothing after it.</summary>
+    /// <summary>Set once per process, so the first pooled round is logged exactly once.</summary>
     private static int _announced;
 
     private int _finished;
@@ -982,14 +953,12 @@ internal sealed class PoolRefreshSession
         Fetch = RunAsync();
     }
 
-    /// <summary>True while the stage has no rooms at all, i.e. the first round of this session is still loading.</summary>
     internal bool StageIsEmpty() =>
         _anchors.Rooms.GetValue(Overlay) is not ICollection rooms || rooms.Count == 0;
 
     /// <summary>
-    /// Nothing is drawn from a partial round any more: the first paint waits for the round to settle so the count on
-    /// screen is never a half-finished one. The pump's remaining job is to keep the loading text where the host mod
-    /// would otherwise print "大厅当前没有房间。" - it only touches labels that still say that.
+    /// Keeps the loading text where the host mod would print "大厅当前没有房间。". Only labels that still say one of the
+    /// two are touched, so a round that already painted its result is left alone.
     /// </summary>
     internal void KeepLoadingPlaceholder()
     {
@@ -1001,7 +970,7 @@ internal sealed class PoolRefreshSession
         PoolRefreshFix.ShowLoadingPlaceholder(_anchors, Overlay);
     }
 
-    /// <summary>One line in the log for the first round of the session.</summary>
+    /// <summary>The one-line summary of the first pooled round.</summary>
     internal void AnnounceFirstRound()
     {
         if (Interlocked.Exchange(ref _announced, 1) == 0)
@@ -1064,9 +1033,9 @@ internal sealed class PoolRefreshSession
             {
                 if (PoolServerCatalog.IsCoolingDown(server))
                 {
-                    // A dead node used to cost the round its full 2 s ceiling on every tick. It is out of the round
-                    // until its slot expires, and its last answer stays on the stage marked stale so its rooms do not
-                    // blink out of existence in the meantime.
+                    // A dead node would cost the round its full 2 s ceiling on every tick. It is out of the round until
+                    // its slot expires, and its last answer stays on the stage marked stale so its rooms do not blink
+                    // out of existence in the meantime.
                     if (server.LastRooms is { Count: > 0 } staleRooms)
                     {
                         _cycle.AcceptStale(_anchors, server, staleRooms);

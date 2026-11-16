@@ -10,12 +10,11 @@ namespace Sts2LobbyEnhance;
 ///
 /// Why this exists: a pooled lobby makes the server behind the room list invisible, so hosting would otherwise
 /// land on whatever server happened to be current - possibly a node that is near its bandwidth guard
-/// (createRoomGuardStatus, LanConnectLobbyModel's LobbyHealthResponse :110-124) or one that is far away.
+/// (createRoomGuardStatus on the host mod's health answer) or one that is far away.
 ///
-/// What it does NOT do: it never touches config.json itself. Switching writes the address, that is the host mod's
-/// own semantics (LanConnectServerSwitchCoordinator.cs:1171-1175) and is accepted as such. It also refuses to
-/// switch when any room session is live, because the switch would leave that room (:1160-1163) - the same reason
-/// LanConnectLobbyOverlay.CreateRoomAsync already refuses to run with a hosted room (:4450-4455).
+/// What it does NOT do: it never touches config.json itself. Switching writes the address, that is the host mod's own
+/// semantics and is accepted as such. It also refuses to switch when any room session is live, because the switch
+/// would leave that room - the same reason the host mod's own create already refuses to run with a hosted room.
 ///
 /// The threshold is a deliberate small deviation from "switch to the lowest-latency server": switching is not free
 /// (chat reconnect, a config write, a new TCP path), so a server that is one millisecond closer is not worth it.
@@ -44,9 +43,9 @@ internal sealed class PoolCreateFix : ICompatFix
     private static PoolAnchors? _anchors;
 
     /// <summary>
-    /// Blocks a second click while the server choice is still running. Upstream only sets _actionInFlight inside
-    /// CreateRoomAsync (:4408, :4490), which is the method this prefix has not reached yet, so two fast clicks would
-    /// otherwise start two switches and the coordinator cancels the superseded one (LanConnectChatRuntimePorts.cs:1154).
+    /// Blocks a second click while the server choice is still running. The host mod only sets _actionInFlight inside
+    /// CreateRoomAsync, which is the method this prefix has not reached yet, so two fast clicks would otherwise start
+    /// two switches and the switch coordinator would cancel the superseded one.
     /// </summary>
     private static int _inFlight;
 
@@ -120,15 +119,15 @@ internal sealed class PoolCreateFix : ICompatFix
                 return true;
             }
 
-            // A live room session would be destroyed by the switch (LanConnectChatRuntimePorts.cs:1160-1163) and a
-            // switch already in flight owns the context; both mean "run upstream untouched".
+            // A live room session would be destroyed by the switch, and a switch already in flight owns the context;
+            // both mean "run upstream untouched".
             if (PoolServerSwitch.HasActiveRoomSession(anchors) || PoolServerSwitch.SwitchInProgress(anchors))
             {
                 return true;
             }
 
-            // Upstream rejects the create for free in these three cases before it ever contacts a server
-            // (LanConnectLobbyOverlay.cs:4403-4455). Switching first would take the player off their server - leaving
+            // Upstream rejects the create for free in these three cases before it ever contacts a server. Switching
+            // first would take the player off their server - leaving
             // the room, dropping the public channel and rewriting config.json - for a create that is then refused
             // anyway. Let upstream report its own error instead.
             if (!CheapCreateChecksPass(anchors, __instance))
@@ -162,10 +161,9 @@ internal sealed class PoolCreateFix : ICompatFix
     }
 
     /// <summary>
-    /// The three refusals upstream makes before it talks to any server (LanConnectLobbyOverlay.cs:4403-4408 empty room
-    /// name, :4443-4448 a multiplayer continue save, :4450-4455 an already hosted room). All three are reads; a missing
-    /// anchor means "cannot tell" and the pre-check passes, because blocking a legitimate create is worse than an
-    /// unnecessary switch.
+    /// The three refusals the host mod makes before it talks to any server: an empty room name, a multiplayer continue
+    /// save, and an already hosted room. All three are reads; a missing anchor means "cannot tell" and the pre-check
+    /// passes, because blocking a legitimate create is worse than an unnecessary switch.
     /// </summary>
     private static bool CheapCreateChecksPass(PoolAnchors anchors, object overlay)
     {
@@ -486,13 +484,12 @@ internal sealed class PoolCreateFix : ICompatFix
 
     /// <summary>
     /// The canonical profile this create is going to ask for, derived the way upstream derives it: the dialog's
-    /// selected protocol id (LanConnectLobbyOverlay.cs:6664-6669) into LanConnectProtocolProfile
-    /// (:6780-6787), then to its canonical wire string. The LAN protocol version is the same value
-    /// LanConnectProtocolOffer.CreateCurrent() puts in the offer: LanConnectConstants.TailLanProtocolVersion when the
-    /// tail runtime is available, 0 otherwise (LanConnectProtocolOffer.cs:13-51).
+    /// selected protocol id into a LanConnectProtocolProfile, then to its canonical wire string. The LAN protocol
+    /// version is the same value LanConnectProtocolOffer.CreateCurrent puts in the offer - the host mod's tail protocol
+    /// constant when the tail runtime is available, 0 otherwise.
     ///
-    /// Nothing here creates a protocol offer: CreateCurrent() reads the game's message registry and native bus id and
-    /// has no business running in a patch body before the create does.
+    /// Nothing here creates a protocol offer: CreateCurrent reads the game's message registry and native bus id and has
+    /// no business running in a patch body before the create does.
     /// </summary>
     private static (string? Profile, int Version) ResolveOwnProfile(PoolAnchors anchors, object overlay)
     {

@@ -11,13 +11,13 @@ namespace Sts2LobbyEnhance;
 /// The default is "自动（延迟最低）" and that is also the behaviour without this repair; picking a server turns the
 /// choice into a constraint ("only create on that server"), which is honoured by PoolCreateFix.
 ///
-/// The section is inserted into the dialog body the host mod builds (LanConnectLobbyOverlay.cs:2480-2531), between the
-/// max-players row (:2498) and the error label (:2510-2514), collapsed by default. Expanding it probes the servers that
-/// have no fresh cache entry (PoolServerCatalog.ProbeAsync, 2 s total budget) and rewrites the latency column when the
-/// answers arrive; nothing blocks, and a failed probe leaves "未测" rather than a made-up number.
+/// The section is inserted into the dialog body the host mod builds, between the max-players row and the error label,
+/// collapsed by default. Expanding it probes the servers that have no fresh cache entry (2 s total budget) and rewrites
+/// the latency column when the answers arrive; nothing blocks, and a failed probe leaves "未测" rather than a made-up
+/// number.
 ///
-/// The selection lives in memory only, keyed by the overlay instance: config.json keeps holding one server address, and
-/// this is a per-session preference, not a persisted setting.
+/// The selection lives in memory only, keyed by the overlay instance, and every open of the dialog starts from 自动
+/// again: config.json keeps holding one server address, and this is neither a persisted nor a remembered setting.
 /// </summary>
 internal sealed class CreateServerPickerFix : ICompatFix
 {
@@ -106,8 +106,6 @@ internal sealed class CreateServerPickerFix : ICompatFix
                 return;
             }
 
-            // _createDialogBody is this dialog's body only because CreateDialogShell just assigned it (:3122). Any
-            // other shell built in between would leave a stale field, so the body has to belong to this shell.
             if (!shell.IsAncestorOf(body))
             {
                 return;
@@ -651,9 +649,9 @@ internal sealed class CreateServerPickerSection
     }
 
     /// <summary>
-    /// Validity, not IsInsideTree: BuildCreateDialog's return value is added to the overlay *after* the method returns
-    /// (LanConnectLobbyOverlay.cs:1120), so every node of this section is still detached while it is being built. Text
-    /// and visibility work detached; only a freed node must not be touched.
+    /// Validity, not IsInsideTree: BuildCreateDialog's return value is added to the overlay *after* the method returns,
+    /// so every node of this section is still detached while it is being built. Text and visibility work detached; only
+    /// a freed node must not be touched.
     /// </summary>
     private static bool IsLive(Node? node) => node != null && GodotObject.IsInstanceValid(node);
 

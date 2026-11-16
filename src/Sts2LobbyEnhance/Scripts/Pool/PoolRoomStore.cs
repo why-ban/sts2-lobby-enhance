@@ -223,7 +223,7 @@ internal sealed class PoolRoomStore
     /// Second index, keyed by room id. A steady-state round replaces the room instances without rebuilding the cards
     /// (that is the point of "unchanged means no repaint"), so the card closures still hold last round's objects; the
     /// identity lookup misses for those and this one answers instead. Ambiguous only when two servers advertise the same
-    /// room id, and then it answers with the most recent origin rather than with nothing.
+    /// room id, and then the last server to answer this round wins.
     /// </summary>
     private Dictionary<string, PoolOrigin> _originByRoomId = new(StringComparer.Ordinal);
 
