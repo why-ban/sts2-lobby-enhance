@@ -5,21 +5,19 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Phone only: lets the lobby's right-hand column scroll as one surface.
+/// Phone only: lets the lobby's right-hand column scroll as one surface, so the channel chat composer at the bottom of it
+/// can be reached. The column itself is never moved and never re-parented - its anchors, offsets and size flags stay
+/// upstream's - only its contents go into a scroller of ours that fills the column.
 ///
-/// In the compact layout the sidebar already sits inside a <c>ScrollContainer</c>, but its children stop the pointer:
-/// the room-details card, the action card and the chat frame are containers that either swallow the press or hand it to
-/// a nested scroller, so a finger drag over that column never reaches the sidebar's own scroll. On a phone the column
-/// is taller than the viewport, which puts the chat composer below the bottom edge with no way to reach it - the
-/// symptom is "the channel chat cannot be used on a phone".
+/// The scroller goes <em>inside</em> the column, not around it, and that is the whole point of this shape. A
+/// <c>ScrollContainer</c> dropped into a plain <c>Control</c> parent is sized by anchors alone, and the column's own
+/// anchors then resolve against the scroller instead of against the lobby: an earlier attempt wrapped the column this way
+/// and the wrapper measured 0x0, which put the column at its 200 px minimum over the room list and cut its right edge.
+/// A <c>VBoxContainer</c> parent lays the scroller out itself, so the column keeps its exact slot by construction.
 ///
-/// The repair gives the sidebar and each of its direct children their own drag handler, pointed at whichever
-/// <c>ScrollContainer</c> encloses them at press time, which is the same surface the dialog's server rows use. A drag
-/// moves the column; the nested message list keeps winning inside its own rect, so scrolling the chat log still
-/// scrolls the log.
-///
-/// Desktop is untouched: the mouse wheel already moves that column, and widening the drag surface there would fight
-/// text selection.
+/// The scrollbar is hidden (<c>ShowNever</c>), so nothing is reserved and the column looks and measures as before; the
+/// drag comes from <see cref="MobileSidebarScrollWatcher"/>, which reads the input stream instead of the GUI because the
+/// controls inside the column stop the pointer before the scroller ever sees it.
 /// </summary>
 internal sealed class MobileSidebarScrollFix : ICompatFix
 {
@@ -29,15 +27,22 @@ internal sealed class MobileSidebarScrollFix : ICompatFix
 
     private const string SidebarFieldName = "_sidebarContainer";
 
+    private const string ScrollerName = "LobbyEnhanceSidebarScroll";
+
+    private const string ContentName = "LobbyEnhanceSidebarScrollContent";
+
+    private const string WatcherName = "LobbyEnhanceSidebarScrollWatcher";
+
+    /// <summary>Upstream's own separation inside the column; only used when the column carries no override</summary>
+    private const int DefaultSeparation = 12;
+
     private const string Tag = "mobile-sidebar-scroll: ";
-
-    private const string AttachedMeta = "sts2le_sidebar_drag";
-
-    private const string WrapName = "LobbyEnhanceSidebarScroll";
 
     private static Shape? _shape;
 
     private static int _warned;
+
+    private static int _reported;
 
     public string Id => "mobile-sidebar-scroll";
 
@@ -48,7 +53,7 @@ internal sealed class MobileSidebarScrollFix : ICompatFix
         Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
         if (host == null)
         {
-            reason = "host mod '" + Entry.HostModAssemblyName + "' is not loaded";
+            reason = $"host mod '{Entry.HostModAssemblyName}' is not loaded";
             return false;
         }
 
@@ -85,14 +90,13 @@ internal sealed class MobileSidebarScrollFix : ICompatFix
             });
 
         Entry.Info(
-            $"{Tag}on a phone the lobby's right-hand column scrolls as one surface, so the channel chat composer " +
-            "below the fold can be reached.");
+            $"{Tag}on a phone the lobby's right-hand column scrolls as one surface, so the channel chat at the bottom of " +
+            "it can be reached, without moving the column or resizing it.");
     }
 
     /// <summary>
-    /// Runs after every rebuild of the main content, because a rebuild re-parents the sidebar into a fresh wrapper and
-    /// drops whatever scroller used to hold it. Both steps below are idempotent: the wrapper is only added when the
-    /// sidebar is not already inside a scroller, and each control is marked once.
+    /// Runs after every rebuild of the main content. A rebuild re-parents the column into a fresh wrapper but leaves its
+    /// children alone, so the scroller travels with the column; both steps below are idempotent and cheap on every call.
     /// </summary>
     // ReSharper disable once InconsistentNaming
     public static void RebuildPostfix(object? __instance)
@@ -100,113 +104,136 @@ internal sealed class MobileSidebarScrollFix : ICompatFix
         try
         {
             Shape? shape = _shape;
-            if (shape == null || __instance == null || !TouchChatScrollFix.Platform.IsMobile)
+            if (shape == null || __instance is not Node overlay || !GodotObject.IsInstanceValid(overlay))
             {
                 return;
             }
 
-            if (shape.Sidebar.GetValue(__instance) is not Control sidebar || !GodotObject.IsInstanceValid(sidebar))
+            if (!TouchChatScrollFix.Platform.IsMobile)
             {
                 return;
             }
 
-            if (!sidebar.IsInsideTree())
+            if (shape.Sidebar.GetValue(__instance) is not Control column || !GodotObject.IsInstanceValid(column))
             {
                 return;
             }
 
-            if (sidebar.GetParent() is not ScrollContainer)
+            ScrollContainer? scroll = EnsureScroller(column);
+            if (scroll == null || !GodotObject.IsInstanceValid(scroll))
             {
-                Wrap(sidebar);
+                return;
             }
 
-            Attach(sidebar);
+            EnsureWatcher(overlay).Follow(column, scroll);
 
-            foreach (Node child in sidebar.GetChildren())
+            if (Interlocked.Exchange(ref _reported, 1) == 0)
             {
-                if (child is Control control && GodotObject.IsInstanceValid(control))
-                {
-                    Attach(control);
-                }
+                Entry.Info(
+                    $"{Tag}column={column.GetGlobalRect()}, scroller={scroll.GetGlobalRect()}, " +
+                    $"scroll range=0..{Range(scroll):0}, page={scroll.GetVScrollBar().Page:0}.");
             }
         }
         catch (Exception exception)
         {
-            WarnOnce("the right-hand column could not be made scrollable on this device: " +
+            WarnOnce("the right-hand column could not be made scrollable: " +
                      exception.GetType().Name + ": " + exception.Message);
         }
     }
 
     /// <summary>
-    /// Puts the sidebar inside a scroller that occupies the sidebar's slot. Only reached on a touch device whose window
-    /// is large enough for the non-compact layout, where upstream leaves the column unscrolled.
+    /// Returns the scroller the column's contents live in, creating it inside the column the first time. Upstream's
+    /// compact layout already put the column inside one, and nesting two would fight over the same finger, so that one is
+    /// used as it is.
     /// </summary>
-    private static void Wrap(Control sidebar)
+    private static ScrollContainer? EnsureScroller(Control column)
     {
-        Node? parent = sidebar.GetParent();
-        if (parent == null)
+        if (column.GetParent() is ScrollContainer outer && GodotObject.IsInstanceValid(outer))
         {
-            return;
+            return outer;
         }
 
-        int index = sidebar.GetIndex();
-        float left = sidebar.AnchorLeft;
-        float right = sidebar.AnchorRight;
-        float top = sidebar.AnchorTop;
-        float bottom = sidebar.AnchorBottom;
-        float offsetLeft = sidebar.OffsetLeft;
-        float offsetRight = sidebar.OffsetRight;
-        float offsetTop = sidebar.OffsetTop;
-        float offsetBottom = sidebar.OffsetBottom;
-
-        parent.RemoveChild(sidebar);
-
-        var scroll = new ScrollContainer
+        if (column.FindChild(ScrollerName, recursive: false, owned: false) is ScrollContainer existing
+            && GodotObject.IsInstanceValid(existing) && ReferenceEquals(existing.GetParent(), column))
         {
-            Name = WrapName,
-            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
-            FollowFocus = true,
-            MouseFilter = Control.MouseFilterEnum.Pass,
+            MoveContents(column, existing);
+            return existing;
+        }
+
+        var content = new VBoxContainer
+        {
+            Name = ContentName,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             SizeFlagsVertical = Control.SizeFlags.ExpandFill
         };
+        content.AddThemeConstantOverride("separation", Separation(column));
 
-        scroll.AnchorLeft = left;
-        scroll.AnchorRight = right;
-        scroll.AnchorTop = top;
-        scroll.AnchorBottom = bottom;
-        scroll.OffsetLeft = offsetLeft;
-        scroll.OffsetRight = offsetRight;
-        scroll.OffsetTop = offsetTop;
-        scroll.OffsetBottom = offsetBottom;
-
-        parent.AddChild(scroll);
-        parent.MoveChild(scroll, index);
-        scroll.AddChild(sidebar);
-
-        Entry.Info(Tag + "the right-hand column had no scroller on this device, so one was added around it.");
+        var created = new ScrollContainer
+        {
+            Name = ScrollerName,
+            HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled,
+            VerticalScrollMode = ScrollContainer.ScrollMode.ShowNever,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+            FollowFocus = false
+        };
+        created.AddChild(content);
+        column.AddChild(created);
+        MoveContents(column, created);
+        return created;
     }
 
     /// <summary>
-    /// One drag handler per control, pointed at whatever <c>ScrollContainer</c> encloses it when the finger lands: that
-    /// is what makes the handler survive a rebuild that swaps the scroller underneath it.
+    /// Moves the column's own children into the scroller's content box, keeping their order. The content box keeps the
+    /// column's separation and lets its children expand exactly as they did inside the column, so with the same amount of
+    /// space the panels get the same sizes they had before.
     /// </summary>
-    private static void Attach(Control control)
+    private static void MoveContents(Control column, ScrollContainer scroller)
     {
-        if (control.HasMeta(AttachedMeta))
+        if (scroller.GetChildCount() == 0 || scroller.GetChild(0) is not VBoxContainer content)
         {
             return;
         }
 
-        control.SetMeta(AttachedMeta, true);
-
-        // A container passes the press up by default, and a drag only reaches this handler if the control owns it.
-        control.MouseFilter = Control.MouseFilterEnum.Stop;
-        TouchDragScroll? drag = TouchDragScroll.Attach(control);
-        if (drag == null)
+        var moving = new List<Node>();
+        foreach (Node child in column.GetChildren())
         {
-            control.RemoveMeta(AttachedMeta);
+            if (!ReferenceEquals(child, scroller))
+            {
+                moving.Add(child);
+            }
         }
+
+        foreach (Node child in moving)
+        {
+            column.RemoveChild(child);
+            content.AddChild(child);
+        }
+    }
+
+    private static int Separation(Control column)
+    {
+        int separation = column.GetThemeConstant("separation");
+        return separation >= 0 ? separation : DefaultSeparation;
+    }
+
+    private static MobileSidebarScrollWatcher EnsureWatcher(Node overlay)
+    {
+        if (overlay.FindChild(WatcherName, recursive: false, owned: false) is MobileSidebarScrollWatcher existing
+            && GodotObject.IsInstanceValid(existing))
+        {
+            return existing;
+        }
+
+        var created = new MobileSidebarScrollWatcher { Name = WatcherName };
+        overlay.AddChild(created);
+        return created;
+    }
+
+    private static float Range(ScrollContainer scroll)
+    {
+        ScrollBar bar = scroll.GetVScrollBar();
+        return Mathf.Max((float)bar.MaxValue - (float)bar.Page, 0f);
     }
 
     private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "mobile-sidebar-scroll", message);
@@ -241,7 +268,7 @@ internal sealed class MobileSidebarScrollFix : ICompatFix
             FieldInfo? sidebar = ReflectScope.Field(problems, overlay, SidebarFieldName);
             if (sidebar != null && !typeof(Control).IsAssignableFrom(sidebar.FieldType))
             {
-                problems.Add($"${OverlayTypeName}.${SidebarFieldName} is ${sidebar.FieldType.FullName}, expected a Control");
+                problems.Add($"{OverlayTypeName}.{SidebarFieldName} is {sidebar.FieldType.FullName}, expected a Control");
                 sidebar = null;
             }
 
