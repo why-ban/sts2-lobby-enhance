@@ -33,6 +33,7 @@ public sealed class FixRegistryTests
     [
         "roster-rebaseline",
         "load-join-order",
+        "begin-run-order",
         "new-run-button",
         "new-run-save-binding",
         "new-protocol-only",

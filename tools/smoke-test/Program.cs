@@ -18,7 +18,7 @@ string gameDir = args.Length > 0
     ? args[0]
     : @"D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64";
 
-// 宿主模组默认取 **0.6.4**（manifest 的 min_version）：补丁的 15 项锚点是对着它校验的。
+// 宿主模组默认取 **0.6.4**（manifest 的 min_version）：补丁的 16 项锚点是对着它校验的。
 // 覆盖顺序与 tests 一致：命令行 > STS2_LAN_CONNECT_064_DLL > 在工作树里发现 upstream-064 的出货 DLL。
 const string DefaultHostMod064 =
     @"D:\zhuanban\sts2m\work\lobby\upstream-064\src\emptylower-STS2-Game-Lobby-1db4e10\releases\sts2_lan_connect\sts2_lan_connect.dll";
@@ -38,6 +38,7 @@ string[] expectedFixIds =
 [
     "roster-rebaseline",
     "load-join-order",
+    "begin-run-order",
     "new-run-button",
     "new-run-save-binding",
     "new-protocol-only",
@@ -60,6 +61,7 @@ string[] expectedFixIds =
 [
     ("roster-rebaseline",  "LanConnectRosterAuthorityState",  "Accept"),
     ("load-join-order",    "LanConnectTailMessageRuntime",     "RestoreLoadJoin"),
+    ("begin-run-order",    "StartRunLobby",                     "BeginRunForAllPlayers"),
     ("new-run-button",     "NGameOverScreen",                  "_Ready"),
     ("new-run-save-binding", "RunManager",                       "SetUpNewMultiplayer"),
     ("new-protocol-only",  "LanConnectLobbyOverlay",           "GetSelectedCreateProtocolId"),

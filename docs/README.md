@@ -7,27 +7,28 @@
 - 依赖：**社区模组 0.6.4**（工坊 3749766330，已设为必需物品）
 - 联机双方都要安装；`affects_gameplay` 保持 `false`（握手靠它判断两端是否一致）
 
-## 它在做什么：15 项修复，9 个回滚分组
+## 它在做什么：16 项修复，9 个回滚分组
 
 分组决定"一起失败的接缝"：组内任一项装不上就整组回滚（每组一个 Harmony id，`sts2_lobby_enhance.<组名小写>`）。
 
 | # | id | 组 | 做什么 | 主要注入点（0.6.4 / 游戏 0.113；有的修复挂多处） |
 |---|---|---|---|---|
 | 1 | `roster-rebaseline` | Roster | 减员后把本地名册重新基线化 | `LanConnectRosterAuthorityState.Accept` |
-| 2 | `load-join-order` | LoadOrder | 读档加入前按存档下标原地重排 | `LanConnectTailMessageRuntime.RestoreLoadJoin` |
-| 3 | `new-run-button` | NewRun | 结算页给房主注入「新开一局」 | `NGameOverScreen._Ready` |
-| 4 | `new-run-save-binding` | NewRun | 新一局开始时清空 `HostedRoomSession.BoundSaveKey` | `RunManager.SetUpNewMultiplayer` |
-| 5 | `new-protocol-only` | Modes | 建房对话框不再显示「联机协议」一节，固定新协议 | `LanConnectLobbyOverlay.BuildCreateDialog` / `GetSelectedCreateProtocolId` |
-| 6 | `room-version-filter` | Filter | 筛选弹窗加「相同游戏版本」chip | `LanConnectLobbyOverlay.GetFilteredRooms` |
-| 7 | `touch-chat-scroll` | Touch | 手机：滑动=滚动，长按=框选，松手复制选区 | `LanConnectRichMessageView._Ready` / `RaiseReferencePressed` |
-| 8 | `chat-server-switch` | Chat | 大厅聊天标题行：名称 + ⟳ + ‹ ›，切公共频道所连的服务器；首次进入自动连一次本服 | `LanConnectBasicChatPanel.UpdateAvailability` |
-| 9 | `announcement-source` | Announce | 公告请求指向聊天频道当前那台服务器 | `LobbyApiClient.GetAnnouncementsAsync` |
-| 10 | `server-pool-refresh` | Pool | 房间列表 = 全服池，完全接管刷新 | `LanConnectLobbyOverlay.RefreshRoomsAsync` |
-| 11 | `server-pool-join` | Pool | 跨服加入：切服 → 复核房间仍在 → 走原加入流程 | `LanConnectLobbyOverlay.BeginJoinRoomAsync` |
-| 12 | `server-pool-create` | Pool | 建房前选「延迟最低且能承载协议档位」的服务器 | `LanConnectLobbyOverlay.CreateRoomAsync` |
-| 13 | `server-pool-create-picker` | Pool | 建房面板里可折叠的服务器选择（显示延迟，默认自动） | `LanConnectLobbyOverlay.BuildCreateDialog` |
-| 14 | `lobby-entry-direct` | Pool | 点「游戏大厅」直达房间列表，不弹服务器选择器 | `LanConnectServerSelectionStartup.Show` |
-| 15 | `room-chat-hint-passthrough` | Chat | 局内收起聊天时那行提示不再吞点击（仅电脑端） | `LanConnectRoomChatOverlay.RefreshFromSource` |
+| 2 | `begin-run-order` | Roster | 开局前把房主房间里的玩家列表排成 slot 顺序，避免种子下标错位 | `StartRunLobby.BeginRunForAllPlayers` |
+| 3 | `load-join-order` | LoadOrder | 读档加入前按存档下标原地重排 | `LanConnectTailMessageRuntime.RestoreLoadJoin` |
+| 4 | `new-run-button` | NewRun | 结算页给房主注入「新开一局」 | `NGameOverScreen._Ready` |
+| 5 | `new-run-save-binding` | NewRun | 新一局开始时清空 `HostedRoomSession.BoundSaveKey` | `RunManager.SetUpNewMultiplayer` |
+| 6 | `new-protocol-only` | Modes | 建房对话框不再显示「联机协议」一节，固定新协议 | `LanConnectLobbyOverlay.BuildCreateDialog` / `GetSelectedCreateProtocolId` |
+| 7 | `room-version-filter` | Filter | 筛选弹窗加「相同游戏版本」chip | `LanConnectLobbyOverlay.GetFilteredRooms` |
+| 8 | `touch-chat-scroll` | Touch | 手机：滑动=滚动，长按=框选，松手复制选区 | `LanConnectRichMessageView._Ready` / `RaiseReferencePressed` |
+| 9 | `chat-server-switch` | Chat | 大厅聊天标题行：名称 + ⟳ + ‹ ›，切公共频道所连的服务器；首次进入自动连一次本服 | `LanConnectBasicChatPanel.UpdateAvailability` |
+| 10 | `announcement-source` | Announce | 公告请求指向聊天频道当前那台服务器 | `LobbyApiClient.GetAnnouncementsAsync` |
+| 11 | `server-pool-refresh` | Pool | 房间列表 = 全服池，完全接管刷新 | `LanConnectLobbyOverlay.RefreshRoomsAsync` |
+| 12 | `server-pool-join` | Pool | 跨服加入：切服 → 复核房间仍在 → 走原加入流程 | `LanConnectLobbyOverlay.BeginJoinRoomAsync` |
+| 13 | `server-pool-create` | Pool | 建房前选「延迟最低且能承载协议档位」的服务器 | `LanConnectLobbyOverlay.CreateRoomAsync` |
+| 14 | `server-pool-create-picker` | Pool | 建房面板里可折叠的服务器选择（显示延迟，默认自动） | `LanConnectLobbyOverlay.BuildCreateDialog` |
+| 15 | `lobby-entry-direct` | Pool | 点「游戏大厅」直达房间列表，不弹服务器选择器 | `LanConnectServerSelectionStartup.Show` |
+| 16 | `room-chat-hint-passthrough` | Chat | 局内收起聊天时那行提示不再吞点击（仅电脑端） | `LanConnectRoomChatOverlay.RefreshFromSource` |
 
 每个修复都在 `Applies()` 里一次性解析全部反射锚点，缺哪个报哪个（clean skip）；补丁体各自 try/catch 包住节点读写，
 只有取参与前置判断在 try 外。`Applies()` / `Apply()` 里没有任何 Godot 调用，所以冒烟测试能在没有 Godot 的进程里跑它们。
@@ -58,7 +59,7 @@ pwsh -NoProfile -File tools\pack-upload-kit\pack-upload-kit.ps1 -Force
 pwsh -NoProfile -File tools\pack-upload-kit\test-upload-kit.ps1
 `@
 
-期望值：build 0 警告 0 错误；smoke 打印 `OK (15 fixes applied)` 且 15 项 id / 分组 / 接缝全绿；
+期望值：build 0 警告 0 错误；smoke 打印 `OK (16 fixes applied)` 且 16 项 id / 分组 / 接缝全绿；
 `dotnet test` 61 通过 0 跳过；上传包验收 35 条全过（**不联系 Steam**）。
 
 - `build-content` 必须紧跟 `build`：测试断言"出货 DLL 与当前构建逐字节一致"。
