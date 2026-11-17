@@ -900,7 +900,10 @@ internal static class PoolServerCatalog
     /// <summary>The canonical tail profile (LanConnectProtocolProfileExtensions.TailCanonical).</summary>
     internal const string TailProfileCanonical = "tail_v1";
 
-    /// <summary>Longest one discovery round may take before it gives up and tries again next tick.</summary>
+    /// <summary>
+    /// Longest one discovery round may take before it gives up. The next attempt is then deferred by
+    /// <see cref="DiscoveryRetrySeconds"/>.
+    /// </summary>
     internal const int DiscoveryBudgetMs = 1500;
 
     /// <summary>
@@ -1071,11 +1074,11 @@ internal static class PoolServerCatalog
         {
             DeferNextDiscovery();
             // Leaving the cache alone is the whole recovery path, but a budget that expires on every tick is
-            // invisible without a line: the next round simply asks again.
+            // invisible without a line; the next attempt is deferred, not skipped.
             PoolRefreshFix.WarnOnce(
                 "discovery-budget",
                 "server discovery used its whole " + DiscoveryBudgetMs + " ms budget; the pool keeps the servers it " +
-                "already knew and asks again next refresh");
+                "already knew and asks again in " + DiscoveryRetrySeconds + " s");
         }
         catch (Exception exception)
         {
@@ -1404,8 +1407,9 @@ internal static class PoolServerCatalog
         return normalized == null ? null : new PoolServer(normalized);
     }
 
-    // The address upstream pins to the top of its own server list, empty when the host no longer exposes it. Read as a
-    // literal when it is one: the field is a const string and GetValue throws on those
+    // The address upstream pins to the top of its own server list, empty when the host no longer exposes it. A literal
+    // is read as its raw constant, which is the same value GetValue would return and does not depend on how the field
+    // was emitted
     internal static string PinnedBaseUrl(PoolAnchors anchors)
     {
         try

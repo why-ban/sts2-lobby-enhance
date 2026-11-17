@@ -155,15 +155,6 @@ def draw_spaced(draw: ImageDraw.ImageDraw, cy: float, text: str, face, fill, spa
 # --- icons (drawn inside a 30x30 chip, centred on cx/cy) --------------------
 
 
-def icon_check(draw, cx, cy, s, colour, w) -> None:
-    draw.line(
-        [(cx - s * 0.46, cy + s * 0.04), (cx - s * 0.12, cy + s * 0.36), (cx + s * 0.48, cy - s * 0.38)],
-        fill=colour,
-        width=w,
-        joint="curve",
-    )
-
-
 def icon_bolt(draw, cx, cy, s, colour, w) -> None:
     points = [
         (0.20, -1.00), (-0.56, 0.12), (-0.06, 0.12),
@@ -189,7 +180,7 @@ def arrow_head(draw, tip, direction, length, half_width, colour) -> None:
 
 
 def icon_restart(draw, cx, cy, s, colour, w) -> None:
-    """Two left-pointing wedges: 'go back to the start of this floor'."""
+    """Two left-pointing wedges."""
     for offset in (0.10, -0.62):
         draw.polygon(
             [
@@ -212,16 +203,6 @@ def icon_play(draw, cx, cy, s, colour, w) -> None:
         ],
         fill=colour,
     )
-
-
-def icon_slider(draw, cx, cy, s, colour, w) -> None:
-    rows = (-0.62, 0.0, 0.62)
-    knobs = (-0.28, 0.34, -0.06)
-    for offset, knob in zip(rows, knobs):
-        y = cy + offset * s
-        draw.line([(cx - s * 0.88, y), (cx + s * 0.88, y)], fill=colour, width=w)
-        draw.ellipse((cx + knob * s - s * 0.26, y - s * 0.26, cx + knob * s + s * 0.26, y + s * 0.26),
-                     fill=CHIP_BG, outline=colour, width=w)
 
 
 def icon_grid(draw, cx, cy, s, colour, w) -> None:
@@ -261,11 +242,9 @@ ICONS = {
     "grid": icon_grid,
     "funnel": icon_funnel,
     "phone": icon_phone,
-    "check": icon_check,
     "bolt": icon_bolt,
     "restart": icon_restart,
     "play": icon_play,
-    "slider": icon_slider,
 }
 
 

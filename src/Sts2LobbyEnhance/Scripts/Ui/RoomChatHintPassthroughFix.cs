@@ -209,15 +209,7 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         return resolved == 1;
     }
 
-    private static void WarnOnce(string message)
-    {
-        if (Interlocked.Exchange(ref _warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("room-chat-hint-passthrough: " + message);
-    }
+    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "room-chat-hint-passthrough", message);
 
     /// <summary>Per-overlay bookkeeping: the captured filters and the one log line.</summary>
     private sealed class FilterState

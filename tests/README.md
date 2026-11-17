@@ -6,7 +6,7 @@ dotnet test tests
 ```
 
 Requires the .NET 9 SDK. The suite never starts the game and never touches Steam; it reads the shipped
-binaries as data. **59 cases in 9 classes.**
+binaries as data. **61 cases in 10 classes.**
 
 ## What it checks
 
@@ -20,14 +20,15 @@ binaries as data. **59 cases in 9 classes.**
 | `TailRosterContractTests` | 4 | The tail-roster epoch reset (`TailRoster`) contract against the shipped **0.6.4** binary: the five reflection anchors the reset depends on. | game + official 0.6.4 DLL |
 | `RosterEpochRegressionTests` | 4 | Why the roster must be rebaselined: an authority that accepted the old epoch rejects the new one, `Reset` makes the next epoch acceptable again, repeating the bytes still passes, and the host peer id survives the reset. Drives the real host types with the real serializers. | game + official 0.6.4 DLL |
 | `FixRegistryTests` | 1 | The **inventory** of repairs: `CompatFixes.Build()` yields exactly the expected ids in the expected order (so deleting a line cannot stay green). | nothing (source-level) |
-| `GameDependentCoverageTests` | 1 | The anti-false-green gate: fails when an input that makes one of the 30 game-dependent cases skip is missing, and fails when the cases that ran are not exactly the expected list — naming the ones that are missing or unexpected, so a green run always means they executed. | nothing (probes the inputs) |
+| `GameDependentCoverageTests` | 1 | The anti-false-green gate: fails when an input that makes one of the 32 game-dependent cases skip is missing, and fails when the cases that ran are not exactly the expected list — naming the ones that are missing or unexpected, so a green run always means they executed. | nothing (probes the inputs) |
+| `PoolAddressLogicTests` | 2 | The two pure helpers behind the pool's room key and its "same version" filter: address equality ignores case and a trailing slash only, and a version key ignores a leading `v` and surrounding space only. | game + built patch |
 
 ## Missing inputs: skipped *and* reported
 
-`GameDependentCoverageTests` is the reason a missing input can no longer be silent. 30 of the
-cases need the game DLL, an official LAN Connect DLL, the built patch, the packaging workspace or a release
-zip, and call `Assert.Skip` when it is absent; a skip still exits 0, so a green run on a machine without
-them used to prove nothing. The gate:
+`GameDependentCoverageTests` is the reason a missing input can no longer be silent. 32 of the
+cases need the game DLL, an official LAN Connect DLL or the built patch, and six more in `ReleasePackageTests`
+need the packaging workspace or a release zip; all of them call `Assert.Skip` when their input is absent, and a
+skip still exits 0, so a green run on a machine without them used to prove nothing. The gate:
 
 * checks every input that can trigger one of those skips and **fails**, listing the missing inputs, when any of
   them is absent;

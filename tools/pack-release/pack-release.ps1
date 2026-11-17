@@ -69,15 +69,8 @@ $projectDir = Join-Path $companion 'src\Sts2LobbyEnhance'
 $builtDll = Join-Path $projectDir 'bin\Release\net9.0\sts2_lobby_enhance.dll'
 $sourceManifest = Join-Path $projectDir 'sts2_lobby_enhance.json'
 
-# This script compares content/ against bin/, which cannot see a build that is older than its sources. The gate
-# order builds first, but a hand-run of this script must not silently ship the previous build either, so the
-# comparison against the sources happens here.
 $newestSource = Get-ChildItem -LiteralPath (Join-Path $projectDir 'Scripts') -Recurse -File -Filter *.cs |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (Test-Path -LiteralPath $builtDll -PathType Leaf) {
-    $builtItem = Get-Item -LiteralPath $builtDll
-
-}
 
 if ([string]::IsNullOrWhiteSpace($DistDirectory)) {
     # work/companion -> work -> <repo>; the release folder lives at the repo root, not inside work/.

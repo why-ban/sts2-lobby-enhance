@@ -7,9 +7,8 @@ namespace Sts2LobbyEnhance;
 /// drag, so a Button row turns a swipe into a click and the ScrollContainer above it never sees the movement. This
 /// scrolls from those same events and reports the drag back, so the activation that ends it can be dropped
 ///
-/// The scroll is driven here rather than left to the container because the container's own drag-scroll is switched off
-/// on anything that does not report a touchscreen, and because a row that stops the pointer never gives it the press
-/// it would need to start
+/// The scroll is driven here rather than left to the container because a row that stops the pointer never gives the
+/// container the press it would need to start
 /// </summary>
 internal sealed class TouchDragScroll
 {
@@ -22,7 +21,9 @@ internal sealed class TouchDragScroll
     private const int MouseIndex = -1;
 
     private static int _attachWarned;
-    private static int _inputWarned;
+    private static int _scrollWarned;
+    private static int _focusWarned;
+    private static int _hoverWarned;
 
     private readonly Control _control;
     private readonly ScrollContainer? _fixedTarget;
@@ -113,7 +114,7 @@ internal sealed class TouchDragScroll
         }
         catch (Exception exception)
         {
-            WarnOnce(ref _inputWarned, "scrolling a list by touch failed: " + exception.GetType().Name + ": " +
+            WarnOnce(ref _scrollWarned, "scrolling a list by touch failed: " + exception.GetType().Name + ": " +
                                        exception.Message);
         }
     }
@@ -145,7 +146,7 @@ internal sealed class TouchDragScroll
         }
         catch (Exception exception)
         {
-            WarnOnce(ref _inputWarned, "dropping the pressed row's focus failed: " + exception.GetType().Name + ": " +
+            WarnOnce(ref _focusWarned, "dropping the pressed row's focus failed: " + exception.GetType().Name + ": " +
                                        exception.Message);
         }
     }
@@ -225,12 +226,6 @@ internal sealed class TouchDragScroll
         scroll.ScrollVertical = Mathf.RoundToInt(Mathf.Clamp(value, 0f, max));
     }
 
-    private float CurrentScroll()
-    {
-        ScrollContainer? scroll = _target;
-        return scroll != null && GodotObject.IsInstanceValid(scroll) ? scroll.ScrollVertical : 0f;
-    }
-
     // The engine keeps a row hovered after the finger lifts and the host paints hover green, so a finished drag would
     // end with a green row and no finger on it. Flipping the filter is the one public way to make the viewport drop it:
     // it sends the exit notification and does not re-enter until the pointer moves again
@@ -255,7 +250,7 @@ internal sealed class TouchDragScroll
         }
         catch (Exception exception)
         {
-            WarnOnce(ref _inputWarned, "dropping the hover box left by a drag failed: " + exception.GetType().Name + ": " +
+            WarnOnce(ref _hoverWarned, "dropping the hover box left by a drag failed: " + exception.GetType().Name + ": " +
                                        exception.Message);
         }
     }
@@ -273,13 +268,6 @@ internal sealed class TouchDragScroll
         return null;
     }
 
-    private static void WarnOnce(ref int warned, string message)
-    {
-        if (Interlocked.Exchange(ref warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("touch-drag-scroll: " + message);
-    }
+    private static void WarnOnce(ref int warned, string message) =>
+        Entry.WarnOnce(ref warned, "touch-drag-scroll", message);
 }

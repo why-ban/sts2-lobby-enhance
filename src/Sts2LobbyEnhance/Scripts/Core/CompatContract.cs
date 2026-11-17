@@ -2,12 +2,12 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// The unit of isolation: one group is one Harmony id and one rollback boundary.
-    ///
-    /// Grouping follows the seam that fails together, not the feature list, so a host-mod update costs the
-    /// affected feature instead of the whole mod
-    /// </summary>
+/// <summary>
+/// The unit of isolation: one group is one Harmony id and one rollback boundary.
+///
+/// Grouping follows the seam that fails together, not the feature list, so a host-mod update costs the
+/// affected feature instead of the whole mod
+/// </summary>
 internal enum FixGroup
 {
     NewRun,
@@ -27,9 +27,9 @@ internal enum FixGroup
     Pool,
 
     /// <summary>
-    /// Touch scrolling and long-press selection in the chat panel. Platform-conditioned behaviour sits in two
-    /// groups: this one and <see cref="Chat"/> (the hint click-through is desktop-only), so grouping follows the
-    /// seam rather than the platform
+    /// Touch scrolling and long-press selection in the chat panel. Platform-conditioned behaviour sits in three
+    /// groups: this one, <see cref="Chat"/> (the hint click-through is desktop-only) and <see cref="Pool"/> (the
+    /// create dialog's list scrolls by touch only), so grouping follows the seam rather than the platform
     /// </summary>
     Touch,
 
@@ -43,26 +43,26 @@ internal enum FixGroup
     Announce
 }
 
-    /// <summary>
-    /// One isolated repair, installed into the Harmony instance of its <see cref="FixGroup"/>.
-    ///
-    /// Resolve every anchor before the first <c>harmony.Patch</c> call. A lookup that fails after a patch has
-    /// been installed leaves a half-installed repair whose only symptom is an exception deep inside the game,
-    /// with nothing in the log pointing at the repair that caused it.
-    ///
-    /// Collect every missing anchor rather than dying on the first miss (<see cref="ReflectScope"/>).
-    /// Throwing is expected and safe: the host catches it, records this repair as failed and unpatches this
-    /// repair's group only, so a repair that silently does nothing is worse than one that reports itself
-    /// broken.
-    ///
-    /// <see cref="Applies"/> asks whether the running build allows the repair, not whether the feature would
-    /// be nice to have. Answering <c>true</c> with missing anchors turns a clean "skipped, here is why"
-    /// into a failure.
-    ///
-    /// Since 2.0.0 neither method takes a game-version snapshot: the six 0.113 breaks that used to be probed
-    /// are adapted upstream (0.6.4), so no repair gates itself on a version any more. The room-version filter
-    /// still reads the local version string, but as feature input, not as a gate
-    /// </summary>
+/// <summary>
+/// One isolated repair, installed into the Harmony instance of its <see cref="FixGroup"/>.
+///
+/// Resolve every anchor before the first <c>harmony.Patch</c> call. A lookup that fails after a patch has
+/// been installed leaves a half-installed repair whose only symptom is an exception deep inside the game,
+/// with nothing in the log pointing at the repair that caused it.
+///
+/// Collect every missing anchor rather than dying on the first miss (<see cref="ReflectScope"/>).
+/// Throwing is expected and safe: the host catches it, records this repair as failed and unpatches this
+/// repair's group only, so a repair that silently does nothing is worse than one that reports itself
+/// broken.
+///
+/// <see cref="Applies"/> asks whether the running build allows the repair, not whether the feature would
+/// be nice to have. Answering <c>true</c> with missing anchors turns a clean "skipped, here is why"
+/// into a failure.
+///
+/// Since 2.0.0 neither method takes a game-version snapshot: the six 0.113 breaks that used to be probed
+/// are adapted upstream (0.6.4), so no repair gates itself on a version any more. The room-version filter
+/// still reads the local version string, but as feature input, not as a gate
+/// </summary>
 internal interface ICompatFix
 {
     /// <summary>Stable: tests, release tooling and the upload kit pin these strings</summary>

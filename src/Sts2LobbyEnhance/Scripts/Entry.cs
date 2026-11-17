@@ -5,17 +5,17 @@ using MegaCrit.Sts2.Core.Modding;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Mod entry point
+/// <summary>
+/// Mod entry point
     ///
     /// A missing host mod is the only condition that disables everything; it is not a compatibility judgement,
     /// the assembly is simply not loaded. Everything else fails per group, because each group patches under its
     /// own Harmony id and <c>UnpatchAll</c> takes an id rather than a patch set, so a rollback cannot reach
     /// another group's patches
     ///
-    /// Removing a group's patches is not the same as undoing them: Harmony hooks disappear, but state a repair
-    /// already wrote into this process survives until restart
-    /// </summary>
+/// Removing a group's patches is not the same as undoing them: Harmony hooks disappear, but state a repair
+/// already wrote into this process survives until restart
+/// </summary>
 [ModInitializer(nameof(Init))]
 public static class Entry
 {
@@ -88,10 +88,10 @@ public static class Entry
                 return report;
             }
 
-    // BUILDING the list is itself fallible and is not a per-repair concern: Build() is an iterator, so
-    // "new NewRunFromGameOverFix()" runs during MoveNext(), here and not inside Install()'s try, and a throwing
-    // constructor (or static initialiser) would escape with the groups installed so far left live and no
-    // summary line
+            // BUILDING the list is itself fallible and is not a per-repair concern: Build() is an iterator, so
+            // "new NewRunFromGameOverFix()" runs during MoveNext(), here and not inside Install()'s try, and a throwing
+            // constructor (or static initialiser) would escape with the groups installed so far left live and no
+            // summary line
             List<ICompatFix> fixes;
             try
             {
@@ -338,12 +338,26 @@ public static class Entry
             Log.Error("[lobby-enhance] " + message);
         }
     }
-}
 
     /// <summary>
-    /// Outcome of one startup. <c>tools/smoke-test</c> reads these by reflection over their names, so the names
-    /// and types are part of the contract
+    /// A repair's own failure, reported once per latch: the body it guards may run every frame. The latch belongs to
+    /// the caller, so one kind of trouble does not silence the rest
     /// </summary>
+    internal static void WarnOnce(ref int gate, string prefix, string message)
+    {
+        if (Interlocked.Exchange(ref gate, 1) != 0)
+        {
+            return;
+        }
+
+        Warn(prefix + ": " + message);
+    }
+}
+
+/// <summary>
+/// Outcome of one startup. <c>tools/smoke-test</c> reads these by reflection over their names, so the names
+/// and types are part of the contract
+/// </summary>
 internal sealed class StartupReport
 {
     private readonly List<GroupReport> _groups = new();

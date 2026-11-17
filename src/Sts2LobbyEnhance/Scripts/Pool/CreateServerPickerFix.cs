@@ -381,7 +381,7 @@ internal sealed class CreateServerPickerSection
 
         label.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         label.AddThemeFontSizeOverride("font_size", 13);
-        label.AddThemeColorOverride("font_color", MutedColor());
+        label.AddThemeColorOverride("font_color", PoolRefreshFix.MutedColor(_anchors));
         label.Visible = false;
         return label;
     }
@@ -875,22 +875,6 @@ internal sealed class CreateServerPickerSection
         }
     }
 
-    private Color MutedColor()
-    {
-        try
-        {
-            if (_anchors.TextMutedColor?.GetValue(null) is Color color)
-            {
-                return color;
-            }
-        }
-        catch (Exception)
-        {
-            // Fall through to the literal.
-        }
-
-        return new Color(0.66f, 0.68f, 0.72f);
-    }
 
     /// <summary>
     /// Validity, not IsInsideTree: BuildCreateDialog's return value is added to the overlay *after* the method returns,

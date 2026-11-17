@@ -5,29 +5,29 @@ using MegaCrit.Sts2.Core.Multiplayer.Game;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Drops the accepted Tail roster epoch of one live session, so the next roster-bearing message from the
-    /// host is validated as a bootstrap instead of as a "current state" repeat
-    ///
-    /// Used by <see cref="NewRunFromGameOverFix"/>, which keeps the <c>NetService</c> alive across a room rebuild
-    /// and re-handshakes on that same session
-    ///
-    /// The trap, from the shipped 0.6.3 binary under <c>work/lobby/dec-official</c>:
-    /// <c>LanConnectTailMessageRuntime.AcceptRoster</c> picks the snapshot use with
-    /// <c>authority.Current == null ? firstUse : CurrentState</c>, so the <c>Bootstrap</c> hint
-    /// <c>RestoreStartRunResponse</c> passes is ignored once the authority holds a snapshot. <c>CurrentState</c>
-    /// then demands the snapshot repeat the accepted revision byte for byte, and throws when it does not.
-    /// Official joins never reach that branch because they arrive on a fresh binding with an empty roster
-    /// authority, but a kept-alive session still holds the <c>StartRunLobbyPlayer</c> epoch from the room it
-    /// left while the host publishes a <c>LoadRunLobbyPlayer</c> epoch, and the length check fails before any
-    /// field is compared
-    ///
-    /// Resetting only the client is deliberate: the host keeps publishing monotonically increasing revisions,
-    /// and a client that resets loses only its own stale epoch
-    ///
-    /// Best effort throughout: a missing anchor or a throwing target logs one warning and returns <c>false</c>,
-    /// because both call sites sit inside a handshake that must not die for a diagnostic
-    /// </summary>
+/// <summary>
+/// Drops the accepted Tail roster epoch of one live session, so the next roster-bearing message from the
+/// host is validated as a bootstrap instead of as a "current state" repeat
+///
+/// Used by <see cref="NewRunFromGameOverFix"/>, which keeps the <c>NetService</c> alive across a room rebuild
+/// and re-handshakes on that same session
+///
+/// The trap, in the host mod's own <c>AcceptRoster</c>:
+/// <c>LanConnectTailMessageRuntime.AcceptRoster</c> picks the snapshot use with
+/// <c>authority.Current == null ? firstUse : CurrentState</c>, so the <c>Bootstrap</c> hint
+/// <c>RestoreStartRunResponse</c> passes is ignored once the authority holds a snapshot. <c>CurrentState</c>
+/// then demands the snapshot repeat the accepted revision byte for byte, and throws when it does not.
+/// Official joins never reach that branch because they arrive on a fresh binding with an empty roster
+/// authority, but a kept-alive session still holds the <c>StartRunLobbyPlayer</c> epoch from the room it
+/// left while the host publishes a <c>LoadRunLobbyPlayer</c> epoch, and the length check fails before any
+/// field is compared
+///
+/// Resetting only the client is deliberate: the host keeps publishing monotonically increasing revisions,
+/// and a client that resets loses only its own stale epoch
+///
+/// Best effort throughout: a missing anchor or a throwing target logs one warning and returns <c>false</c>,
+/// because both call sites sit inside a handshake that must not die for a diagnostic
+/// </summary>
 internal static class TailRoster
 {
     private const string TailRuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectTailMessageRuntime";
@@ -50,8 +50,7 @@ internal static class TailRoster
     /// </summary>
     internal static bool Reset(INetGameService service, string when)
     {
-        // A caller bug has to come back as false plus a warning, because both call sites sit inside a message
-        // handler whose job is to keep the handshake alive.
+        // A caller bug, not a missing anchor: worth one line, never an exception.
         if (service is null)
         {
             Entry.Warn($"{Tag}no session to reset the roster epoch on ({when}).");
@@ -150,7 +149,7 @@ internal static class TailRoster
     /// Every anchor the reset needs, captured once. Each one is shape-checked, because a silently wrong
     /// binding would be worse than a loud failure: the reset would "succeed" and change nothing
     ///
-    /// In the shipped 0.6.3 binary under <c>work/lobby/dec-official/Sts2LanConnect.Scripts/</c> these are
+    /// In the host mod these are
     /// <c>LanConnectTailMessageRuntime.Shared</c>, <c>GetMessageBus(INetGameService)</c> and the private
     /// <c>_bindings</c> dictionary (keyed by <c>NetMessageBus</c>, valued by the nested private <c>Binding</c>),
     /// plus <c>Binding.RequireRoster()</c> and <c>LanConnectRosterAuthorityState.Reset()</c>

@@ -7,7 +7,7 @@ namespace Sts2LobbyEnhance;
 /// <summary>
 /// Phone-only: the chat message labels stop capturing the pointer so a drag scrolls, a 400 ms press selects text
 /// instead, and a press that selected must not also open the reference preview. Every patch body returns on desktop
-/// before it writes a property, so mouse selection and reference clicks stay upstream's
+/// before it writes a property, so mouse selection and reference clicks stay upstream's own
 /// </summary>
 internal sealed class TouchChatScrollFix : ICompatFix
 {
@@ -163,7 +163,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
             // would extend it, which is the "drag selects text" symptom the players reported
             label.SelectionEnabled = false;
 
-            // Turning selection off also lowers focus_mode to Accessibility, so put back what upstream built the label with
+            // Turning selection off also lowers focus_mode to Accessibility; All is what upstream builds this label with
             label.FocusMode = Control.FocusModeEnum.All;
 
             if (view.HasMeta(GestureAttachedMetaName))
@@ -224,9 +224,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
-    /// Hooks the nearest enclosing <c>ScrollContainer</c> and its vertical bar: the container sees presses on the log, the
-    /// bar sees its own (it is STOP, so they never reach the container), and each is guarded by its own meta so the two
-    /// attach paths cannot connect twice. The handler only ends a live selection and does not accept the event
+    /// Hooks the nearest enclosing <c>ScrollContainer</c> and its vertical bar: the container sees presses on the log and
+    /// the bar its own, and each is guarded by its own meta so the two attach paths cannot connect twice. The handler
+    /// only ends a live selection and does not accept the event
     /// </summary>
     private static void AttachSelectionExitHook(Node from)
     {
@@ -265,8 +265,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
     /// <summary>
     /// Any new press inside the message log drops a selection that is still on screen, so "tap somewhere else" really
-    /// does clear it. Nothing is consumed, so the container still scrolls as before. Connected to the container and to
-    /// its scroll bar, which stops its own presses before the container sees them
+    /// does clear it. Nothing is consumed, so the container still scrolls as before
     /// </summary>
     private static void OnContainerGuiInput(InputEvent input)
     {
@@ -314,15 +313,8 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// One warning per call site. The rows are rebuilt continuously, so an unguarded log here would flood the log file
     /// from a single broken build
     /// </summary>
-    private static void WarnOnce(ref int warned, string message)
-    {
-        if (Interlocked.Exchange(ref warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("touch-chat-scroll: " + message);
-    }
+    private static void WarnOnce(ref int warned, string message) =>
+        Entry.WarnOnce(ref warned, "touch-chat-scroll", message);
 
     /// <summary>
     /// This repair's own platform read, cached because <c>OS.HasFeature</c> crosses into Godot's native layer, which

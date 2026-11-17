@@ -5,71 +5,70 @@ using MegaCrit.Sts2.Core.Multiplayer;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Re-baselines the client's Tail roster authority when the host publishes a roster that no longer contains
-    /// somebody the client still remembers
-    ///
-    /// Upstream has no handling for a player leaving. <c>LanConnectTailMessageRuntime.CommitHostSnapshot</c> has
-    /// exactly four call sites and not one of them subtracts a member, so after a kick the client keeps the roster
-    /// it accepted at join time while the host keeps publishing the smaller one. Every later roster-bearing
-    /// message then fails inside <c>LanConnectRosterAuthorityState.Accept</c>, and the failure is not limited to
-    /// starting the run:
-    ///
-    /// <list type="bullet">
-    /// <item><b>LobbyBeginRun</b> — <c>RestoreBeginRun</c> is the only caller that uses <c>StateTransition</c>,
-    /// whose branch demands identical membership and real slots and rejects the smaller roster with
-    /// "State-transition snapshot changed roster membership or real slot assignments."</item>
-    /// <item><b>PlayerJoined</b> — <c>RestorePlayerJoined</c> passes <c>MembershipMutation</c> with the
-    /// authoritative set derived from the client's own stale <c>Current</c>, so the ghost member makes the set
-    /// comparison fail with "Roster snapshot differs from the authoritative connected-peer set."</item>
-    /// <item><b>A reload / rejoin</b> — <c>AcceptRoster</c> can only pick <c>Bootstrap</c> while
-    /// <c>Current == null</c>, so the next RoomJoin goes through <c>CurrentState</c> and demands a byte-for-byte
-    /// repeat of the accepted revision.</item>
-    /// </list>
-    ///
-    /// So the trigger is not "this is a begin-run", it is "the host says somebody is gone and we still have
-    /// them", i.e. <c>Current ∖ Candidate</c> is not empty on the player-id axis. That one predicate holds for
-    /// all three uses above, and it is also the right wording: the host is authoritative about who is in the
-    /// room. A snapshot that only *adds* members leaves <c>Current</c> fully covered and is deliberately left
-    /// alone; so is a repeated snapshot, which is how upstream's own happy paths stay byte-identical.
-    ///
-    /// A second, unrelated defect throws the client out of the same method. The roster revision is a counter that
-    /// upstream accepts only as <c>current + 1</c>, so one lost frame is enough to make every later snapshot look
-    /// corrupt. The reported one is the 0.6.4 tail extension queue dropping a frame in its write-time reset
-    /// ("tail: pending extension for PlayerJoined cleared by writer reset before transport." — maintainer log): the
-    /// client never sees that revision, the next mutation arrives at <c>current + 2</c>, upstream throws "Mutation
-    /// snapshot revision must increase by exactly one" and the client answers by disconnecting itself with
-    /// <c>NetError.ModMismatch</c>, which the UI shows as a mod mismatch while every player falls back to the main
-    /// menu. The same repair answers it for the same reason — the host is authoritative and its snapshot is the
-    /// state we should be in — so a forward gap nobody left over is re-baselined too. A gap that also loses a
-    /// member has already fired the membership trigger and is unchanged.
-    ///
-    /// A third shape of the same frame trouble is rejected by the very same check: a mutation that repeats the
-    /// revision we already hold. Upstream demands <c>current + 1</c> even when the snapshot is byte-identical, so a
-    /// second delivery of one frame disconnects the client (field log: <c>accept use=MembershipMutation cur.rev=2
-    /// cand.rev=2 members 3 -> 3</c> → "Mutation snapshot revision must increase by exactly one"). That case is
-    /// idempotent — re-storing the state we already hold changes nothing — so it is accepted too, but only while the
-    /// members (ids and real slots) are exactly the same and the use is <c>MembershipMutation</c>; anything else
-    /// keeps upstream's verdict.
-    ///
-    /// The trap, and the one thing this repair must not get wrong: <c>Reset()</c> alone does not fix anything.
-    /// It drops <c>_current</c>, and upstream then refuses the very snapshot we are holding, because with no
-    /// accepted state a <c>StateTransition</c>/<c>MembershipMutation</c> snapshot may not initialize the state
-    /// ("Transition and mutation snapshots cannot initialize roster authority state."). The use argument has to
-    /// become <c>Bootstrap</c> in the same breath as the reset, which is why the prefix rewrites the use value
-    /// through <c>__args</c> instead of just calling <c>Reset()</c>.
-    ///
-    /// The same reasoning applies to the authoritative membership set a mutation snapshot carries: the caller
-    /// builds it from <c>Current</c>, i.e. from the state being dropped, so it is stale by construction and is
-    /// cleared together with the reset.
-    ///
-    /// Client side only. <c>Accept</c> is unreachable on a host binding to begin with, because
-    /// <c>ValidateIncomingCore</c> rejects every session-selection message whose binding is a host and hosts
-    /// publish through <c>CommitHostSnapshot</c> instead. The prefix still looks the authority up in the tail
-    /// runtime's live bindings and steps aside when the owning service is not a <c>NetClientGameService</c>, so a
-    /// future caller that sends a roster to the host cannot be made to accept a client-authored one by this
-    /// repair.
-    /// </summary>
+/// <summary>
+/// Re-baselines the client's Tail roster authority when the host publishes a roster that no longer contains
+/// somebody the client still remembers
+///
+/// Upstream has no handling for a player leaving. <c>LanConnectTailMessageRuntime.CommitHostSnapshot</c> has
+/// exactly four call sites and not one of them subtracts a member, so after a kick the client keeps the roster
+/// it accepted at join time while the host keeps publishing the smaller one. Every later roster-bearing
+/// message then fails inside <c>LanConnectRosterAuthorityState.Accept</c>, and the failure is not limited to
+/// starting the run:
+///
+/// <list type="bullet">
+/// <item><b>LobbyBeginRun</b> — <c>RestoreBeginRun</c> is the only caller that uses <c>StateTransition</c>,
+/// whose branch demands identical membership and real slots and rejects the smaller roster with
+/// "State-transition snapshot changed roster membership or real slot assignments."</item>
+/// <item><b>PlayerJoined</b> — <c>RestorePlayerJoined</c> passes <c>MembershipMutation</c> with the
+/// authoritative set derived from the client's own stale <c>Current</c>, so the ghost member makes the set
+/// comparison fail with "Roster snapshot differs from the authoritative connected-peer set."</item>
+/// <item><b>A reload / rejoin</b> — <c>AcceptRoster</c> can only pick <c>Bootstrap</c> while
+/// <c>Current == null</c>, so the next RoomJoin goes through <c>CurrentState</c> and demands a byte-for-byte
+/// repeat of the accepted revision.</item>
+/// </list>
+///
+/// So the trigger is not "this is a begin-run", it is "the host says somebody is gone and we still have
+/// them", i.e. <c>Current ∖ Candidate</c> is not empty on the player-id axis. That one predicate holds for
+/// all three uses above, and it is also the right wording: the host is authoritative about who is in the
+/// room. A snapshot that only *adds* members leaves <c>Current</c> fully covered and is deliberately left
+/// alone; so is a repeated snapshot, which is how upstream's own happy paths stay byte-identical.
+///
+/// A second, unrelated defect throws the client out of the same method. The roster revision is a counter that
+/// upstream accepts as <c>current + 1</c> on its mutation and transition paths (a <c>CurrentState</c> repeat may
+/// instead keep the revision as long as the bytes match), so one lost frame is enough to make every later
+/// snapshot look corrupt. The reported one is the 0.6.4 tail extension queue dropping a frame in its write-time reset
+/// ("tail: pending extension for PlayerJoined cleared by writer reset before transport." — maintainer log): the
+/// client never sees that revision, the next mutation arrives at <c>current + 2</c>, upstream throws "Mutation
+/// snapshot revision must increase by exactly one" and the client answers by disconnecting itself with
+/// <c>NetError.ModMismatch</c>, which the UI shows as a mod mismatch while every player falls back to the main
+/// menu. The same repair answers it for the same reason — the host is authoritative and its snapshot is the
+/// state we should be in — so a forward gap nobody left over is re-baselined too. A gap that also loses a
+/// member has already fired the membership trigger and is unchanged.
+///
+/// A third shape of the same frame trouble is rejected by the very same check: a mutation that repeats the
+/// revision we already hold. Upstream demands <c>current + 1</c> even when the snapshot is byte-identical, so a
+/// second delivery of one frame disconnects the client. That case is idempotent — re-storing the state we already
+/// hold changes nothing — so it is accepted too, but only while the members (ids and real slots) are exactly the
+/// same and the use is <c>MembershipMutation</c>; anything else keeps upstream's verdict.
+///
+/// The trap, and the one thing this repair must not get wrong: <c>Reset()</c> alone does not fix anything.
+/// It drops <c>_current</c>, and upstream then refuses the very snapshot we are holding, because with no
+/// accepted state a <c>StateTransition</c>/<c>MembershipMutation</c> snapshot may not initialize the state
+/// ("Transition and mutation snapshots cannot initialize roster authority state."). The use argument has to
+/// become <c>Bootstrap</c> in the same breath as the reset, which is why the prefix rewrites the use value
+/// through <c>__args</c> instead of just calling <c>Reset()</c>.
+///
+/// The same reasoning applies to the authoritative membership set a mutation snapshot carries: the caller
+/// builds it from <c>Current</c>, i.e. from the state being dropped, so it is stale by construction and is
+/// cleared together with the reset.
+///
+/// Client side only. <c>Accept</c> is unreachable on a host binding to begin with, because
+/// <c>ValidateIncomingCore</c> rejects every session-selection message whose binding is a host and hosts
+/// publish through <c>CommitHostSnapshot</c> instead. The prefix still looks the authority up in the tail
+/// runtime's live bindings and steps aside when the owning service is not a <c>NetClientGameService</c>, so a
+/// future caller that sends a roster to the host cannot be made to accept a client-authored one by this
+/// repair.
+/// </summary>
 internal sealed class RosterRebaselineFix : ICompatFix
 {
     private const string AuthorityTypeName = "Sts2LanConnect.Scripts.LanConnectRosterAuthorityState";
@@ -217,29 +216,18 @@ internal sealed class RosterRebaselineFix : ICompatFix
         uint? currentRevision = shape.RevisionOf(current);
         uint? candidateRevision = shape.RevisionOf(snapshot);
 
-        // Upstream's own check is "the revision must increase by exactly one", and when it fails the client is
-        // dropped with a message that only says ModMismatch. Printing both revisions on every acceptance is what
-        // makes that failure readable from a player log.
-        string revisionNote = "cur.rev=" + DescribeRevision(currentRevision) +
-                              " cand.rev=" + DescribeRevision(candidateRevision);
-        WarnOnce("accept:" + use + ":" + revisionNote + ":" + currentCount + ":" + candidateCount,
-            Tag + "accept use=" + shape.NameOf(use) + " " + revisionNote +
-            " members " + currentCount + " -> " + candidateCount);
-
-        // Trigger 1 — "we hold somebody the host does not". A snapshot that only adds members keeps every current
-        // id and is left to upstream.
+        // Trigger 1: "we hold somebody the host does not". A snapshot that only adds members keeps every current id
+        // and is left to upstream.
         var departed = new HashSet<ulong>(currentIds);
         departed.ExceptWith(candidateIds);
         bool someoneGone = departed.Count > 0;
 
-        // Trigger 2 — the host is ahead by more than the single step upstream allows, and nobody is gone. That is
-        // one lost frame, not a different roster: see the class comment. Only checked when trigger 1 did not fire,
-        // so the membership behaviour is bit-for-bit what it was.
+        // Trigger 2: the host is ahead by more than the single step upstream allows and nobody is gone — one lost
+        // frame, not a different roster. Only checked when trigger 1 did not fire.
         bool revisionGap = !someoneGone && IsRevisionGap(currentRevision, candidateRevision);
 
-        // Trigger 3 — a mutation that repeats the revision and the roster we already hold. Upstream's mutation
-        // branch insists on current+1 even when the bytes are identical, so a doubly delivered (or re-sent) frame
-        // disconnects the client. Re-storing the same state is a no-op, so accepting it cannot mask anything.
+        // Trigger 3: a mutation that repeats the revision and the roster we already hold; re-storing it is a no-op,
+        // so accepting it cannot mask anything.
         bool repeatedMutation = !someoneGone && !revisionGap &&
                                 IsRepeatedMutation(shape, use, currentRevision, candidateRevision, current, snapshot);
 
@@ -298,12 +286,6 @@ internal sealed class RosterRebaselineFix : ICompatFix
 
     /// <summary>
     /// A mutation that repeats what we already hold: same revision, same members in the same real slots.
-    ///
-    /// Upstream's mutation branch demands <c>current + 1</c> unconditionally, so the second delivery of an identical
-    /// frame is rejected and the client disconnects (field log: <c>accept use=MembershipMutation cur.rev=2 cand.rev=2
-    /// members 3 -> 3</c> followed by "Mutation snapshot revision must increase by exactly one"). Re-storing the same
-    /// content changes nothing except bookkeeping, which is why this one is safe to accept where a changed roster
-    /// would not be.
     ///
     /// <c>MembershipMutation</c> only. <c>CurrentState</c> and <c>StateTransition</c> have their own "an unchanged
     /// revision must repeat byte-for-byte" semantics, and those stay exactly as upstream wrote them.
@@ -370,8 +352,6 @@ internal sealed class RosterRebaselineFix : ICompatFix
 
     /// <summary>
     /// A forward gap: the host is ahead of us by more than the one step upstream accepts.
-    /// <c>MembershipMutation</c> and <c>StateTransition</c> both insist on <c>current + 1</c>, and anything else
-    /// throws, which the client answers by disconnecting itself with <c>NetError.ModMismatch</c>.
     ///
     /// Equal and backwards revisions are deliberately not re-baselined. Equal is upstream's "an unchanged snapshot
     /// must repeat byte-for-byte" path, and a lower revision means the host went back in time; in both the content,
@@ -621,8 +601,8 @@ internal sealed class RosterRebaselineFix : ICompatFix
     /// <c>RosterRevision</c>, not <c>Revision</c>; guessing the latter is why the acceptance diagnostic used to
     /// print "?" for both sides.
     ///
-    /// Optional on purpose: the original trigger never read a revision, so losing this member must cost the
-    /// revision-gap diagnosis, not the repair. A note says so in the startup log.
+    /// Optional on purpose: the membership trigger never reads a revision, so losing this member must cost the two
+    /// revision-based triggers, not the repair. A note says so in the startup log.
     /// </summary>
     private static void CaptureRevision(Type snapshotType, Shape shape)
     {
@@ -645,8 +625,8 @@ internal sealed class RosterRebaselineFix : ICompatFix
         AddNote(
             shape,
             $"{snapshotType.FullName}.RosterRevision (uint) was not found " +
-            $"({property?.PropertyType.FullName ?? field?.FieldType.FullName ?? "no such member"}), so a revision " +
-            "gap is not detected; the membership trigger still works.");
+            $"({property?.PropertyType.FullName ?? field?.FieldType.FullName ?? "no such member"}), so a skipped or " +
+            "repeated revision is not detected; the membership trigger still works.");
     }
 
     private static void AddNote(Shape shape, string note) =>
@@ -804,7 +784,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
         /// <summary>One or more degraded-anchor notes, joined by "; "; printed once by <see cref="Apply"/>.</summary>
         internal string? OptionalNote;
 
-        /// <summary>Null when the member did not resolve, i.e. the revision-gap trigger is unavailable.</summary>
+        /// <summary>Null when the member did not resolve, i.e. the two revision-based triggers are unavailable.</summary>
         internal uint? RevisionOf(object? snapshot)
         {
             if (snapshot == null)

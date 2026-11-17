@@ -6,39 +6,39 @@ using MegaCrit.Sts2.Core.Runs;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Lets a hosted room bind to the save of the <em>next</em> run that starts in it, instead of staying frozen on
-    /// the save of the run that just finished
-    ///
-    /// The deadlock, all upstream: a hosted room keeps a <c>HostedRoomSession</c> for the whole sitting, and that
-    /// session remembers the save key it bound to (<c>HostedRoomSession.BoundSaveKey</c>). Every <c>save_event</c>
-    /// hands that key to the writer as <c>BindingTarget.ExpectedSaveKey</c> and the writer refuses any other save
-    /// outright (<c>RefusedDifferentSave</c>). After the session is created, only the writer's own success
-    /// callback ever updates the key, so once a <em>different</em> save shows up the room can never bind to it
-    /// again: the callback that would heal it is behind the refusal.
-    ///
-    /// "新开一局" hits exactly that, because it deliberately keeps the session: the new run's first save has a new
-    /// key (<c>LanConnectMultiplayerSaveRoomBinding.BuildSaveKey</c> hashes the run's <c>StartTime</c>, so a new
-    /// run can never reuse the old one), the write is refused with <c>save_key_mismatch</c>, and the save stays
-    /// unbound. A later "读档多人游戏" then has no binding to read and stops by telling the player it cannot
-    /// confirm the original protocol.
-    ///
-    /// Clearing the key is enough, and it is the whole repair: with an empty <c>ExpectedSaveKey</c> the writer takes
-    /// its keyless branch, which the new run satisfies. <c>RunManager</c> assigns exactly the lobby's service, i.e.
-    /// the service this session kept, and a brand-new save key has no stored binding to trip the explicit-LAN
-    /// guard. The first successful persist then writes the new key back and every later save of that run matches
-    /// normally.
-    ///
-    /// The moment is <c>RunManager.SetUpNewMultiplayer</c> rather than the 新开一局 click: that method runs before
-    /// <c>NGame.StartRun</c> touches the save system, so the clearing is guaranteed to be earlier than the new
-    /// run's first <c>save_event</c>, while the click itself is only "the lobby was rebuilt", with a whole
-    /// character-select screen in between and nothing that says the player will ever embark. Patching here also
-    /// fixes the same deadlock for a new run started through the vanilla menus in a kept room, not just through
-    /// our button.
-    ///
-    /// Only the room that owns this run is touched: the session (or host origin) must hold the very service the new
-    /// run is being set up on. A client's begin-run, a singleplayer run and a fresh room all leave it alone.
-    /// </summary>
+/// <summary>
+/// Lets a hosted room bind to the save of the <em>next</em> run that starts in it, instead of staying frozen on
+/// the save of the run that just finished
+///
+/// The deadlock, all upstream: a hosted room keeps a <c>HostedRoomSession</c> for the whole sitting, and that
+/// session remembers the save key it bound to (<c>HostedRoomSession.BoundSaveKey</c>). Every <c>save_event</c>
+/// hands that key to the writer as <c>BindingTarget.ExpectedSaveKey</c> and the writer refuses any other save
+/// outright (<c>RefusedDifferentSave</c>). After the session is created, only the writer's own success
+/// callback ever updates the key, so once a <em>different</em> save shows up the room can never bind to it
+/// again: the callback that would heal it is behind the refusal.
+///
+/// "新开一局" hits exactly that, because it deliberately keeps the session: the new run's first save has a new
+/// key (<c>LanConnectMultiplayerSaveRoomBinding.BuildSaveKey</c> hashes the run's <c>StartTime</c>, so a new
+/// run can never reuse the old one), the write is refused with <c>save_key_mismatch</c>, and the save stays
+/// unbound. A later "读档多人游戏" then has no binding to read and stops by telling the player it cannot
+/// confirm the original protocol.
+///
+/// Clearing the key is enough, and it is the whole repair: with an empty <c>ExpectedSaveKey</c> the writer takes
+/// its keyless branch, which the new run satisfies. <c>RunManager</c> assigns exactly the lobby's service, i.e.
+/// the service this session kept, and a brand-new save key has no stored binding to trip the explicit-LAN
+/// guard. The first successful persist then writes the new key back and every later save of that run matches
+/// normally.
+///
+/// The moment is <c>RunManager.SetUpNewMultiplayer</c> rather than the 新开一局 click: that method runs before
+/// <c>NGame.StartRun</c> touches the save system, so the clearing is guaranteed to be earlier than the new
+/// run's first <c>save_event</c>, while the click itself is only "the lobby was rebuilt", with a whole
+/// character-select screen in between and nothing that says the player will ever embark. Patching here also
+/// fixes the same deadlock for a new run started through the vanilla menus in a kept room, not just through
+/// our button.
+///
+/// Only the room that owns this run is touched: the session (or host origin) must hold the very service the new
+/// run is being set up on. A client's begin-run, a singleplayer run and a fresh room all leave it alone.
+/// </summary>
 internal sealed class NewRunSaveBindingFix : ICompatFix
 {
     private const string RuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyRuntime";

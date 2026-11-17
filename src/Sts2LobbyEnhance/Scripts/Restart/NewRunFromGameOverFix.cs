@@ -360,10 +360,10 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
     }
 
     /// <summary>
-    /// Hides the injected host controls while keeping the nodes alive for the next summary open. Unlike
-    /// <see cref="WithdrawHostControls"/> this does not rewrite the caption: nothing is wrong with the session,
-    /// the summary was only covered by the leaderboard that opens after its fade-out, or hidden by the screen's
-    /// own method dispatcher.
+    /// Hides the injected controls (host button and caption, client hint) while keeping the nodes alive for the next
+    /// summary open. Unlike <see cref="WithdrawHostControls"/> this does not rewrite the caption: nothing is wrong with
+    /// the session, the summary was only covered by the leaderboard that opens after its fade-out, or hidden by the
+    /// screen's own method dispatcher.
     /// </summary>
     private static void HideHostControls(string why)
     {

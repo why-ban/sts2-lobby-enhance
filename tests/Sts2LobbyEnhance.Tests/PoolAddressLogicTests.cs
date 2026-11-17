@@ -65,6 +65,7 @@ public sealed class PoolAddressLogicTests
                 Assert.Skip("the patch assembly has not been built. " + TestPaths.BuildHint);
             }
 
+            TestRunLedger.Record();
             return GameAssemblyLoader.Load(patch!);
         }
     }

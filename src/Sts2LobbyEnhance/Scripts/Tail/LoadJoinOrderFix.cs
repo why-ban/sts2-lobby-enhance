@@ -4,21 +4,21 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Load-join member order. <c>RestoreLoadJoinPlayers</c> requires <c>message.playersAlreadyConnected</c> to
-    /// equal the Tail roster position by position, but the
-    /// two lists are sorted by different keys: the host fills the list in *join* order, while the roster
-    /// carriers are stamped with each player's index in <c>SerializableRun.Players</c> - the save order - by
-    /// <c>BuildLoadJoinCarriers</c>, and <c>LanConnectRosterCodec.Encode</c> sorts carriers by
-    /// (RealSlotId, PlayerId). Same set, different order, so <c>SequenceEqual</c> fails and every client whose
-    /// group did not join in save order is rejected with "Loaded-lobby vanilla membership disagrees with the
-    /// Tail roster."
-    ///
-    /// The repair re-sorts the incoming list into save order before that comparison runs. It edits the list
-    /// object in place: the callee reads the list reference its own copy of the struct already holds, while a
-    /// field written into the boxed message would never reach it. The restored order is unaffected either way,
-    /// because upstream replaces the field with the save-order list, so only the positional check changes.
-    /// </summary>
+/// <summary>
+/// Load-join member order. <c>RestoreLoadJoinPlayers</c> requires <c>message.playersAlreadyConnected</c> to
+/// equal the Tail roster position by position, but the
+/// two lists are sorted by different keys: the host fills the list in *join* order, while the roster
+/// carriers are stamped with each player's index in <c>SerializableRun.Players</c> - the save order - by
+/// <c>BuildLoadJoinCarriers</c>, and <c>LanConnectRosterCodec.Encode</c> sorts carriers by
+/// (RealSlotId, PlayerId). Same set, different order, so <c>SequenceEqual</c> fails and every client whose
+/// group did not join in save order is rejected with "Loaded-lobby vanilla membership disagrees with the
+/// Tail roster."
+///
+/// The repair re-sorts the incoming list into save order before that comparison runs. It edits the list
+/// object in place: the callee reads the list reference its own copy of the struct already holds, while a
+/// field written into the boxed message would never reach it. The restored order is unaffected either way,
+/// because upstream replaces the field with the save-order list, so only the positional check changes.
+/// </summary>
 internal sealed class LoadJoinOrderFix : ICompatFix
 {
     private const string RuntimeTypeName = "Sts2LanConnect.Scripts.LanConnectTailMessageRuntime";
@@ -128,13 +128,6 @@ internal sealed class LoadJoinOrderFix : ICompatFix
     }
 
     /// <summary>
-    /// Re-sorts the message's already-connected list into <c>SerializableRun.Players</c> order, in place.
-    ///
-    /// An exception here would be reported as a protocol failure and cost the client its connection, so on any
-    /// surprise the list is left untouched and the original method decides, which is exactly the behaviour this
-    /// repair is not allowed to make worse.
-    /// </summary>
-    /// <summary>
     /// Upstream reports a tail protocol failure to the player as "Mod 不匹配", which says nothing about which
     /// message failed. This prints the peer and the failure object before that happens, on both sides.
     /// </summary>
@@ -153,6 +146,13 @@ internal sealed class LoadJoinOrderFix : ICompatFix
         }
     }
 
+    /// <summary>
+    /// Re-sorts the message's already-connected list into <c>SerializableRun.Players</c> order, in place.
+    ///
+    /// An exception here would be reported as a protocol failure and cost the client its connection, so on any
+    /// surprise the list is left untouched and the original method decides, which is exactly the behaviour this
+    /// repair is not allowed to make worse.
+    /// </summary>
     public static bool RestoreLoadJoinPrefix(object boxedMessage)
     {
         try

@@ -6,9 +6,9 @@ namespace Sts2LobbyEnhance.Tests;
 /// <summary>
 /// The anti-false-green gate: a green <c>dotnet test</c> must mean the game-dependent cases actually ran.
 ///
-/// 30 of the suite's cases skip themselves when the game DLL, the official DLL, the built patch or the
-/// packaging workspace is missing (<see cref="TestRunLedger"/>). Without this file a green run on a machine
-/// without Slay the Spire 2 would mean those 30 never asserted anything.
+/// 32 of the suite's cases skip themselves when the game DLL, an official DLL or the built patch is missing
+/// (<see cref="TestRunLedger"/>). Without this file a green run on a machine without Slay the Spire 2 would mean
+/// those 32 never asserted anything.
 ///
 ///   1. <b>Input probe</b>. Every input that makes one of those cases skip is checked here.
 ///   2. <b>Execution set</b>. The cases that recorded themselves must be exactly the expected list. This fact may run

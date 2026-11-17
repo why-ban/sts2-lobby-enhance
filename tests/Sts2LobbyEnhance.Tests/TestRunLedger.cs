@@ -13,8 +13,9 @@ namespace Sts2LobbyEnhance.Tests;
 /// exits 0, so a green run on a machine without the game proves nothing. `GameDependentCoverageTests`
 /// turns that into a failure by comparing this list against what really ran.
 ///
-/// The name comes from the stack: every skip guard calls `Record()` from a helper, so
-/// `[CallerMemberName]` would record the helper's name and collapse whole classes into one entry.
+/// The name comes from xUnit's ambient test context: every skip guard calls `Record()` from a helper, so
+/// `[CallerMemberName]` would record the helper's name and collapse whole classes into one entry. The stack walk is
+/// only the fallback for a run without that context.
 /// </summary>
 internal static class TestRunLedger
 {
@@ -48,6 +49,8 @@ internal static class TestRunLedger
         "Sts2LobbyEnhance.Tests.GameApiShapeTests.PostRunProgressUpdateResultTypeExists",
         "Sts2LobbyEnhance.Tests.GameApiShapeTests.RelicPickingResultGenerateRelicFightNeedsARelicIndex",
         "Sts2LobbyEnhance.Tests.GameApiShapeTests.SaveManagerUpdateProgressWithRunDataReturnsAResult",
+        "Sts2LobbyEnhance.Tests.PoolAddressLogicTests.AddressEqualityIgnoresCaseAndTrailingSlashOnly",
+        "Sts2LobbyEnhance.Tests.PoolAddressLogicTests.VersionKeysIgnoreALeadingVAndSurroundingSpaceOnly",
         "Sts2LobbyEnhance.Tests.RosterEpochRegressionTests.T1_AnAuthorityThatAcceptedTheOldEpochRejectsTheNewEpochAsCurrentState",
         "Sts2LobbyEnhance.Tests.RosterEpochRegressionTests.T2_ResetMakesTheNextEpochAcceptableAsABootstrap",
         "Sts2LobbyEnhance.Tests.RosterEpochRegressionTests.T3_RepeatingTheAcceptedBytesAsCurrentStateStillPasses",

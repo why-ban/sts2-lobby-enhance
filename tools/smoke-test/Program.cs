@@ -259,6 +259,7 @@ if (applied.Count > expectedFixIds.Length)
 [
     ("roster-rebaseline", "Roster"),
     ("load-join-order", "LoadOrder"),
+    ("begin-run-order", "Roster"),
     ("new-run-button", "NewRun"),
     ("new-run-save-binding", "NewRun"),
     ("new-protocol-only", "Modes"),

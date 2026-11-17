@@ -185,15 +185,7 @@ internal sealed class NewProtocolOnlyFix : ICompatFix
         Entry.Info(message);
     }
 
-    private static void WarnOnce(string message)
-    {
-        if (Interlocked.Exchange(ref _warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("new-protocol-only: " + message);
-    }
+    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "new-protocol-only", message);
 
     internal sealed class Shape
     {

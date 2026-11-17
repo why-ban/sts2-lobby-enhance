@@ -4,10 +4,10 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Makes the announcement bar follow the server the public channel is attached to. The bar keeps upstream's
-    /// shape, refresh cadence and request count; only the destination changes.
-    /// </summary>
+/// <summary>
+/// Makes the announcement bar follow the server the public channel is attached to. The bar keeps upstream's
+/// shape, refresh cadence and request count; only the destination changes.
+/// </summary>
 internal sealed class AnnouncementSourceFix : ICompatFix
 {
     private const string ApiClientTypeName = "Sts2LanConnect.Scripts.LobbyApiClient";
@@ -270,15 +270,7 @@ internal sealed class AnnouncementSourceFix : ICompatFix
             (right ?? string.Empty).Trim().TrimEnd('/'),
             StringComparison.OrdinalIgnoreCase);
 
-    private static void WarnOnce(string message)
-    {
-        if (Interlocked.Exchange(ref _warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("announcement-source: " + message);
-    }
+    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "announcement-source", message);
 
     /// <summary>
     /// Every member this repair touches, resolved once in <see cref="Applies"/>. Metadata only: nothing is invoked

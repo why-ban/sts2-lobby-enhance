@@ -32,16 +32,11 @@ internal sealed class PoolRefreshFix : ICompatFix
     /// </summary>
     private const int CurrentServerQueryBudgetMs = 2000;
 
-    /// <summary>A round may rebuild the stage this often: the cold-start paints plus the one final draw</summary>
-    private const int MaxRebuildsPerRound = 3;
-
     /// <summary>
     /// Hard ceiling for one pooled round, so the paint waits at most this long. It has to stay above both the
     /// per-server fetch and the current server's query budget above, or the round would cut them off.
     /// </summary>
     private const int RoundBudgetMs = 2500;
-
-    private static int _roundRebuilds;
 
     private static PoolAnchors? _anchors;
 
@@ -146,7 +141,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("refresh", "the pooled refresh could not start: " + Describe(exception));
+            WarnOnce("refresh", "the pooled refresh could not start: " + PoolRoomClient.Describe(exception));
             __result = Task.FromResult(false);
             return false;
         }
@@ -191,7 +186,6 @@ internal sealed class PoolRefreshFix : ICompatFix
         try
         {
             string? selectedRoomId = CurrentSelection(anchors, overlay);
-            Interlocked.Exchange(ref _roundRebuilds, 0);
 
             // The current server's probe and announcements, which the pool does not replace: the announcements belong
             // to the server the player is on, and AnnouncementSourceFix rides on the same call.
@@ -268,7 +262,6 @@ internal sealed class PoolRefreshFix : ICompatFix
                 // whatever a previous partial write left behind, and a page the player chose must survive a refresh
                 // that did not make it invalid.
                 RestoreCurrentPage(anchors, overlay, pageBefore);
-                NoteRebuild();
                 anchors.RebuildRoomStage.Invoke(overlay, null);
             }
             else
@@ -276,14 +269,6 @@ internal sealed class PoolRefreshFix : ICompatFix
                 anchors.UpdateHealthIndicator.Invoke(overlay, null);
                 anchors.UpdatePageControls.Invoke(overlay, new object[] { FilteredCount(anchors, overlay) });
                 anchors.RefreshSelectedRoomDetails.Invoke(overlay, null);
-            }
-
-            if (Volatile.Read(ref _roundRebuilds) > MaxRebuildsPerRound)
-            {
-                Entry.Warn(
-                    Tag + "the stage was rebuilt " + Volatile.Read(ref _roundRebuilds) + " times in one refresh; " +
-                    "expected 0 (steady state) or 1 (the first paint of a session); cold start may use up to " +
-                    MaxRebuildsPerRound + ".");
             }
 
             // The pool's failure mode is per server, so upstream's catch blocks cannot fire for it. "Every server
@@ -296,7 +281,6 @@ internal sealed class PoolRefreshFix : ICompatFix
                 {
                     // The loading line is only honest while a round is actually running: put the host mod's own empty
                     // state back so the stage and the failure status agree.
-                    NoteRebuild();
                     anchors.RebuildRoomStage.Invoke(overlay, null);
                 }
                 SetStatus(overlay, "大厅刷新失败，已保留上次成功列表：所有大厅服务器均未响应\n" + FailureHint(anchors));
@@ -311,7 +295,6 @@ internal sealed class PoolRefreshFix : ICompatFix
                 MarkRefreshFailed(anchors, overlay);
                 if (RoomCount(anchors, overlay) == 0)
                 {
-                    NoteRebuild();
                     anchors.RebuildRoomStage.Invoke(overlay, null);
                 }
 
@@ -390,7 +373,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("pump", "a partly filled pool could not be drawn: " + Describe(exception));
+            WarnOnce("pump", "a partly filled pool could not be drawn: " + PoolRoomClient.Describe(exception));
         }
     }
 
@@ -426,7 +409,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("source-label", "a room card was drawn without its server name: " + Describe(exception));
+            WarnOnce("source-label", "a room card was drawn without its server name: " + PoolRoomClient.Describe(exception));
         }
     }
 
@@ -485,7 +468,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("client", "the current server's client could not be built: " + Describe(exception));
+            WarnOnce("client", "the current server's client could not be built: " + PoolRoomClient.Describe(exception));
             return null;
         }
     }
@@ -526,7 +509,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("probe", "the current server's /probe failed: " + Describe(exception));
+            WarnOnce("probe", "the current server's /probe failed: " + PoolRoomClient.Describe(exception));
             return null;
         }
     }
@@ -565,7 +548,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce("announcements", "the current server's announcements could not be read: " + Describe(exception));
+            WarnOnce("announcements", "the current server's announcements could not be read: " + PoolRoomClient.Describe(exception));
             return null;
         }
     }
@@ -826,8 +809,6 @@ internal sealed class PoolRefreshFix : ICompatFix
             "answered until then (" + session.Cycle.Describe() + ").");
     }
 
-    internal static void NoteRebuild() => Interlocked.Increment(ref _roundRebuilds);
-
     /// <summary>Clamps the page to the new list length and writes it back, leaving it alone while it is still valid.</summary>
     private static void RestoreCurrentPage(PoolAnchors anchors, object overlay, int page)
     {
@@ -885,17 +866,6 @@ internal sealed class PoolRefreshFix : ICompatFix
         }
     }
 
-    private static string Describe(Exception exception)
-    {
-        Exception root = exception;
-        while (root is TargetInvocationException { InnerException: not null } wrapped)
-        {
-            root = wrapped.InnerException!;
-        }
-
-        return root.GetType().Name + ": " + root.Message;
-    }
-
     private static Label CreateSourceLabel(PoolAnchors anchors, PoolOrigin origin)
     {
         string text = PoolText.SourceLabelPrefix + origin.ShortName + (origin.IsStale ? PoolText.StaleSuffix : string.Empty);
@@ -910,7 +880,7 @@ internal sealed class PoolRefreshFix : ICompatFix
         return label;
     }
 
-    private static Color MutedColor(PoolAnchors anchors)
+    internal static Color MutedColor(PoolAnchors anchors)
     {
         try
         {
@@ -1005,8 +975,7 @@ internal sealed class PoolRefreshSession
     {
         if (Interlocked.Exchange(ref _announced, 1) == 0)
         {
-            Entry.Info("[server-pool] first pooled round: " + PoolRoomStore.Instance.LastSummary +
-                       "; every room card now carries the server it came from.");
+            Entry.Info("[server-pool] first pooled round: " + PoolRoomStore.Instance.LastSummary + ".");
         }
     }
 

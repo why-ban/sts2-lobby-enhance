@@ -173,7 +173,7 @@ internal sealed class PoolJoinFix : ICompatFix
             cancellationToken.ThrowIfCancellationRequested();
             PoolRefreshFix.SetStatus(overlay, "正在切换到房间所在的服务器：" + origin.ShortName + "…");
             // Own budget, not the caller's token: a click passes CancellationToken.None, and a switch that parks on the
-            // coordinator's gate would otherwise never return and leave _inFlight
+            // coordinator's gate would otherwise never return and leave PoolServerSwitch.InFlight
             // set, turning every later cross-server click into a silent no-op.
             using var switchBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             switchBudget.CancelAfter(SwitchTimeoutMs);

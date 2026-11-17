@@ -58,14 +58,14 @@ internal readonly record struct GameOverSlots(
     internal bool HasButton => !Button.IsEmpty;
 }
 
-    /// <summary>
-    /// Pure geometry for the nodes this fix injects into <c>NGameOverScreen</c>, as a dependency-free function a
-    /// test can assert on instead of a log line that claims success
-    ///
-    /// <c>Node.Duplicate()</c> keeps the source node's position, so a copy placed at
-    /// <c>mainMenu.Position + (0, step)</c> before being added to the tree sits exactly on top of "主菜单" and
-    /// is invisible while the log still says "injected"
-    /// </summary>
+/// <summary>
+/// Pure geometry for the nodes this fix injects into <c>NGameOverScreen</c>, as a dependency-free function a
+/// test can assert on instead of a log line that claims success
+///
+/// <c>Node.Duplicate()</c> keeps the source node's position, so a copy placed at
+/// <c>mainMenu.Position + (0, step)</c> before being added to the tree sits exactly on top of "主菜单" and
+/// is invisible while the log still says "injected"
+/// </summary>
 internal static class GameOverLayout
 {
     /// <summary>Below this the info text is unreadable at 1920x1080</summary>

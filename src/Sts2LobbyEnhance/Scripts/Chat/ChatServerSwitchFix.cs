@@ -6,12 +6,12 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Puts ‹ › and a ⟳ button in the lobby chat panel's title row; they reattach the public channel to another
-    /// server's channel. The lobby server, the room and config.json are untouched - only which server's public chat
-    /// this client is attached to changes. Also attaches that channel once when the sidebar first becomes visible,
-    /// because upstream only ever connects it from the picker's switch.
-    /// </summary>
+/// <summary>
+/// Puts ‹ › and a ⟳ button in the lobby chat panel's title row; they reattach the public channel to another
+/// server's channel. The lobby server, the room and config.json are untouched - only which server's public chat
+/// this client is attached to changes. Also attaches that channel once when the sidebar first becomes visible,
+/// because upstream only ever connects it from the picker's switch.
+/// </summary>
 internal sealed class ChatServerSwitchFix : ICompatFix
 {
     private const string PanelTypeName = "Sts2LanConnect.Scripts.LanConnectBasicChatPanel";
@@ -1720,15 +1720,7 @@ internal sealed class ChatServerSwitchFix : ICompatFix
         GodotObject.IsInstanceValid(widgets.Previous) &&
         GodotObject.IsInstanceValid(widgets.Next);
 
-    private static void WarnOnce(string message)
-    {
-        if (Interlocked.Exchange(ref _warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("chat-server-switch: " + message);
-    }
+    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "chat-server-switch", message);
 
     private enum SwitchPhase
     {

@@ -4,27 +4,27 @@ using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
-    /// <summary>
-    /// Opens the lobby on the room list directly, without the "选择服务器" picker in front of it.
-    ///
-    /// A prefix on `LanConnectServerSelectionStartup.Show` rather than on the lobby button itself: upstream's button
-    /// resolves the overlay and inspects the clipboard for an invite code and a LAN resume code before it reaches
-    /// Show, and replacing the whole handler would drop that precheck. Skipping only the dialog keeps it - the button
-    /// still runs its own logic, and when it reaches the picker we invoke the callback upstream would have invoked
-    /// after a pick, then return false so no dialog appears.
-    ///
-    /// The same Show overload also serves the in-overlay SERVER toolbar button, which must keep its picker. The two
-    /// callers are told apart by `_serverPickerOpen`: opening the picker raises it before calling Show, and the lobby
-    /// entry path does not.
-    ///
-    /// This is a drop-in mod: the player configures nothing, so pressing 游戏大厅 goes straight to the room list. An
-    /// address that turns out to be unusable is the overlay's own status line to report - its room refresh writes the
-    /// failure there - not a reason to interrupt the player with a dialog they never asked for.
-    ///
-    /// The conditions that fall back to upstream's picker are structural, not configurational: no overlay in the tree
-    /// yet, no pick callback to invoke, or this repair throwing, in which case upstream's own behaviour is the safer
-    /// of the two. Each of those logs one line, because the install log has already reported the seam as applied.
-    /// </summary>
+/// <summary>
+/// Opens the lobby on the room list directly, without the "选择服务器" picker in front of it.
+///
+/// A prefix on `LanConnectServerSelectionStartup.Show` rather than on the lobby button itself: upstream's button
+/// resolves the overlay and inspects the clipboard for an invite code and a LAN resume code before it reaches
+/// Show, and replacing the whole handler would drop that precheck. Skipping only the dialog keeps it - the button
+/// still runs its own logic, and when it reaches the picker we invoke the callback upstream would have invoked
+/// after a pick, then return false so no dialog appears.
+///
+/// The same Show overload also serves the in-overlay SERVER toolbar button, which must keep its picker. The two
+/// callers are told apart by `_serverPickerOpen`: opening the picker raises it before calling Show, and the lobby
+/// entry path does not.
+///
+/// This is a drop-in mod: the player configures nothing, so pressing 游戏大厅 goes straight to the room list. An
+/// address that turns out to be unusable is the overlay's own status line to report - its room refresh writes the
+/// failure there - not a reason to interrupt the player with a dialog they never asked for.
+///
+/// The conditions that fall back to upstream's picker are structural, not configurational: no overlay in the tree
+/// yet, no pick callback to invoke, or this repair throwing, in which case upstream's own behaviour is the safer
+/// of the two. Each of those logs one line, because the install log has already reported the seam as applied.
+/// </summary>
 internal sealed class LobbyEntryDirectFix : ICompatFix
 {
     private const string StartupTypeName = "Sts2LanConnect.Scripts.LanConnectServerSelectionStartup";
@@ -146,13 +146,9 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
 
             if (shape.PickerOpen.GetValue(overlay) is bool open && open)
             {
-                // The SERVER toolbar button opened this call: OpenServerPicker raises the flag before it calls Show.
-                // That entry point keeps the picker; this repair only answers for the lobby button.
                 return true;
             }
 
-            // No configuration check on purpose: the mod is drop-in, so the room list is always what the player
-            // asked for. An address that does not answer is the overlay's status line to report.
             string address = shape.ConfigBaseUrl.GetValue(null) as string ?? string.Empty;
             Task? picked = onPicked.Invoke(address);
             if (picked != null && !picked.IsCompleted)
@@ -206,15 +202,7 @@ internal sealed class LobbyEntryDirectFix : ICompatFix
         return node != null && shape.Overlay.IsInstanceOfType(node) ? node : null;
     }
 
-    private static void WarnOnce(string message)
-    {
-        if (Interlocked.Exchange(ref _warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("lobby-entry-direct: " + message);
-    }
+    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "lobby-entry-direct", message);
 
     /// <summary>Reasons already logged, keyed by text so a second distinct miss stays visible.</summary>
     private static readonly HashSet<string> Skipped = new(StringComparer.Ordinal);

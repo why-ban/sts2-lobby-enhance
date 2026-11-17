@@ -498,13 +498,6 @@ internal sealed class TouchSelectionGesture
     /// One warning per call site. The rows are rebuilt continuously, so an unguarded log here would flood the log file
     /// from a single broken build
     /// </summary>
-    private static void WarnOnce(ref int warned, string message)
-    {
-        if (Interlocked.Exchange(ref warned, 1) != 0)
-        {
-            return;
-        }
-
-        Entry.Warn("touch-chat-scroll: " + message);
-    }
+    private static void WarnOnce(ref int warned, string message) =>
+        Entry.WarnOnce(ref warned, "touch-chat-scroll", message);
 }
