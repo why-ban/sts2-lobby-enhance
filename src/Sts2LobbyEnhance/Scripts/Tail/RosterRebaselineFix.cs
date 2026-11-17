@@ -197,7 +197,8 @@ internal sealed class RosterRebaselineFix : ICompatFix
         // Upstream's own check is "the revision must increase by exactly one", and when it fails the client is
         // dropped with a message that only says ModMismatch. Printing both revisions on every acceptance is what
         // makes that failure readable from a player log.
-        string revisionNote = "cur.rev=" + ReadRevision(current) + " cand.rev=" + ReadRevision(snapshot);
+        string revisionNote = "cur.rev=" + DescribeRevision(shape.RevisionOf(current)) +
+                              " cand.rev=" + DescribeRevision(shape.RevisionOf(snapshot));
         WarnOnce("accept:" + use + ":" + revisionNote + ":" + currentCount + ":" + candidateCount,
             Tag + "accept use=" + shape.NameOf(use) + " " + revisionNote +
             " members " + currentCount + " -> " + candidateCount);
@@ -235,28 +236,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
         return true;
     }
 
-    private static string ReadRevision(object? roster)
-    {
-        if (roster == null)
-        {
-            return "?";
-        }
-
-        try
-        {
-            const BindingFlags any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-            Type type = roster.GetType();
-            object? value = type.GetProperty("Revision", any)?.GetValue(roster)
-                            ?? type.GetField("revision", any)?.GetValue(roster)
-                            ?? type.GetProperty("revision", any)?.GetValue(roster)
-                            ?? type.GetField("Revision", any)?.GetValue(roster);
-            return value?.ToString() ?? "?";
-        }
-        catch
-        {
-            return "?";
-        }
-    }
+    private static string DescribeRevision(uint? revision) => revision?.ToString() ?? "?";
 
     private static HashSet<ulong> PlayerIdsOf(Shape shape, object snapshot)
     {
@@ -360,6 +340,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
         shape.SnapshotPlayers = RequirePlayers(snapshotType, carrierType, missing)!;
         shape.CarrierPlayerId = RequirePlayerId(carrierType, missing)!;
 
+        CaptureRevision(snapshotType, shape);
         CaptureBindings(host, shape);
 
         reason = string.Join(", ", missing);
@@ -470,6 +451,44 @@ internal sealed class RosterRebaselineFix : ICompatFix
     }
 
     /// <summary>
+    /// <c>LanConnectRosterSnapshot.RosterRevision</c> (<c>uint</c>) — the member upstream's "the revision must
+    /// increase by exactly one" checks compare. Resolved once here because upstream names it
+    /// <c>RosterRevision</c>, not <c>Revision</c>; guessing the latter is why the acceptance diagnostic used to
+    /// print "?" for both sides.
+    ///
+    /// Optional on purpose: the original trigger never read a revision, so losing this member must cost the
+    /// revision-gap diagnosis, not the repair. A note says so in the startup log.
+    /// </summary>
+    private static void CaptureRevision(Type snapshotType, Shape shape)
+    {
+        const BindingFlags any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        PropertyInfo? property = snapshotType.GetProperty("RosterRevision", any);
+        if (property != null && property.GetIndexParameters().Length == 0 && property.PropertyType == typeof(uint))
+        {
+            shape.RevisionProperty = property;
+            return;
+        }
+
+        FieldInfo? field = snapshotType.GetField("RosterRevision", any);
+        if (field != null && field.FieldType == typeof(uint))
+        {
+            shape.RevisionField = field;
+            return;
+        }
+
+        AddNote(
+            shape,
+            $"{snapshotType.FullName}.RosterRevision (uint) was not found " +
+            $"({property?.PropertyType.FullName ?? field?.FieldType.FullName ?? "no such member"}), so a revision " +
+            "gap is not detected; the membership trigger still works.");
+
+    }
+
+    private static void AddNote(Shape shape, string note) =>
+        shape.OptionalNote = shape.OptionalNote == null ? note : shape.OptionalNote + "; " + note;
+
+    /// <summary>
     /// Resolves the four <c>LanConnectRosterSnapshotUse</c> members by name and refuses a <c>Bootstrap</c> whose
     /// value upstream would still treat as a transition, because that combination cannot be re-baselined at all.
     /// </summary>
@@ -529,7 +548,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
             Type? tailRuntime = Reflect.TryType(host, TailRuntimeTypeName);
             if (tailRuntime == null)
             {
-                shape.OptionalNote = NoBindingLookup("type " + TailRuntimeTypeName);
+                AddNote(shape, NoBindingLookup("type " + TailRuntimeTypeName));
                 return;
             }
 
@@ -537,7 +556,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
             FieldInfo? bindings = ReflectScope.Field(new List<string>(), tailRuntime, "_bindings");
             if (shared == null || bindings == null || shared.GetGetMethod(nonPublic: true) is not { IsStatic: true })
             {
-                shape.OptionalNote = NoBindingLookup($"{TailRuntimeTypeName}.Shared/_bindings");
+                AddNote(shape, NoBindingLookup($"{TailRuntimeTypeName}.Shared/_bindings"));
                 return;
             }
 
@@ -547,7 +566,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
 
             if (arguments.Length != 2 || !typeof(IDictionary).IsAssignableFrom(bindings.FieldType))
             {
-                shape.OptionalNote = NoBindingLookup($"{TailRuntimeTypeName}._bindings (not a dictionary)");
+                AddNote(shape, NoBindingLookup($"{TailRuntimeTypeName}._bindings (not a dictionary)"));
                 return;
             }
 
@@ -557,7 +576,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
 
             if (roster == null || service == null)
             {
-                shape.OptionalNote = NoBindingLookup($"{bindingType.Name}._roster/Service");
+                AddNote(shape, NoBindingLookup($"{bindingType.Name}._roster/Service"));
                 return;
             }
 
@@ -565,7 +584,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
         }
         catch (Exception exception)
         {
-            shape.OptionalNote = NoBindingLookup($"{exception.GetType().Name}: {exception.Message}");
+            AddNote(shape, NoBindingLookup($"{exception.GetType().Name}: {exception.Message}"));
         }
     }
 
@@ -593,6 +612,12 @@ internal sealed class RosterRebaselineFix : ICompatFix
 
         internal PropertyInfo CarrierPlayerId = null!;
 
+        /// <summary><c>LanConnectRosterSnapshot.RosterRevision</c> — the positional record property.</summary>
+        internal PropertyInfo? RevisionProperty;
+
+        /// <summary>Same member as a field, for a build that does not expose the record property.</summary>
+        internal FieldInfo? RevisionField;
+
         internal Type UseType = null!;
 
         internal int Bootstrap;
@@ -606,7 +631,23 @@ internal sealed class RosterRebaselineFix : ICompatFix
         /// <summary>Optional: present when the tail runtime's live bindings could be resolved.</summary>
         internal BindingLookup? Bindings;
 
+        /// <summary>One or more degraded-anchor notes, joined by "; "; printed once by <see cref="Apply"/>.</summary>
         internal string? OptionalNote;
+
+        /// <summary>Null when the member did not resolve, i.e. the revision-gap trigger is unavailable.</summary>
+        internal uint? RevisionOf(object? snapshot)
+        {
+            if (snapshot == null)
+            {
+                return null;
+            }
+
+            object? value = RevisionProperty != null
+                ? RevisionProperty.GetValue(snapshot)
+                : RevisionField?.GetValue(snapshot);
+
+            return value is uint revision ? revision : null;
+        }
 
         internal string NameOf(int use) =>
             use == Bootstrap ? "Bootstrap"
