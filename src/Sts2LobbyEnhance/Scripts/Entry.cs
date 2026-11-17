@@ -448,5 +448,6 @@ internal static class CompatFixes
         yield return new CreateServerPickerFix();
         yield return new LobbyEntryDirectFix();
         yield return new RoomChatHintPassthroughFix();
+        yield return new MobileSidebarScrollFix();
     }
 }

@@ -33,6 +33,12 @@ internal enum FixGroup
     /// </summary>
     Touch,
 
+    /// <summary>
+    /// The lobby's own layout on a phone: the sidebar has to scroll as one surface. Separate from <see cref="Touch"/>,
+    /// which is about the chat widget's input handling, because these two break for different reasons
+    /// </summary>
+    Layout,
+
     /// <summary>Switching which server's public channel the chat panel is attached to</summary>
     Chat,
 
