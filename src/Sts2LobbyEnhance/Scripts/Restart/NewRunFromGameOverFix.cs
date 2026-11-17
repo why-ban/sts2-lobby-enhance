@@ -920,7 +920,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
 
         if (counts.Patched == 0)
         {
-            return "队友均未安装兼容补丁，无法重开";
+            return "队友均未安装游戏大厅增强，无法新开";
         }
 
         if (counts.Patched == counts.Total)
@@ -1034,7 +1034,7 @@ internal sealed class NewRunFromGameOverFix : ICompatFix
             if (counts.Patched == 0)
             {
                 Entry.Warn("new-run-button: no connected peer runs this patch; refusing to restart.");
-                RejectRestart("队友均未安装兼容补丁，无法新开一局。请点「主菜单」后重新建房。");
+                RejectRestart("队友均未安装游戏大厅增强，无法新开。请点「主菜单」后重新建房。");
                 return;
             }
 
