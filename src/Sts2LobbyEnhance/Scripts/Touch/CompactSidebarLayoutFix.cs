@@ -130,10 +130,6 @@ internal sealed class CompactSidebarLayoutFix : ICompatFix
             body.AddChild(status);
             details.Visible = false;
             section.SetMeta(AppliedMeta, true);
-
-            Entry.Info(
-                $"{Tag}hid the read-only ROOM DETAILS card and moved the status line into ACTIONS, so the column fits the " +
-                "channel chat and its composer.");
         }
         catch (Exception exception)
         {

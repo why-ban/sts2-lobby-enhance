@@ -56,8 +56,6 @@ internal sealed class LoadJoinOrderFix : ICompatFix
 
         internal MemberInfo ConnectedPlayerId = null!;
 
-        /// <summary>Optional: the tail runtime's rejection path, patched only to say why a peer was dropped.</summary>
-        internal MethodInfo? Reject;
     }
 
     /// <summary>Written by <see cref="Applies"/> and read by <see cref="Apply"/>; never re-resolved after a patch.</summary>
@@ -66,8 +64,8 @@ internal sealed class LoadJoinOrderFix : ICompatFix
     private static int _warned;
 
     /// <summary>
-    /// The last reorder this repair performed, or null when none was ever necessary. Diagnostic only: it tells
-    /// a rejection that still reaches the user apart from "the prefix never ran".
+    /// The last reorder this repair performed, or null when none was ever necessary. Read by the offline probe in
+    /// <c>tools/loadjoin-probe</c> to tell a run that reordered nothing from one that never ran.
     /// </summary>
     public static string? LastReorder { get; private set; }
 
@@ -112,38 +110,9 @@ internal sealed class LoadJoinOrderFix : ICompatFix
                 priority = Priority.First
             });
 
-        if (shape.Reject != null)
-        {
-            harmony.Patch(
-                shape.Reject,
-                prefix: new HarmonyMethod(typeof(LoadJoinOrderFix), nameof(RejectPrefix))
-                {
-                    priority = Priority.First
-                });
-        }
-
         Entry.Info(
             "load-join-order: playersAlreadyConnected is re-sorted into save order before the membership " +
             "comparison runs, so a group that joined out of save order can load the run.");
-    }
-
-    /// <summary>
-    /// Upstream reports a tail protocol failure to the player as "Mod 不匹配", which says nothing about which
-    /// message failed. This prints the peer and the failure object before that happens, on both sides.
-    /// </summary>
-    private static void RejectPrefix(object[] __args)
-    {
-        try
-        {
-            object? peer = __args.Length > 1 ? __args[1] : null;
-            object? failure = __args.Length > 2 ? __args[2] : null;
-            Entry.Warn("tail-reject: peer " + (peer ?? "?") + " dropped, failure=" +
-                       (failure?.ToString() ?? "<null>") + " [" + (failure?.GetType().Name ?? "none") + "]");
-        }
-        catch (Exception exception)
-        {
-            Entry.Warn("tail-reject: could not describe the rejection: " + exception.GetType().Name);
-        }
     }
 
     /// <summary>
@@ -302,10 +271,6 @@ internal sealed class LoadJoinOrderFix : ICompatFix
     private static void Capture(Assembly host, Shape shape, List<string> problems)
     {
         Type? runtimeType = ReflectScope.HostType(host, RuntimeTypeName, problems);
-        MethodInfo? reject = runtimeType?.GetMethods(AnyMember)
-            .FirstOrDefault(method => method.Name == "RejectAndDisconnect"
-                                      && method.GetParameters().Length == 3
-                                      && method.GetParameters()[1].ParameterType == typeof(ulong));
         Type? snapshotType = ReflectScope.HostType(host, SnapshotTypeName, problems);
         Type? messageType = ReflectScope.GameType(MessageTypeName, problems);
         Type? runType = ReflectScope.GameType(RunTypeName, problems);
@@ -394,7 +359,6 @@ internal sealed class LoadJoinOrderFix : ICompatFix
             }
         }
 
-        shape.Reject = reject;
     }
 
     /// <summary>A <c>ulong</c> member by that name, field or property, any accessibility</summary>
