@@ -13,7 +13,7 @@
 
 | # | id | 组 | 做什么 | 主要注入点（0.6.4 / 游戏 0.113；有的修复挂多处） |
 |---|---|---|---|---|
-| 1 | `roster-rebaseline` | Roster | 减员后把本地名册重新基线化 | `LanConnectRosterAuthorityState.Accept` |
+| 1 | `roster-rebaseline` | Roster | 名册减员、或 revision 跳号时把本地名册重新基线化 | `LanConnectRosterAuthorityState.Accept` |
 | 2 | `begin-run-order` | Roster | 开局前把房主房间里的玩家列表排成 slot 顺序，避免种子下标错位 | `StartRunLobby.BeginRunForAllPlayers` |
 | 3 | `load-join-order` | LoadOrder | 读档加入前按存档下标原地重排 | `LanConnectTailMessageRuntime.RestoreLoadJoin` |
 | 4 | `new-run-button` | NewRun | 结算页给房主注入「新开一局」 | `NGameOverScreen._Ready` |
