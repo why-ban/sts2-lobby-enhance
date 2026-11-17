@@ -868,14 +868,12 @@ internal sealed class PoolRefreshFix : ICompatFix
 
     private static Label CreateSourceLabel(PoolAnchors anchors, PoolOrigin origin)
     {
-        string text = PoolText.SourceLabelPrefix + origin.ShortName + (origin.IsStale ? PoolText.StaleSuffix : string.Empty);
+        string text = PoolText.SourceLabelPrefix + origin.ShortName;
         Label label = anchors.CreateBodyLabel?.Invoke(null, new object?[] { text }) as Label
                       ?? new Label { Text = text };
         label.AddThemeFontSizeOverride("font_size", 14);
         label.AddThemeColorOverride("font_color", MutedColor(anchors));
-        label.TooltipText = origin.IsStale
-            ? origin.BaseUrl + "\n该服务器当前无响应，这是它上次成功刷新时的房间。"
-            : origin.BaseUrl;
+        label.TooltipText = origin.BaseUrl;
         label.SetMeta(PoolText.SourceMetaKey, origin.BaseUrl);
         return label;
     }
@@ -1024,14 +1022,9 @@ internal sealed class PoolRefreshSession
             {
                 if (PoolServerCatalog.IsCoolingDown(server))
                 {
-                    // A dead node would cost the round its full 2 s ceiling on every tick. It is out of the round until
-                    // its slot expires, and its last answer stays on the stage marked stale so its rooms do not blink
-                    // out of existence in the meantime.
-                    if (server.LastRooms is { Count: > 0 } staleRooms)
-                    {
-                        _cycle.AcceptStale(_anchors, server, staleRooms);
-                    }
-
+                    // A dead node would cost the round its full 2 s ceiling on every tick, so it sits out until its
+                    // slot expires. Its rooms are not shown in the meantime: an unconfirmed room is a room nobody can
+                    // join, and the next round that reaches the server brings them back.
                     continue;
                 }
 
@@ -1062,13 +1055,6 @@ internal sealed class PoolRefreshSession
 
                 PoolServerCatalog.RecordRoomsFetch(fetch);
                 _cycle.Accept(_anchors, fetch);
-                if (!fetch.Succeeded && fetch.Server.LastRooms is { Count: > 0 } lastRooms)
-                {
-                    // This is the round the server became dead in, so IsCoolingDown is still false for it and the
-                    // next round is the first one that keeps its rooms as stale. Dropping them now is the blink: they
-                    // vanish, then come back eight seconds later marked "（旧）".
-                    _cycle.AcceptStale(_anchors, fetch.Server, lastRooms);
-                }
             }
         }
         catch (OperationCanceledException) when (_callerToken.IsCancellationRequested)

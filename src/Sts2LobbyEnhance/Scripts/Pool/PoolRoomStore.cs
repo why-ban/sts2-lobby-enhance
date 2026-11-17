@@ -5,18 +5,11 @@ namespace Sts2LobbyEnhance;
 /// <summary>Which server a pooled room came from, and the short name to print for it.</summary>
 internal sealed class PoolOrigin
 {
-    internal PoolOrigin(string baseUrl, string shortName, bool isStale)
+    internal PoolOrigin(string baseUrl, string shortName)
     {
         BaseUrl = baseUrl;
         ShortName = shortName;
-        IsStale = isStale;
     }
-
-    /// <summary>
-    /// True when these rooms are the last answer of a server that is currently in its failure cooldown, i.e. nobody
-    /// has confirmed them this round. The card says so instead of pretending the list is fresh.
-    /// </summary>
-    internal bool IsStale { get; }
 
     /// <summary>Normalized authority of the owning server.</summary>
     internal string BaseUrl { get; }
@@ -99,19 +92,7 @@ internal sealed class PoolCycle
             }
 
             _succeeded++;
-            AddRows(anchors, fetch.Server, fetch.Rooms, fetch.LatencyMs, isStale: false);
-        }
-    }
-
-    /// <summary>
-    /// Rows of a server that is cooling down: kept so one dead node cannot empty its part of the stage, flagged so the
-    /// card can say they are not confirmed.
-    /// </summary>
-    internal void AcceptStale(PoolAnchors anchors, PoolServer server, IReadOnlyList<object> rooms)
-    {
-        lock (_gate)
-        {
-            AddRows(anchors, server, rooms, server.LatencyMs ?? PoolServerFetch.UnknownLatency, isStale: true);
+            AddRows(anchors, fetch.Server, fetch.Rooms, fetch.LatencyMs);
         }
     }
 
@@ -119,13 +100,11 @@ internal sealed class PoolCycle
         PoolAnchors anchors,
         PoolServer server,
         IReadOnlyList<object> rooms,
-        int latencyMs,
-        bool isStale)
+        int latencyMs)
     {
         PoolOrigin origin = new(
             server.BaseUrl,
-            server.ShortName(PoolText.SourceNameMaxLength),
-            isStale);
+            server.ShortName(PoolText.SourceNameMaxLength));
 
         foreach (object room in rooms)
         {
@@ -377,6 +356,4 @@ internal static class PoolText
     /// <summary>Set on the source label so a rebuilt row can be recognised instead of appended to twice.</summary>
     internal const string SourceMetaKey = "lobby_enhance_pool_source";
 
-    /// <summary>Appended to the source name while the server is in its failure cooldown.</summary>
-    internal const string StaleSuffix = "（旧）";
 }
