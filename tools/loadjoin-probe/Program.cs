@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 
 // 离线复现「读档续玩必须按原顺序加入」：
-//   1. 反射加载 0.113 的 sts2.dll、官方 sts2_lan_connect 0.6.3、本仓出货/最新构建的 sts2_lobby_enhance.dll
+//   1. 反射加载 0.113 的 sts2.dll、官方 sts2_lan_connect（默认取 0.6.4 的工坊 DLL）、本仓出货/最新构建的 sts2_lobby_enhance.dll
 //      （全部从磁盘加载，无编译期引用，所以成员改名只会打印一行而不是编译失败）
 //   2. 用真实类型搭一个 ClientLoadJoinResponseMessage：
 //        serializableRun.Players  = 存档序（决定快照载体 RealSlotId 的那个顺序）

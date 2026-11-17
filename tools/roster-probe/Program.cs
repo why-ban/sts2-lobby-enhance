@@ -6,7 +6,7 @@ using HarmonyLib;
 
 // 踢人后名册重基线（roster-rebaseline）的离线复现工具。
 //
-// 被测的是**真正跑的那条代码路径**：官方 sts2_lan_connect 0.6.3 的 LanConnectRosterAuthorityState.Accept
+// 被测的是**真正跑的那条代码路径**：官方 sts2_lan_connect（默认取 0.6.4 的工坊 DLL）的 LanConnectRosterAuthorityState.Accept
 // 与 LanConnectRosterCodec，加上出货的补丁 DLL（packaging/content；它还没收录本修复时退回
 // src/Sts2LobbyEnhance/bin/Release 的最新构建产物，并打印用的是哪一个）。
 //
@@ -617,7 +617,7 @@ sealed class Scenario(string scenarioId, string title, string? before, string? a
 }
 
 /// <summary>
-/// Reflection harness over the pinned 0.6.3 roster types. Nothing here models the host mod: snapshots and
+/// Reflection harness over the pinned roster types of the host build under test. Nothing here models the host mod: snapshots and
 /// carriers are produced by <c>LanConnectRosterCodec.Decode</c> from canonical bytes, i.e. the objects the wire
 /// would produce, and revisions come from the real <c>CommitHostSnapshot</c>.
 ///
