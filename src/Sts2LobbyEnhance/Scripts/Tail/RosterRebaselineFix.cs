@@ -194,6 +194,14 @@ internal sealed class RosterRebaselineFix : ICompatFix
         int currentCount = currentIds.Count;
         int candidateCount = candidateIds.Count;
 
+        // Upstream's own check is "the revision must increase by exactly one", and when it fails the client is
+        // dropped with a message that only says ModMismatch. Printing both revisions on every acceptance is what
+        // makes that failure readable from a player log.
+        string revisionNote = "cur.rev=" + ReadRevision(current) + " cand.rev=" + ReadRevision(snapshot);
+        WarnOnce("accept:" + use + ":" + revisionNote + ":" + currentCount + ":" + candidateCount,
+            Tag + "accept use=" + shape.NameOf(use) + " " + revisionNote +
+            " members " + currentCount + " -> " + candidateCount);
+
         // "we hold somebody the host does not": that is the whole trigger. A snapshot that only adds members
         // keeps every current id and is left to upstream.
         currentIds.ExceptWith(candidateIds);
@@ -225,6 +233,29 @@ internal sealed class RosterRebaselineFix : ICompatFix
 
         WarnOnce($"rebaseline:{use}:{currentCount}:{candidateCount}:{departed}", Tag + detail);
         return true;
+    }
+
+    private static string ReadRevision(object? roster)
+    {
+        if (roster == null)
+        {
+            return "?";
+        }
+
+        try
+        {
+            const BindingFlags any = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            Type type = roster.GetType();
+            object? value = type.GetProperty("Revision", any)?.GetValue(roster)
+                            ?? type.GetField("revision", any)?.GetValue(roster)
+                            ?? type.GetProperty("revision", any)?.GetValue(roster)
+                            ?? type.GetField("Revision", any)?.GetValue(roster);
+            return value?.ToString() ?? "?";
+        }
+        catch
+        {
+            return "?";
+        }
     }
 
     private static HashSet<ulong> PlayerIdsOf(Shape shape, object snapshot)
