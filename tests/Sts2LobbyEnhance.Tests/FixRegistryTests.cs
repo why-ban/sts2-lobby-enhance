@@ -39,6 +39,7 @@ public sealed class FixRegistryTests
         "new-protocol-only",
         "room-version-filter",
         "touch-chat-scroll",
+        "compact-sidebar-layout",
         "chat-server-switch",
         "announcement-source",
         "server-pool-refresh",

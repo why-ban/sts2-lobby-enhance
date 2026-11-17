@@ -440,6 +440,7 @@ internal static class CompatFixes
         yield return new NewProtocolOnlyFix();
         yield return new RoomVersionFilterFix();
         yield return new TouchChatScrollFix();
+        yield return new CompactSidebarLayoutFix();
         yield return new ChatServerSwitchFix();
         yield return new AnnouncementSourceFix();
         yield return new PoolRefreshFix();
