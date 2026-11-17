@@ -375,12 +375,6 @@ internal sealed class TouchSelectionGesture
         }
     }
 
-    /// <summary>
-    /// True while a finger is still shaping this selection, i.e. while a drag belongs to the selection rather than to
-    /// whatever surface the message sits on
-    /// </summary>
-    internal bool IsShaping => _selecting;
-
     internal void ForceExit()
     {
         _cancelled = true;

@@ -362,12 +362,6 @@ internal sealed class TouchChatScrollFix : ICompatFix
     {
         private static TouchSelectionGesture? _active;
 
-        /// <summary>
-        /// True while the live selection is still being shaped. Reads main-thread state that only the timer and the input
-        /// handlers write, so a scroll surface can consult it from the input stream before the GUI runs
-        /// </summary>
-        internal static bool IsShaping => _active is { } live && live.IsShaping;
-
         internal static void Begin(TouchSelectionGesture gesture)
         {
             TouchSelectionGesture? previous = _active;

@@ -7,7 +7,7 @@
 - 依赖：**社区模组 0.6.4**（工坊 3749766330，已设为必需物品）
 - 联机双方都要安装；`affects_gameplay` 保持 `false`（握手靠它判断两端是否一致）
 
-## 它在做什么：17 项修复，10 个回滚分组
+## 它在做什么：16 项修复，9 个回滚分组
 
 分组决定"一起失败的接缝"：组内任一项装不上就整组回滚（每组一个 Harmony id，`sts2_lobby_enhance.<组名小写>`）。
 
@@ -29,7 +29,6 @@
 | 14 | `server-pool-create-picker` | Pool | 建房面板里可折叠的服务器选择（显示延迟，默认自动） | `LanConnectLobbyOverlay.BuildCreateDialog` |
 | 15 | `lobby-entry-direct` | Pool | 点「游戏大厅」直达房间列表，不弹服务器选择器 | `LanConnectServerSelectionStartup.Show` |
 | 16 | `room-chat-hint-passthrough` | Chat | 局内收起聊天时那行提示不再吞点击（仅电脑端） | `LanConnectRoomChatOverlay.RefreshFromSource` |
-| 17 | `mobile-sidebar-scroll` | Layout | 手机：大厅右侧整列（房间详情 + 动作 + 频道聊天）可上下滑动，聊天输入框不再永远在屏幕外 | `LanConnectLobbyOverlay.RebuildMainContentLayout` |
 
 每个修复都在 `Applies()` 里一次性解析全部反射锚点，缺哪个报哪个（clean skip）；补丁体各自 try/catch 包住节点读写，
 只有取参与前置判断在 try 外。`Applies()` / `Apply()` 里没有任何 Godot 调用，所以冒烟测试能在没有 Godot 的进程里跑它们。
@@ -45,8 +44,6 @@
   选择**不记忆**，每次打开都回到自动。
 - **建房对话框不再显示联机协议**：默认按新协议建房（没有独立 tail 运行时的那一侧仍保留上游选择，能建房优先）。
 - **手机**：滑动即滚动；长按 0.4 秒让这条消息进入选中态，接着拖动就是框选，松手复制选区。
-- **手机右侧栏可上下滑动**：房间详情、创建/加入/刷新、频道聊天是同一列，手机上这一列比屏幕高，以前聊天输入框永远在屏幕外；
-  现在在这一列上竖着滑就能滚到底，频道聊天在手机大厅里可以直接用（消息列表自己的滚动不受影响）。
 - **局内**：收起聊天后那行提示不再挡住游戏右上角的按钮（只改鼠标过滤，不动布局）。
 - **结算页**：一键新开一局、全房回准备页；新开之后存档仍可续；踢人/掉线后照样能开局；读档不必按原顺序进房。
 
@@ -62,7 +59,7 @@ pwsh -NoProfile -File tools\pack-upload-kit\pack-upload-kit.ps1 -Force
 pwsh -NoProfile -File tools\pack-upload-kit\test-upload-kit.ps1
 `@
 
-期望值：build 0 警告 0 错误；smoke 打印 `OK (17 fixes applied)` 且 17 项 id / 分组 / 接缝全绿；
+期望值：build 0 警告 0 错误；smoke 打印 `OK (16 fixes applied)` 且 16 项 id / 分组 / 接缝全绿；
 `dotnet test` 61 通过 0 跳过；上传包验收 35 条全过（**不联系 Steam**）。
 
 - `build-content` 必须紧跟 `build`：测试断言"出货 DLL 与当前构建逐字节一致"。
