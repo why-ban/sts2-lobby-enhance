@@ -252,6 +252,15 @@ internal sealed class TouchSelectionGesture
         _label.SelectionEnabled = true;
         _label.MouseFilter = Control.MouseFilterEnum.Stop;
 
+        // Not focusable while this press is anchored: the injected press below would otherwise hand the label keyboard
+        // focus, and the game's theme draws its focus ring as an outline a couple of pixels OUTSIDE the label's rect.
+        // Nothing above the label clips that (a Control's clip contains its children, not its own drawing), so on touch,
+        // where the row sits flush with the message area and with the panel's edge, that ring lands outside the message
+        // area and outside the panel — the "the highlight draws over the input box" report. Selection does not need
+        // focus: the anchor comes from the synthetic press and DeselectOnFocusLoss is off for the duration
+        // (probe: 1043 px outside the message area before, 0 after, selection intact and still copied on lift)
+        _label.FocusMode = Control.FocusModeEnum.None;
+
         InjectAnchorPress(labelLocal);
         _label.SelectAll();
 
