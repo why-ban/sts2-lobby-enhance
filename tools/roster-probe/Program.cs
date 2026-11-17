@@ -185,6 +185,41 @@ Scenario[] scenarios =
             object client = h.NewAuthority(RosterHarness.HostId);
             h.Accept(client, publishedThree, "Bootstrap");
             h.Accept(client, publishedFour, "StateTransition");
+        }),
+    new Scenario(
+        "S6",
+        "修复2：漏收一帧导致 revision 跳号（cur=1 → cand=3，成员没变）",
+        before: RosterHarness.MutationRevisionRejection,
+        after: null,
+        run: h =>
+        {
+            object client = h.NewAuthority(RosterHarness.HostId);
+            h.Accept(client, h.Published(1u, Roster3()), "Bootstrap");
+            h.Accept(
+                client,
+                h.Published(3u, Roster3()),
+                "MembershipMutation",
+                new HashSet<ulong> { RosterHarness.HostId, RosterHarness.GuestId, RosterHarness.KickedId },
+                RosterHarness.GuestId);
+            Console.WriteLine(
+                $"      Current rev={h.CurrentRevision(client)} " +
+                $"members=[{string.Join(",", h.CurrentPlayerIds(client))}]");
+        }),
+    new Scenario(
+        "S7",
+        "对照：revision 倒退（cur=2 → cand=1）必须照旧拒绝，不被跳号修复吞掉",
+        before: RosterHarness.BackwardsRejection,
+        after: RosterHarness.BackwardsRejection,
+        run: h =>
+        {
+            object client = h.NewAuthority(RosterHarness.HostId);
+            h.Accept(client, h.Published(2u, Roster3()), "Bootstrap");
+            h.Accept(
+                client,
+                h.Published(1u, Roster3()),
+                "MembershipMutation",
+                new HashSet<ulong> { RosterHarness.HostId, RosterHarness.GuestId, RosterHarness.KickedId },
+                RosterHarness.GuestId);
         })
 ];
 
@@ -216,11 +251,12 @@ if (!beforeOk)
 
 if (!afterOk)
 {
-    Console.WriteLine("FAIL: the patch did not repair every shrunken-roster scenario.");
+    Console.WriteLine("FAIL: the patch did not repair every roster scenario (shrink or revision gap).");
     return 2;
 }
 
-Console.WriteLine("OK: unpatched rejects all three shrunken-roster scenarios, patched accepts them, controls unchanged.");
+Console.WriteLine(
+    "OK: unpatched rejects the shrunken-roster and revision-gap scenarios, patched accepts both, controls unchanged.");
 return 0;
 
 // ---------------------------------------------------------------- scenarios
@@ -562,6 +598,13 @@ internal sealed class RosterHarness
     internal const string CurrentStateRejection =
         "Current-state snapshots must repeat the accepted revision byte-for-byte.";
 
+    /// <summary>Upstream 0.6.4 LanConnectRosterAuthorityState.cs:130 — the revision-gap failure.</summary>
+    internal const string MutationRevisionRejection =
+        "Mutation snapshot revision must increase by exactly one.";
+
+    /// <summary>Upstream 0.6.4 LanConnectRosterAuthorityState.cs:87 — the control case that must stay rejected.</summary>
+    internal const string BackwardsRejection = "Roster revision moved backwards.";
+
     private const BindingFlags Any =
         BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
@@ -637,6 +680,16 @@ internal sealed class RosterHarness
         _ = _accept.Invoke(
             authority,
             [HostId, snapshot, Enum.Parse(_useType, use), membership, connectedPeerId]);
+
+    /// <summary>
+    /// A snapshot carrying an explicit revision. Real hosts only reach a gap after a lost frame, but the value a
+    /// client sees then is exactly this: the same roster with a revision two steps ahead.
+    /// </summary>
+    internal object Published(uint revision, params (ulong Id, byte Slot)[] players) =>
+        Snapshot(HostId, revision, players);
+
+    internal uint? CurrentRevision(object authority) =>
+        _current.GetValue(authority) is { } current ? RevisionOf(current) : null;
 
     internal IReadOnlyList<ulong> CurrentPlayerIds(object authority) =>
         _current.GetValue(authority) is { } current ? PlayerIdsOf(current) : [];

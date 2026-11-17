@@ -33,6 +33,17 @@ namespace Sts2LobbyEnhance;
     /// room. A snapshot that only *adds* members leaves <c>Current</c> fully covered and is deliberately left
     /// alone; so is a repeated snapshot, which is how upstream's own happy paths stay byte-identical.
     ///
+    /// A second, unrelated defect throws the client out of the same method. The roster revision is a counter that
+    /// upstream accepts only as <c>current + 1</c>, so one lost frame is enough to make every later snapshot look
+    /// corrupt. The reported one is the 0.6.4 tail extension queue dropping a frame in its write-time reset
+    /// ("tail: pending extension for PlayerJoined cleared by writer reset before transport." — maintainer log): the
+    /// client never sees that revision, the next mutation arrives at <c>current + 2</c>, upstream throws "Mutation
+    /// snapshot revision must increase by exactly one" and the client answers by disconnecting itself with
+    /// <c>NetError.ModMismatch</c>, which the UI shows as a mod mismatch while every player falls back to the main
+    /// menu. The same repair answers it for the same reason — the host is authoritative and its snapshot is the
+    /// state we should be in — so a forward gap nobody left over is re-baselined too. A gap that also loses a
+    /// member has already fired the membership trigger and is unchanged.
+    ///
     /// The trap, and the one thing this repair must not get wrong: <c>Reset()</c> alone does not fix anything.
     /// It drops <c>_current</c>, and upstream then refuses the very snapshot we are holding, because with no
     /// accepted state a <c>StateTransition</c>/<c>MembershipMutation</c> snapshot may not initialize the state
@@ -126,7 +137,8 @@ internal sealed class RosterRebaselineFix : ICompatFix
             });
 
         Entry.Info(
-            $"{Tag}watching {AuthorityTypeName}.Accept for a roster that lost members the client still holds.");
+            $"{Tag}watching {AuthorityTypeName}.Accept for a roster that lost members the client still holds, or " +
+            "that skipped a revision because a tail frame never arrived.");
 
         if (shape.OptionalNote != null)
         {
@@ -193,20 +205,30 @@ internal sealed class RosterRebaselineFix : ICompatFix
         HashSet<ulong> candidateIds = PlayerIdsOf(shape, snapshot);
         int currentCount = currentIds.Count;
         int candidateCount = candidateIds.Count;
+        uint? currentRevision = shape.RevisionOf(current);
+        uint? candidateRevision = shape.RevisionOf(snapshot);
 
         // Upstream's own check is "the revision must increase by exactly one", and when it fails the client is
         // dropped with a message that only says ModMismatch. Printing both revisions on every acceptance is what
         // makes that failure readable from a player log.
-        string revisionNote = "cur.rev=" + DescribeRevision(shape.RevisionOf(current)) +
-                              " cand.rev=" + DescribeRevision(shape.RevisionOf(snapshot));
+        string revisionNote = "cur.rev=" + DescribeRevision(currentRevision) +
+                              " cand.rev=" + DescribeRevision(candidateRevision);
         WarnOnce("accept:" + use + ":" + revisionNote + ":" + currentCount + ":" + candidateCount,
             Tag + "accept use=" + shape.NameOf(use) + " " + revisionNote +
             " members " + currentCount + " -> " + candidateCount);
 
-        // "we hold somebody the host does not": that is the whole trigger. A snapshot that only adds members
-        // keeps every current id and is left to upstream.
-        currentIds.ExceptWith(candidateIds);
-        if (currentIds.Count == 0)
+        // Trigger 1 — "we hold somebody the host does not". A snapshot that only adds members keeps every current
+        // id and is left to upstream.
+        var departed = new HashSet<ulong>(currentIds);
+        departed.ExceptWith(candidateIds);
+        bool someoneGone = departed.Count > 0;
+
+        // Trigger 2 — the host is ahead by more than the single step upstream allows, and nobody is gone. That is
+        // one lost frame, not a different roster: see the class comment. Only checked when trigger 1 did not fire,
+        // so the membership behaviour is bit-for-bit what it was.
+        bool revisionGap = !someoneGone && IsRevisionGap(currentRevision, candidateRevision);
+
+        if (!someoneGone && !revisionGap)
         {
             return false;
         }
@@ -227,14 +249,39 @@ internal sealed class RosterRebaselineFix : ICompatFix
             __args[3] = null;
         }
 
-        string departed = string.Join(",", currentIds.OrderBy(id => id));
-        string detail = use == shape.StateTransition
-            ? $"BeginRun 名册减员（旧 {currentCount} 人 → 新 {candidateCount} 人，缺少 {departed}），已重新基线"
-            : $"名册减员后收到 {shape.NameOf(use)}（旧 {currentCount} → 新 {candidateCount}，缺少 {departed}），已重新基线";
+        if (someoneGone)
+        {
+            string departedIds = string.Join(",", departed.OrderBy(id => id));
+            string detail = use == shape.StateTransition
+                ? $"BeginRun 名册减员（旧 {currentCount} 人 → 新 {candidateCount} 人，缺少 {departedIds}），已重新基线"
+                : $"名册减员后收到 {shape.NameOf(use)}（旧 {currentCount} → 新 {candidateCount}，缺少 {departedIds}），已重新基线";
 
-        WarnOnce($"rebaseline:{use}:{currentCount}:{candidateCount}:{departed}", Tag + detail);
+            WarnOnce(
+                $"rebaseline:shrink:{use}:{currentRevision}:{candidateRevision}:{currentCount}:{candidateCount}:" +
+                departedIds,
+                Tag + detail);
+            return true;
+        }
+
+        WarnOnce(
+            $"rebaseline:gap:{use}:{currentRevision}:{candidateRevision}:{currentCount}:{candidateCount}",
+            Tag + $"名册 revision 跳号后收到 {shape.NameOf(use)}（cur.rev={DescribeRevision(currentRevision)} → " +
+            $"cand.rev={DescribeRevision(candidateRevision)}，旧 {currentCount} 人 → 新 {candidateCount} 人），已重新基线");
+
         return true;
     }
+
+    /// <summary>
+    /// A forward gap: the host is ahead of us by more than the one step upstream accepts.
+    /// <c>MembershipMutation</c> and <c>StateTransition</c> both insist on <c>current + 1</c>, and anything else
+    /// throws, which the client answers by disconnecting itself with <c>NetError.ModMismatch</c>.
+    ///
+    /// Equal and backwards revisions are deliberately not re-baselined. Equal is upstream's "an unchanged snapshot
+    /// must repeat byte-for-byte" path, and a lower revision means the host went back in time; in both the content,
+    /// not a lost frame, is the questionable part, and adopting it silently would hide real corruption.
+    /// </summary>
+    private static bool IsRevisionGap(uint? current, uint? candidate) =>
+        current.HasValue && candidate.HasValue && (long)candidate.Value > (long)current.Value + 1;
 
     private static string DescribeRevision(uint? revision) => revision?.ToString() ?? "?";
 
@@ -482,7 +529,6 @@ internal sealed class RosterRebaselineFix : ICompatFix
             $"{snapshotType.FullName}.RosterRevision (uint) was not found " +
             $"({property?.PropertyType.FullName ?? field?.FieldType.FullName ?? "no such member"}), so a revision " +
             "gap is not detected; the membership trigger still works.");
-
     }
 
     private static void AddNote(Shape shape, string note) =>
