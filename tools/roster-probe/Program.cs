@@ -220,6 +220,60 @@ Scenario[] scenarios =
                 "MembershipMutation",
                 new HashSet<ulong> { RosterHarness.HostId, RosterHarness.GuestId, RosterHarness.KickedId },
                 RosterHarness.GuestId);
+        }),
+    new Scenario(
+        "S8",
+        "修复3：重复快照（rev 相等 2 → 2，成员完全相同，MembershipMutation）",
+        before: RosterHarness.MutationRevisionRejection,
+        after: null,
+        run: h =>
+        {
+            object client = h.NewAuthority(RosterHarness.HostId);
+            h.Accept(client, h.Published(2u, Roster3()), "Bootstrap");
+            h.Accept(
+                client,
+                h.Published(2u, Roster3()),
+                "MembershipMutation",
+                new HashSet<ulong> { RosterHarness.HostId, RosterHarness.GuestId, RosterHarness.KickedId },
+                RosterHarness.GuestId);
+            Console.WriteLine(
+                $"      Current rev={h.CurrentRevision(client)} " +
+                $"members=[{string.Join(",", h.CurrentPlayerIds(client))}]");
+        }),
+    new Scenario(
+        "S9",
+        "对照：rev 相等但成员不同（3 人 → 4 人），必须维持上游拒绝",
+        before: RosterHarness.MutationRevisionRejection,
+        after: RosterHarness.MutationRevisionRejection,
+        run: h =>
+        {
+            object client = h.NewAuthority(RosterHarness.HostId);
+            h.Accept(client, h.Published(2u, Roster3()), "Bootstrap");
+            h.Accept(
+                client,
+                h.Published(2u, Roster4()),
+                "MembershipMutation",
+                new HashSet<ulong>
+                {
+                    RosterHarness.HostId, RosterHarness.GuestId, RosterHarness.KickedId, RosterHarness.JoinerId
+                },
+                RosterHarness.JoinerId);
+        }),
+    new Scenario(
+        "S10",
+        "对照：rev 相等、成员 id 相同但真实槽位不同，必须维持上游拒绝",
+        before: RosterHarness.MutationRevisionRejection,
+        after: RosterHarness.MutationRevisionRejection,
+        run: h =>
+        {
+            object client = h.NewAuthority(RosterHarness.HostId);
+            h.Accept(client, h.Published(2u, Roster3()), "Bootstrap");
+            h.Accept(
+                client,
+                h.Published(2u, [(RosterHarness.HostId, 0), (RosterHarness.GuestId, 2), (RosterHarness.KickedId, 3)]),
+                "MembershipMutation",
+                new HashSet<ulong> { RosterHarness.HostId, RosterHarness.GuestId, RosterHarness.KickedId },
+                RosterHarness.GuestId);
         })
 ];
 
@@ -251,12 +305,12 @@ if (!beforeOk)
 
 if (!afterOk)
 {
-    Console.WriteLine("FAIL: the patch did not repair every roster scenario (shrink or revision gap).");
+    Console.WriteLine("FAIL: the patch did not repair every roster scenario (shrink, revision gap or repeat).");
     return 2;
 }
 
 Console.WriteLine(
-    "OK: unpatched rejects the shrunken-roster and revision-gap scenarios, patched accepts both, controls unchanged.");
+    "OK: unpatched rejects shrink / gap / repeated snapshots, patched accepts them, controls unchanged.");
 return 0;
 
 // ---------------------------------------------------------------- scenarios

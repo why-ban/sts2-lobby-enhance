@@ -44,6 +44,14 @@ namespace Sts2LobbyEnhance;
     /// state we should be in — so a forward gap nobody left over is re-baselined too. A gap that also loses a
     /// member has already fired the membership trigger and is unchanged.
     ///
+    /// A third shape of the same frame trouble is rejected by the very same check: a mutation that repeats the
+    /// revision we already hold. Upstream demands <c>current + 1</c> even when the snapshot is byte-identical, so a
+    /// second delivery of one frame disconnects the client (field log: <c>accept use=MembershipMutation cur.rev=2
+    /// cand.rev=2 members 3 -> 3</c> → "Mutation snapshot revision must increase by exactly one"). That case is
+    /// idempotent — re-storing the state we already hold changes nothing — so it is accepted too, but only while the
+    /// members (ids and real slots) are exactly the same and the use is <c>MembershipMutation</c>; anything else
+    /// keeps upstream's verdict.
+    ///
     /// The trap, and the one thing this repair must not get wrong: <c>Reset()</c> alone does not fix anything.
     /// It drops <c>_current</c>, and upstream then refuses the very snapshot we are holding, because with no
     /// accepted state a <c>StateTransition</c>/<c>MembershipMutation</c> snapshot may not initialize the state
@@ -137,8 +145,9 @@ internal sealed class RosterRebaselineFix : ICompatFix
             });
 
         Entry.Info(
-            $"{Tag}watching {AuthorityTypeName}.Accept for a roster that lost members the client still holds, or " +
-            "that skipped a revision because a tail frame never arrived.");
+            $"{Tag}watching {AuthorityTypeName}.Accept for a roster that lost members the client still holds, " +
+            "that skipped a revision because a tail frame never arrived, or that re-delivered the revision it " +
+            "already holds.");
 
         if (shape.OptionalNote != null)
         {
@@ -228,7 +237,13 @@ internal sealed class RosterRebaselineFix : ICompatFix
         // so the membership behaviour is bit-for-bit what it was.
         bool revisionGap = !someoneGone && IsRevisionGap(currentRevision, candidateRevision);
 
-        if (!someoneGone && !revisionGap)
+        // Trigger 3 — a mutation that repeats the revision and the roster we already hold. Upstream's mutation
+        // branch insists on current+1 even when the bytes are identical, so a doubly delivered (or re-sent) frame
+        // disconnects the client. Re-storing the same state is a no-op, so accepting it cannot mask anything.
+        bool repeatedMutation = !someoneGone && !revisionGap &&
+                                IsRepeatedMutation(shape, use, currentRevision, candidateRevision, current, snapshot);
+
+        if (!someoneGone && !revisionGap && !repeatedMutation)
         {
             return false;
         }
@@ -263,12 +278,94 @@ internal sealed class RosterRebaselineFix : ICompatFix
             return true;
         }
 
+        if (revisionGap)
+        {
+            WarnOnce(
+                $"rebaseline:gap:{use}:{currentRevision}:{candidateRevision}:{currentCount}:{candidateCount}",
+                Tag + $"名册 revision 跳号后收到 {shape.NameOf(use)}（cur.rev={DescribeRevision(currentRevision)} → " +
+                $"cand.rev={DescribeRevision(candidateRevision)}，旧 {currentCount} 人 → 新 {candidateCount} 人），已重新基线");
+
+            return true;
+        }
+
         WarnOnce(
-            $"rebaseline:gap:{use}:{currentRevision}:{candidateRevision}:{currentCount}:{candidateCount}",
-            Tag + $"名册 revision 跳号后收到 {shape.NameOf(use)}（cur.rev={DescribeRevision(currentRevision)} → " +
-            $"cand.rev={DescribeRevision(candidateRevision)}，旧 {currentCount} 人 → 新 {candidateCount} 人），已重新基线");
+            $"rebaseline:repeat:{use}:{currentRevision}:{candidateRevision}:{currentCount}:{candidateCount}",
+            Tag + $"重复快照 use={shape.NameOf(use)} cur.rev={DescribeRevision(currentRevision)} " +
+            $"cand.rev={DescribeRevision(candidateRevision)} members {currentCount} -> {candidateCount}，已重新基线");
 
         return true;
+    }
+
+    /// <summary>
+    /// A mutation that repeats what we already hold: same revision, same members in the same real slots.
+    ///
+    /// Upstream's mutation branch demands <c>current + 1</c> unconditionally, so the second delivery of an identical
+    /// frame is rejected and the client disconnects (field log: <c>accept use=MembershipMutation cur.rev=2 cand.rev=2
+    /// members 3 -> 3</c> followed by "Mutation snapshot revision must increase by exactly one"). Re-storing the same
+    /// content changes nothing except bookkeeping, which is why this one is safe to accept where a changed roster
+    /// would not be.
+    ///
+    /// <c>MembershipMutation</c> only. <c>CurrentState</c> and <c>StateTransition</c> have their own "an unchanged
+    /// revision must repeat byte-for-byte" semantics, and those stay exactly as upstream wrote them.
+    /// </summary>
+    private static bool IsRepeatedMutation(
+        Shape shape,
+        int use,
+        uint? currentRevision,
+        uint? candidateRevision,
+        object current,
+        object candidate) =>
+        use == shape.MembershipMutation
+        && currentRevision.HasValue
+        && candidateRevision.HasValue
+        && currentRevision.Value == candidateRevision.Value
+        && SameMembers(shape, current, candidate);
+
+    /// <summary>
+    /// Membership as upstream's own <c>ValidateSameMembershipAndSlots</c> compares it: id → real slot.
+    ///
+    /// Without the slot member this degrades to the player ids alone (see <see cref="CaptureSlots"/>), which is the
+    /// same granularity the other two triggers use; the note in the startup log says so.
+    /// </summary>
+    private static bool SameMembers(Shape shape, object current, object candidate)
+    {
+        Dictionary<ulong, byte> before = SlotsOf(shape, current);
+        Dictionary<ulong, byte> after = SlotsOf(shape, candidate);
+        if (before.Count != after.Count)
+        {
+            return false;
+        }
+
+        foreach ((ulong id, byte slot) in before)
+        {
+            if (!after.TryGetValue(id, out byte candidateSlot) || candidateSlot != slot)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static Dictionary<ulong, byte> SlotsOf(Shape shape, object snapshot)
+    {
+        var slots = new Dictionary<ulong, byte>();
+        if (shape.SnapshotPlayers.GetValue(snapshot) is not IEnumerable players)
+        {
+            return slots;
+        }
+
+        foreach (object? player in players)
+        {
+            if (player == null || shape.CarrierPlayerId.GetValue(player) is not ulong id)
+            {
+                continue;
+            }
+
+            slots[id] = shape.CarrierRealSlotId?.GetValue(player) is byte slot ? slot : (byte)0;
+        }
+
+        return slots;
     }
 
     /// <summary>
@@ -386,6 +483,7 @@ internal sealed class RosterRebaselineFix : ICompatFix
         shape.Reset = RequireReset(authority, missing)!;
         shape.SnapshotPlayers = RequirePlayers(snapshotType, carrierType, missing)!;
         shape.CarrierPlayerId = RequirePlayerId(carrierType, missing)!;
+        CaptureSlots(carrierType, shape);
 
         CaptureRevision(snapshotType, shape);
         CaptureBindings(host, shape);
@@ -495,6 +593,26 @@ internal sealed class RosterRebaselineFix : ICompatFix
         }
 
         return playerId;
+    }
+
+    /// <summary>
+    /// <c>LanConnectRosterPlayerCarrier.RealSlotId</c> (<c>byte</c>), the other half of upstream's
+    /// <c>ValidateSameMembershipAndSlots</c> key. Optional on purpose: a repeated mutation still has to match the
+    /// member ids, so a miss narrows the check instead of disabling the repair.
+    /// </summary>
+    private static void CaptureSlots(Type carrierType, Shape shape)
+    {
+        PropertyInfo? slot = ReflectScope.Property(new List<string>(), carrierType, "RealSlotId");
+        if (slot != null && slot.PropertyType == typeof(byte))
+        {
+            shape.CarrierRealSlotId = slot;
+            return;
+        }
+
+        AddNote(
+            shape,
+            $"{carrierType.FullName}.RealSlotId (byte) was not found " +
+            $"({slot?.PropertyType.FullName ?? "no such member"}), so a repeated mutation is matched by player ids only.");
     }
 
     /// <summary>
@@ -657,6 +775,12 @@ internal sealed class RosterRebaselineFix : ICompatFix
         internal PropertyInfo SnapshotPlayers = null!;
 
         internal PropertyInfo CarrierPlayerId = null!;
+
+        /// <summary>
+        /// <c>LanConnectRosterPlayerCarrier.RealSlotId</c> (byte). Optional: without it a repeated mutation is matched
+        /// by player ids alone, which is the granularity the other triggers already use.
+        /// </summary>
+        internal PropertyInfo? CarrierRealSlotId;
 
         /// <summary><c>LanConnectRosterSnapshot.RosterRevision</c> — the positional record property.</summary>
         internal PropertyInfo? RevisionProperty;
