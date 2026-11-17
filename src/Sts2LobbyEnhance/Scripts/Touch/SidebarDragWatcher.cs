@@ -76,7 +76,7 @@ internal sealed class SidebarDragWatcher : Node
             case InputEventScreenTouch touch:
                 if (touch.Index == _index)
                 {
-                    Stop();
+                    End();
                 }
 
                 break;
@@ -98,7 +98,7 @@ internal sealed class SidebarDragWatcher : Node
                 }
                 else if (_index == MouseIndex)
                 {
-                    Stop();
+                    End();
                 }
 
                 break;
@@ -197,6 +197,23 @@ internal sealed class SidebarDragWatcher : Node
         }
     }
 
+    /// <summary>
+    /// The finger came up. A gesture that actually moved the column must not also activate whatever was under it, so the
+    /// release is swallowed before the GUI can turn it into a click.
+    /// </summary>
+    private void End()
+    {
+        bool moved = _dragging;
+        _tracking = false;
+        _dragging = false;
+        _index = int.MinValue;
+
+        if (moved)
+        {
+            GetViewport()?.SetInputAsHandled();
+        }
+    }
+
     private void Stop()
     {
         _tracking = false;
@@ -269,7 +286,7 @@ internal sealed class SidebarDragWatcher : Node
             return false;
         }
 
-        if (control is BaseButton or LineEdit or TextEdit)
+        if (control is LineEdit or TextEdit)
         {
             return true;
         }
