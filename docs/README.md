@@ -29,7 +29,7 @@
 | 14 | `server-pool-create-picker` | Pool | 建房面板里可折叠的服务器选择（显示延迟，默认自动） | `LanConnectLobbyOverlay.BuildCreateDialog` |
 | 15 | `lobby-entry-direct` | Pool | 点「游戏大厅」直达房间列表，不弹服务器选择器 | `LanConnectServerSelectionStartup.Show` |
 | 16 | `room-chat-hint-passthrough` | Chat | 局内收起聊天时那行提示不再吞点击（仅电脑端） | `LanConnectRoomChatOverlay.RefreshFromSource` |
-| 17 | `sidebar-scroll` | Layout | 大厅右侧整列（房间详情 + 动作 + 频道聊天）可上下拖动；手机上一列比屏幕高时聊天输入框才够得着 | `LanConnectLobbyOverlay.RebuildMainContentLayout` |
+| 17 | `mobile-sidebar-scroll` | Layout | 手机：大厅右侧整列（房间详情 + 动作 + 频道聊天）可上下滑动，聊天输入框不再永远在屏幕外 | `LanConnectLobbyOverlay.RebuildMainContentLayout` |
 
 每个修复都在 `Applies()` 里一次性解析全部反射锚点，缺哪个报哪个（clean skip）；补丁体各自 try/catch 包住节点读写，
 只有取参与前置判断在 try 外。`Applies()` / `Apply()` 里没有任何 Godot 调用，所以冒烟测试能在没有 Godot 的进程里跑它们。
