@@ -65,7 +65,7 @@ pwsh -NoProfile -File tools\pack-upload-kit\test-upload-kit.ps1
 - `build-content` 必须紧跟 `build`：测试断言"出货 DLL 与当前构建逐字节一致"。
 - `pack-release` 必须在 `dotnet test` 之前：那条「dist 里的 zip 与 content 逐字节一致」的测试在 dist 为空时会跳过，
   跳过的测试仍然算绿——先打包再跑测试，它才真的在断言。
-- 测试里的"反假绿"门禁会核对 30 个游戏依赖型用例**真的执行过**（不是被 skip 掉）。
+- 测试里的"反假绿"门禁会核对 32 个游戏依赖型用例**真的执行过**（不是被 skip 掉）。
 
 ## 为什么没有兼容层
 
