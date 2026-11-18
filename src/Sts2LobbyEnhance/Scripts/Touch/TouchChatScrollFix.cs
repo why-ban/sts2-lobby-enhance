@@ -71,7 +71,13 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// <summary>The same 400 ms the chat panel uses to tell a hold from a tap</summary>
     private const long LongPressMilliseconds = 400;
 
-    /// <summary>A stamp older than this is a leftover: the release that should have cleared it never arrived</summary>
+    /// <summary>Same view, same gesture: true while the finger that produced the stamp is still down</summary>
+    private const string PressDownMetaName = "lobby_enhance_reference_down";
+
+    /// <summary>
+    /// Only a fallback for a lost release: with the "still down" mark gone, a stamp older than this cannot belong to the
+    /// current gesture and must not block the row forever. It is never used while the mark is present
+    /// </summary>
     private const long PressStaleMilliseconds = 5000;
 
     private static Shape? _shape;
@@ -177,11 +183,16 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 return;
             }
 
-            // A row is rebuilt from scratch, so a stamp whose release never reached this handler (the row was freed
-            // mid-gesture) must not outlive it
+            // A row is rebuilt from scratch, so a stamp or a "still down" mark left by a gesture whose release never
+            // reached this handler (the row was freed mid-gesture) must not outlive it
             if (view.HasMeta(PressStartedMetaName))
             {
                 view.RemoveMeta(PressStartedMetaName);
+            }
+
+            if (view.HasMeta(PressDownMetaName))
+            {
+                view.RemoveMeta(PressDownMetaName);
             }
 
             Shape shape = _shape ?? throw new InvalidOperationException(
@@ -261,11 +272,20 @@ internal sealed class TouchChatScrollFix : ICompatFix
             if (touch.Pressed)
             {
                 view.SetMeta(PressStartedMetaName, (long)Time.GetTicksMsec());
+                view.SetMeta(PressDownMetaName, true);
             }
-            else if (view.HasMeta(PressStartedMetaName))
+            else
             {
-                // Removing a meta that is not there logs an engine error, so this is guarded
-                view.RemoveMeta(PressStartedMetaName);
+                // Removing a meta that is not there logs an engine error, so both removals are guarded
+                if (view.HasMeta(PressStartedMetaName))
+                {
+                    view.RemoveMeta(PressStartedMetaName);
+                }
+
+                if (view.HasMeta(PressDownMetaName))
+                {
+                    view.RemoveMeta(PressDownMetaName);
+                }
             }
         }
         catch (Exception exception)
@@ -279,7 +299,8 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// A finger that stayed down for 400 ms without travelling is a long press, not a tap, so the preview it would
     /// otherwise open on release is skipped. Both of upstream's activation paths call this one method - the touch release
     /// in its own handler and the label's meta click - and the travel rule is already upstream's own (16 px cancels the
-    /// tap), so a drag never gets here in the first place. Desktop never reaches this guard
+    /// tap), so a drag never gets here in the first place. The "still down" mark decides the normal path; the 5 s bound
+    /// exists only for a lost release. Desktop never reaches this guard
     /// </summary>
     private static bool ReferencePressedPrefix(object? __instance)
     {
@@ -298,12 +319,17 @@ internal sealed class TouchChatScrollFix : ICompatFix
             }
 
             long elapsed = (long)Time.GetTicksMsec() - startedAt;
-            if (elapsed > PressStaleMilliseconds)
+
+            // Two judgments, because they answer different questions. The mark is the normal path: the finger is still
+            // down, so a hold of 400 ms or longer must open nothing however long it lasts - 10 s is still a long press.
+            // Without the mark the release event was lost, and only then does the 5 s bound apply: a stamp that old
+            // cannot belong to this gesture, so it must not block the row forever.
+            if (view.HasMeta(PressDownMetaName))
             {
-                return true;
+                return elapsed < LongPressMilliseconds;
             }
 
-            return elapsed < LongPressMilliseconds;
+            return elapsed < LongPressMilliseconds || elapsed > PressStaleMilliseconds;
         }
         catch (Exception exception)
         {
