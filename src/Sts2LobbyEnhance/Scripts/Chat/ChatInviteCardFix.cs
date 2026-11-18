@@ -29,6 +29,12 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     private const string MetaClickedMethodName = "OnMetaClicked";
 
+    private const string PanelReadyMethodName = "_Ready";
+
+    private const string ChatStylePropertyName = "ChatVisualStyle";
+
+    private const string LobbyStyleName = "LobbySidebar";
+
     private const string SpansFieldName = "_spans";
 
     private const string LabelFieldName = "_label";
@@ -70,6 +76,9 @@ internal sealed class ChatInviteCardFix : ICompatFix
     private const double TickSeconds = 0.4;
 
     private const int RechecksPerCard = 12;
+
+    /// <summary>Once the fast rechecks are spent, how often a capsule still on screen keeps being re-read.</summary>
+    private const long SlowRecheckMilliseconds = 5000;
 
     /// <summary>Per view: the metas that mean "copy the raw code", and the code itself.</summary>
     private static readonly ConditionalWeakTable<object, CopyHook> CopyHooks = new();
@@ -129,26 +138,17 @@ internal sealed class ChatInviteCardFix : ICompatFix
         harmony.Patch(
             shape.BuildContent,
             prefix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(SidebarBegin)),
-            postfix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(SidebarEnd)));
+            postfix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(SidebarEnd)),
+            finalizer: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(SidebarFinally)));
 
         harmony.Patch(
             shape.ViewCtor,
             postfix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(ViewCtorPostfix)));
 
-        // The panel is the ticker's only possible host; the type is the one Applies() already validated
-        MethodInfo? panelReady = shape.BuildContent.DeclaringType?.GetMethod(
-            "_Ready",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        if (panelReady != null)
-        {
-            harmony.Patch(
-                panelReady,
-                postfix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(PanelReadyPostfix)));
-        }
-        else
-        {
-            WarnOnce("the chat panel declares no _Ready, so the invite recheck has no host");
-        }
+        // The panel is the ticker's only possible host, and Applies() already required that it declares _Ready
+        harmony.Patch(
+            shape.PanelReady,
+            postfix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(PanelReadyPostfix)));
 
         harmony.Patch(
             shape.MetaClicked,
@@ -164,11 +164,32 @@ internal sealed class ChatInviteCardFix : ICompatFix
             "code; the capsule's text is read from the pool snapshot, so nothing here sends a request.");
     }
 
+    /// <summary>
+    /// True only while the lobby sidebar builds a row. The in-run room chat uses the same panel class, and a capsule
+    /// there could never be opened (its click looks for the lobby overlay), so that style is left alone
+    /// </summary>
     // ReSharper disable once InconsistentNaming
-    private static void SidebarBegin() => _sidebarBuilding = true;
+    private static void SidebarBegin(object? __instance)
+    {
+        Shape? shape = _shape;
+        _sidebarBuilding = shape != null
+                           && __instance != null
+                           && shape.ChatStyle.GetValue(__instance)?.ToString() == LobbyStyleName;
+    }
 
     // ReSharper disable once InconsistentNaming
     private static void SidebarEnd() => _sidebarBuilding = false;
+
+    /// <summary>
+    /// Runs on the exception path too: without it a throwing BuildMessageContent leaves the flag set, and every later
+    /// row of any style would be rewritten
+    /// </summary>
+    // ReSharper disable once InconsistentNaming
+    private static Exception? SidebarFinally(Exception? __exception)
+    {
+        _sidebarBuilding = false;
+        return __exception;
+    }
 
     /// <summary>
     /// Runs after upstream's constructor stored the span list and built the reference table, and before the view enters
@@ -298,6 +319,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 }
             }
 
+            // Neither key is ever pushed as a span meta, and that is the point: upstream opens a reference from a
+            // whole-row tap or Enter only when _references.Count == 1, so both registers have to be present to keep it off
             if (joinReference != null)
             {
                 indexer.Invoke(table, new[] { ChatInviteJoin.MetaName, joinReference });
@@ -408,8 +431,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     /// <summary>
     /// Re-reads the pool snapshot for the capsules that are actually on screen and repaints the ones whose state moved.
-    /// The lobby keeps that snapshot fresh, so this is a read, not a request; the interval and the per-card cap keep a
-    /// finger scrolling up and down from turning it into a loop.
+    /// The lobby keeps that snapshot fresh, so this is a read, not a request; the fast cadence is bounded per card so a
+    /// finger scrolling up and down cannot turn it into a loop, after which the card slows down instead of dropping out.
     /// </summary>
     internal static void Tick()
     {
@@ -422,7 +445,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
         for (int index = Cards.Count - 1; index >= 0; index--)
         {
             Card card = Cards[index];
-            if (!GodotObject.IsInstanceValid(card.View) || card.Rechecks >= RechecksPerCard)
+            if (!GodotObject.IsInstanceValid(card.View))
             {
                 Cards.RemoveAt(index);
                 continue;
@@ -433,7 +456,14 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 continue;
             }
 
+            long now = (long)Time.GetTicksMsec();
+            if (card.Rechecks >= RechecksPerCard && now - card.LastCheckedMs < SlowRecheckMilliseconds)
+            {
+                continue;
+            }
+
             card.Rechecks++;
+            card.LastCheckedMs = now;
             (string text, Color color) = shape.Describe(card.Server, card.RoomId);
             if (string.Equals(text, card.Text, StringComparison.Ordinal))
             {
@@ -508,6 +538,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
         internal string Text { get; set; }
 
         internal int Rechecks { get; set; }
+
+        internal long LastCheckedMs { get; set; }
     }
 
     internal sealed class CopyHook
@@ -549,7 +581,9 @@ internal sealed class ChatInviteCardFix : ICompatFix
             Type spanType,
             Type referenceType,
             Type textSegmentType,
-            MethodInfo tryDecode)
+            MethodInfo tryDecode,
+            MethodInfo panelReady,
+            PropertyInfo chatStyle)
         {
             BuildContent = buildContent;
             ViewCtor = viewCtor;
@@ -562,6 +596,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
             ReferenceTableType = references.FieldType;
             TextSegmentType = textSegmentType;
             TryDecode = tryDecode;
+            PanelReady = panelReady;
+            ChatStyle = chatStyle;
             DisplayText = spanType.GetProperty("DisplayText")!;
             CopyText = spanType.GetProperty("CopyText")!;
             Color = spanType.GetProperty("Color")!;
@@ -591,6 +627,11 @@ internal sealed class ChatInviteCardFix : ICompatFix
         internal Type TextSegmentType { get; }
 
         internal MethodInfo TryDecode { get; }
+
+        internal MethodInfo PanelReady { get; }
+
+        /// <summary>Upstream's <c>ChatVisualStyle</c>: tells the lobby sidebar apart from the in-run room chat.</summary>
+        internal PropertyInfo ChatStyle { get; }
 
         internal PropertyInfo DisplayText { get; }
 
@@ -639,6 +680,18 @@ internal sealed class ChatInviteCardFix : ICompatFix
                                      && m.GetParameters().Length == 2
                                      && m.GetParameters()[0].ParameterType.FullName == StringTypeName);
 
+            // The ticker is hosted by the panel's own _Ready, so it is an anchor like any other: missing means the
+            // capsule would freeze on the state the message arrived with
+            MethodInfo? panelReady = panel?.GetMethods(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                .FirstOrDefault(m => m.Name == PanelReadyMethodName
+                                     && m.GetParameters().Length == 0
+                                     && m.ReturnType.FullName == VoidTypeName);
+
+            PropertyInfo? chatStyle = panel == null
+                ? null
+                : ReflectScope.PropertyOf(panel, ChatStylePropertyName, problems);
+
             if (buildContent == null)
             {
                 problems.Add(PanelTypeName + "." + BuildContentMethodName + "(…): Godot.Control not found");
@@ -674,6 +727,11 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 problems.Add(TextSegmentTypeName + " not found");
             }
 
+            if (panelReady == null)
+            {
+                problems.Add(PanelTypeName + "." + PanelReadyMethodName);
+            }
+
             if (problems.Count > 0)
             {
                 missing = string.Join(", ", problems);
@@ -690,7 +748,9 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 spans!.FieldType.GetGenericArguments()[0],
                 references!.FieldType.GetGenericArguments()[1],
                 textSegment!,
-                tryDecode!);
+                tryDecode!,
+                panelReady!,
+                chatStyle!);
             missing = string.Empty;
             return true;
         }

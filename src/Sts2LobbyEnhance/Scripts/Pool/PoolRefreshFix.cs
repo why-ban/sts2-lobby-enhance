@@ -40,7 +40,11 @@ internal sealed class PoolRefreshFix : ICompatFix
 
     private static PoolAnchors? _anchors;
 
-    /// <summary>The anchors this repair resolved once, for callers that need the same handles (never rebuilt).</summary>
+    /// <summary>
+    /// The anchors this repair resolved once, for callers that need the same handles (never rebuilt). A rolled-back
+    /// group can leave this non-null while the pool snapshot is empty; a consumer must read that as "unknown", not as
+    /// "the room is gone"
+    /// </summary>
     internal static PoolAnchors? LiveAnchors => _anchors;
 
     /// <summary>Warnings already printed, keyed by their call signature: one kind of trouble must not silence the rest</summary>

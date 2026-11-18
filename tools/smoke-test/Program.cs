@@ -18,7 +18,7 @@ string gameDir = args.Length > 0
     ? args[0]
     : @"D:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64";
 
-// 宿主模组默认取 **0.6.4**（manifest 的 min_version）：补丁的 16 项锚点是对着它校验的。
+// 宿主模组默认取 **0.6.4**（manifest 的 min_version）：补丁的 18 项修复 / 25 条接缝是对着它校验的。
 // 覆盖顺序与 tests 一致：命令行 > STS2_LAN_CONNECT_064_DLL > 在工作树里发现 upstream-064 的出货 DLL。
 const string DefaultHostMod064 =
     @"D:\zhuanban\sts2m\work\lobby\upstream-064\src\emptylower-STS2-Game-Lobby-1db4e10\releases\sts2_lan_connect\sts2_lan_connect.dll";
@@ -283,6 +283,28 @@ if (applied.Count > expectedFixIds.Length)
     ("room-chat-hint-passthrough", "Chat"),
     ("chat-invite-card", "Chat")
 ];
+
+// 三张表必须互相自洽：只改 expectedFixIds 而不补分组/接缝时，前两项断言依旧全绿，所以在这里直接红。
+// requiredSeams 允许一个 id 对应多条接缝（它比的是 id 集合，不是条数）。
+string[] fixIdsSorted = expectedFixIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+string[] groupIdsSorted = expectedGroups.Select(entry => entry.FixId).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal).ToArray();
+string[] seamIdsSorted = requiredSeams.Select(entry => entry.FixId).Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal).ToArray();
+
+if (!fixIdsSorted.SequenceEqual(groupIdsSorted, StringComparer.Ordinal))
+{
+    Console.WriteLine("FAIL: expectedGroups 的 id 集合与 expectedFixIds 不一致。");
+    Console.WriteLine("  缺分组: " + string.Join(", ", fixIdsSorted.Except(groupIdsSorted, StringComparer.Ordinal)));
+    Console.WriteLine("  多分组: " + string.Join(", ", groupIdsSorted.Except(fixIdsSorted, StringComparer.Ordinal)));
+    return 9;
+}
+
+if (!fixIdsSorted.SequenceEqual(seamIdsSorted, StringComparer.Ordinal))
+{
+    Console.WriteLine("FAIL: requiredSeams 的 id 集合与 expectedFixIds 不一致。");
+    Console.WriteLine("  缺接缝: " + string.Join(", ", fixIdsSorted.Except(seamIdsSorted, StringComparer.Ordinal)));
+    Console.WriteLine("  多接缝: " + string.Join(", ", seamIdsSorted.Except(fixIdsSorted, StringComparer.Ordinal)));
+    return 10;
+}
 
 Console.WriteLine();
 Console.WriteLine("---- fix to group mapping ----");

@@ -71,11 +71,18 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// <summary>The same 400 ms the chat panel uses to tell a hold from a tap</summary>
     private const long LongPressMilliseconds = 400;
 
+    /// <summary>A stamp older than this is a leftover: the release that should have cleared it never arrived</summary>
+    private const long PressStaleMilliseconds = 5000;
+
     private static Shape? _shape;
 
     private static int _viewWarned;
     private static int _scrollBarWarned;
     private static int _referenceWarned;
+    private static int _inputWarned;
+
+    /// <summary>Created on first use inside a patch body; the rows are rebuilt continuously, so one instance is reused.</summary>
+    private static StyleBoxEmpty? _emptyFocusRing;
 
     public string Id => "touch-chat-scroll";
 
@@ -170,6 +177,13 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 return;
             }
 
+            // A row is rebuilt from scratch, so a stamp whose release never reached this handler (the row was freed
+            // mid-gesture) must not outlive it
+            if (view.HasMeta(PressStartedMetaName))
+            {
+                view.RemoveMeta(PressStartedMetaName);
+            }
+
             Shape shape = _shape ?? throw new InvalidOperationException(
                 "touch-chat-scroll: the shape was not captured.");
 
@@ -197,7 +211,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
             // a light frame across the input box and past the chat window on touch. The row stays focusable on purpose
             // (gamepad navigation and the host's focus restore keep working), the ring itself is emptied, and with nothing
             // left to paint outside the box the message area's own edge contains everything that is drawn in it
-            label.AddThemeStyleboxOverride("focus", new StyleBoxEmpty());
+            label.AddThemeStyleboxOverride("focus", _emptyFocusRing ??= new StyleBoxEmpty());
         }
         catch (Exception exception)
         {
@@ -256,7 +270,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
         }
         catch (Exception exception)
         {
-            WarnOnce(ref _viewWarned, "could not time a press on a message: " + exception.GetType().Name + ": " +
+            WarnOnce(ref _inputWarned, "could not time a press on a message: " + exception.GetType().Name + ": " +
                                       exception.Message);
         }
     }
@@ -283,7 +297,13 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 return true;
             }
 
-            return (long)Time.GetTicksMsec() - startedAt < LongPressMilliseconds;
+            long elapsed = (long)Time.GetTicksMsec() - startedAt;
+            if (elapsed > PressStaleMilliseconds)
+            {
+                return true;
+            }
+
+            return elapsed < LongPressMilliseconds;
         }
         catch (Exception exception)
         {

@@ -59,7 +59,7 @@ FEATURES = [
     ("restart", "读档免排队", " 不必按顺序"),
     ("grid", "所有服务器房间", " 一个列表"),
     ("funnel", "相同版本筛选", " 建房可选服"),
-    ("phone", "手机滑聊天", " 长按框选复制"),
+    ("phone", "手机滑聊天", " 长按不误触"),
 ]
 
 FONT_DIR = Path("C:/Windows/Fonts")

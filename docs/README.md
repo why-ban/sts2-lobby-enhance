@@ -7,7 +7,7 @@
 - 依赖：**社区模组 0.6.4**（工坊 3749766330，已设为必需物品）
 - 联机双方都要安装；`affects_gameplay` 保持 `false`（握手靠它判断两端是否一致）
 
-## 它在做什么：17 项修复，9 个回滚分组
+## 它在做什么：18 项修复，9 个回滚分组
 
 分组决定"一起失败的接缝"：组内任一项装不上就整组回滚（每组一个 Harmony id，`sts2_lobby_enhance.<组名小写>`）。
 
@@ -20,7 +20,7 @@
 | 5 | `new-run-save-binding` | NewRun | 新一局开始时清空 `HostedRoomSession.BoundSaveKey` | `RunManager.SetUpNewMultiplayer` |
 | 6 | `new-protocol-only` | Modes | 建房对话框不再显示「联机协议」一节，固定新协议 | `LanConnectLobbyOverlay.BuildCreateDialog` / `GetSelectedCreateProtocolId` |
 | 7 | `room-version-filter` | Filter | 筛选弹窗加「相同游戏版本」chip | `LanConnectLobbyOverlay.GetFilteredRooms` |
-| 8 | `touch-chat-scroll` | Touch | 手机：滑动=滚动，长按=框选，松手复制选区 | `LanConnectRichMessageView._Ready` / `RaiseReferencePressed` |
+| 8 | `touch-chat-scroll` | Touch | 手机：滑动=滚动；长按 400 ms 后松手不打开引用预览（不选区、不复制） | `LanConnectRichMessageView._Ready` / `OnGuiInput` / `RaiseReferencePressed` |
 | 9 | `chat-server-switch` | Chat | 大厅聊天标题行：名称 + ⟳ + ‹ ›，切公共频道所连的服务器；首次进入自动连一次本服 | `LanConnectBasicChatPanel.UpdateAvailability` |
 | 10 | `announcement-source` | Announce | 公告请求指向聊天频道当前那台服务器 | `LobbyApiClient.GetAnnouncementsAsync` |
 | 11 | `server-pool-refresh` | Pool | 房间列表 = 全服池，完全接管刷新 | `LanConnectLobbyOverlay.RefreshRoomsAsync` |
@@ -30,6 +30,7 @@
 | 15 | `lobby-entry-direct` | Pool | 点「游戏大厅」直达房间列表，不弹服务器选择器 | `LanConnectServerSelectionStartup.Show` |
 | 16 | `room-chat-hint-passthrough` | Chat | 局内收起聊天时那行提示不再吞点击（仅电脑端） | `LanConnectRoomChatOverlay.RefreshFromSource` |
 | 17 | `compact-sidebar-layout` | Touch | 手机：收起只读的 ROOM DETAILS 卡（七行信息左边卡片上已有），高度让给频道聊天；状态提示挪进 ACTIONS | `LanConnectLobbyOverlay.BuildSelectedRoomDetailPanel` |
+| 18 | `chat-invite-card` | Chat | 大厅侧栏聊天里的 `STS2INV:` 邀请码渲染成彩色胶囊（点它加入）+ 独立「复制」复制原始码；状态读池快照 | `LanConnectBasicChatPanel.BuildMessageContent` / `_Ready` / `LanConnectRichMessageView.OnMetaClicked` |
 
 每个修复都在 `Applies()` 里一次性解析全部反射锚点，缺哪个报哪个（clean skip）；补丁体各自 try/catch 包住节点读写，
 只有取参与前置判断在 try 外。`Applies()` / `Apply()` 里没有任何 Godot 调用，所以冒烟测试能在没有 Godot 的进程里跑它们。
@@ -44,7 +45,7 @@
   默认自动，手动选中后只在那台建房、切不过去就不建，选完自动收起；手机上这一节可触摸拖动滚动；
   选择**不记忆**，每次打开都回到自动。
 - **建房对话框不再显示联机协议**：默认按新协议建房（没有独立 tail 运行时的那一侧仍保留上游选择，能建房优先）。
-- **手机**：滑动即滚动；长按 0.4 秒让这条消息进入选中态，接着拖动就是框选，松手复制选区。
+- **手机**：滑动即滚动；长按 0.4 秒后松手不打开引用预览，既不选区也不复制；更短的点击仍按上游打开引用预览。
 - **手机右列装得下聊天了**：收起「ROOM DETAILS」那张只读卡，频道聊天的标题 / 消息区 / 输入框 / 发送按钮在手机上完整显示；
   卡里的状态提示（加入被拒、切服失败等）挪进 ACTIONS 卡，仍然可见。桌面端不变。
 - **局内**：收起聊天后那行提示不再挡住游戏右上角的按钮（只改鼠标过滤，不动布局）。
@@ -62,7 +63,7 @@ pwsh -NoProfile -File tools\pack-upload-kit\pack-upload-kit.ps1 -Force
 pwsh -NoProfile -File tools\pack-upload-kit\test-upload-kit.ps1
 `@
 
-期望值：build 0 警告 0 错误；smoke 打印 `OK (17 fixes applied)` 且 17 项 id / 分组 / 接缝全绿；
+期望值：build 0 警告 0 错误；smoke 打印 `OK (18 fixes applied)` 且 18 项 id / 分组 / 接缝全绿；
 `dotnet test` 61 通过 0 跳过；上传包验收 35 条全过（**不联系 Steam**）。
 
 - `build-content` 必须紧跟 `build`：测试断言"出货 DLL 与当前构建逐字节一致"。

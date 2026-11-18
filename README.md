@@ -20,7 +20,7 @@
 - 清单里 `affects_gameplay: false` —— 装与不装的两台机器**不会**因为模组列表不一致而互相拒绝进房；
 - 只读取游戏自身的公开 / 内部 API，**不改存档格式、不改协议、不伪造进度**。
 
-**2.2.0 一共 17 项修复、9 个回滚分组。** 社区模组 0.6.4 已经自己适配了游戏 0.113，所以兼容层、
+**2.3.0 一共 18 项修复、9 个回滚分组。** 社区模组 0.6.4 已经自己适配了游戏 0.113，所以兼容层、
 极速 / 恐惧的建房与准备页、房间卡片的模式标注都不再由本模组接手（1.x 里这些接管在 2.0.0 全部删除）。
 
 2.1.0 新加的 10 项：
@@ -33,10 +33,10 @@
 6. **「相同版本」筛选** —— 只显示与本机游戏版本相同的房间；
 7. **聊天换服务器** —— 标题右边的 `‹ ›` 换着看不同服务器的公共频道，`⟳` 一键回置顶服；不切服、不退房、不写配置；
 8. **公告跟随频道** —— 公告内容跟着聊天频道当前那台服务器走，外观与上游完全一致；
-9. **手机滑动聊天** —— 滑动即滚动、长按 0.4 秒进入选区并拖动框选、松手复制选区；PC 上拖拽仍是框选；
+9. **手机滑动聊天** —— 滑动即滚动；长按 0.4 秒后松手不打开引用预览，也不选区不复制；PC 上拖拽仍是框选；
 10. **局内收起聊天不再挡鼠标** —— 那行「按下 Enter 打开聊天窗口」不再吞掉游戏右上角按钮的点击（仅电脑端）。
 
-大厅自己没做的 6 项（11–15 在 2.0.0 就有，其中 15 在 2.1.0 改成了只保留新协议；16 是本版新补的）：
+大厅自己没做的 6 项（11–15 在 2.0.0 就有，其中 15 在 2.1.0 改成了只保留新协议；16 是 2.2.0 补的）：
 
 11. **结算页一键新开一局** —— 房主点一下，全房回到准备页；
 12. **新开一局之后存档仍可续玩** —— 不会因为房间还记着上一局的存档键而读不回来；
@@ -45,11 +45,12 @@
 15. **建房只按新协议** —— 这一版把建房对话框里「联机协议」那一节整个摘掉：只剩新协议一条路，那一节是多余的选择题；
 16. **掉线重连后开局不再报错** —— 有人离开又回来时，房主与队友的房间列表顺序不同，随机数种子按各自的列表下标分配，开局会直接抛错中断；现在房主开场前按座位把列表排好，三端种子一致。
 
-手机端另外做的一件事：
+另外两件事：
 
 17. **右侧那列不再塞满** —— 手机上把「ROOM DETAILS」那张只读信息卡收起来（房间/房主/人数/模式/版本/协议/状态这七行，左边房间卡上本来就有），腾出来的高度给频道聊天，**标题、消息区、输入框、发送按钮全部在框内**；被收起卡里的状态提示（加入失败之类）挪到了 ACTIONS 卡里，仍然看得见。
+18. **聊天里的邀请码可以直接点** —— 大厅频道聊天里的 `STS2INV:` 邀请码显示成彩色胶囊（房间名 · 模式 · 人数），点它弹一次确认框，确认后切到那台服务器并加入；右边的「复制」复制原始邀请码。状态读大厅自己的房间快照，房间没了就显示「过时的房间」。
 
-完整清单见 [技术文档](docs/README.md)（17 项，每项都有 id、分组与注入点），
+完整清单见 [技术文档](docs/README.md)（18 项，每项都有 id、分组与注入点），
 逐版本改动见 [更新日志](docs/CHANGELOG.md)。
 
 ## 可靠性设计
@@ -57,14 +58,14 @@
 每个版本、每次社区模组更新，最常见的失败模式不是崩溃，而是**补丁悄悄没装上**。
 所以这一版把「版本开关」整个拆掉了：
 
-- 17 项修复各自实现 `ICompatFix`，在 `Applies()` 里一次性解析全部锚点（类型 / 方法 / 字段名逐个比对），缺哪个报哪个；
+- 18 项修复各自实现 `ICompatFix`，在 `Applies()` 里一次性解析全部锚点（类型 / 方法 / 字段名逐个比对），缺哪个报哪个；
 - 9 个 `FixGroup`，每组一个 Harmony id，某组失败只回滚自己那组，其它照常工作；
 - 对不上时启动日志明确写 `skip <id>: missing: <具体锚点>`，而不是整体静默失效。
 
 启动日志里能看到一行汇总：
 
 `@
-[lobby-enhance] summary: applied=17[...] skipped=0[] failed=0
+[lobby-enhance] summary: applied=18[...] skipped=0[] failed=0
 `@
 
 ## 环境要求
@@ -117,7 +118,7 @@ dotnet run --project tools/contract-check/contract-check.csproj -c Release
 - `dotnet test`：61 个用例。其中 32 个需要游戏 / 官方 DLL / 构建产物，另有 6 个需要打包工作区或发布包，
   缺输入时**不是静默跳过**——覆盖率门禁会把缺的输入点名报出来。
 - `smoke-test`：加载**出货的** `packaging/content/sts2_lobby_enhance.dll`，跑 `Entry.RunSilently()`，
-  断言 17 项 id、顺序、分组，以及每项至少有一处真实 Harmony 接缝。**它证明的是"补丁挂上了"，不证明行为正确**。
+  断言 18 项 id、顺序、分组，以及每项至少有一处真实 Harmony 接缝。**它证明的是"补丁挂上了"，不证明行为正确**。
 - `tools/` 下另有离线复现工具（`roster-probe` / `loadjoin-probe` / `savebinding-probe`），
   对着真实的社区模组与游戏程序集复现对应缺陷；发版前手工各跑一次（见 [上传流程](docs/UPLOAD.md)）。
 - 上传包验收 `tools/pack-upload-kit/test-upload-kit.ps1` 有 35 条断言，**全程不联系 Steam**（需要上传器输出时用假上传器）。
@@ -178,15 +179,16 @@ It ships no file of the official mod and replaces nothing: at runtime it Harmony
 official mod, which keeps updating from the Workshop as usual. `affects_gameplay: false`, so a patched
 and an unpatched machine still join each other.
 
-**2.1.0 is fifteen repairs in nine rollback groups.** The lobby mod's own 0.6.4 already supports game
+**2.3.0 is eighteen repairs in nine rollback groups.** The lobby mod's own 0.6.4 already supports game
 0.113, so the compatibility layer, Blitz / Dread hosting and room-card labels are no longer ours (all of
-that was removed in 2.0.0). Ten of the fifteen are new in 2.1.0: a server pool that lists every server's
+that was removed in 2.0.0). Ten of them arrived in 2.1.0: a server pool that lists every server's
 rooms in one place (joining across servers switches the lobby, as the lobby itself does), straight-to-list
 lobby entry, a same-game-version filter, switching which server the public chat channel points at, a
 collapsible server picker inside the create-room dialog (defaults to the lowest-latency server, never
-remembers a manual pick), and touch scrolling with long-press selection and copy. The other five were
-already in 2.0.0: one-click "new run" from the game-over screen, keeping that new run's save loadable,
-re-baselining a shrunken roster, reordering a save-load join, and creating rooms on the new protocol only.
+remembers a manual pick), and touch scrolling on the phone. Five were already in 2.0.0: one-click "new run"
+from the game-over screen, keeping that new run's save loadable, re-baselining a shrunken roster, reordering
+a save-load join, and creating rooms on the new protocol only. 2.2.0 added two more (a compact mobile right
+column, and the phone's touch rules), and 2.3.0 adds an invite-code capsule in the lobby chat.
 
 Build with `dotnet build src/Sts2LobbyEnhance/Sts2LobbyEnhance.csproj -c Release -p:SkipModCopy=true`,
 verify with `dotnet test` plus `tools/smoke-test`. Details in [`docs/README.md`](docs/README.md).

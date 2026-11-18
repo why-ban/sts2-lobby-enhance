@@ -235,8 +235,14 @@ internal static class ChatInviteJoin
 
     private static async Task JoinAsync(Node overlay, string server, string roomId, string? password)
     {
+        if (_busy)
+        {
+            return;
+        }
+
         Shape shape = _shape!;
         object? lease = null;
+        object? client = null;
         _busy = true;
         try
         {
@@ -267,7 +273,7 @@ internal static class ChatInviteJoin
                 return;
             }
 
-            object? client = shape.CreateClient.Invoke(null, null);
+            client = shape.CreateClient.Invoke(null, null);
             if (client == null)
             {
                 shape.ShowInfo.Invoke(null, new object?[] { "加入失败：无法创建大厅客户端。" });
@@ -305,9 +311,7 @@ internal static class ChatInviteJoin
 
             string expected = Normalize(shape, shape.BaseUrl.GetValue(null) as string ?? string.Empty);
             object? joinCall = shape.BeginJoin.Invoke(overlay, new object?[] { target, password, CancellationToken.None, lease, expected });
-            object handedOver = lease;
             lease = null;
-            _ = handedOver;
             if (joinCall is Task joinTask)
             {
                 await joinTask.ConfigureAwait(true);
@@ -328,6 +332,7 @@ internal static class ChatInviteJoin
         finally
         {
             (lease as IDisposable)?.Dispose();
+            (client as IDisposable)?.Dispose();
             _busy = false;
         }
     }
