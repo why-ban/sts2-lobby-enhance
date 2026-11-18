@@ -189,7 +189,8 @@ internal static class ChatInviteJoin
                              (string.IsNullOrWhiteSpace(password) ? string.Empty : "\n邀请码里已经包含密码，会自动使用。"),
                 OkButtonText = "加入",
                 CancelButtonText = "取消",
-                Exclusive = true
+                Exclusive = true,
+                MinSize = new Vector2I(760, 420)
             };
 
             dialog.Confirmed += () =>

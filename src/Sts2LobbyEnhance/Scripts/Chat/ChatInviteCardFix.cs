@@ -31,6 +31,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     private const string SpansFieldName = "_spans";
 
+    private const string LabelFieldName = "_label";
+
     private const string ReferencesFieldName = "_references";
 
     private const string InviteCodeTypeName = "Sts2LanConnect.Scripts.LanConnectInviteCode";
@@ -51,19 +53,29 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     // Warm and bright on purpose: the chat background is dark parchment, and the first blue this shipped with was
     // unreadable on it
-    private static readonly Color AvailableColor = new(1f, 0.78f, 0.32f);
+    private static readonly Color AvailableColor = new(1f, 0.6f, 0.02f);
 
-    private static readonly Color StaleColor = new(1f, 0.45f, 0.42f);
+    private static readonly Color StaleColor = new(0.92f, 0.16f, 0.12f);
 
-    private static readonly Color UnknownColor = new(1f, 0.88f, 0.62f);
+    private static readonly Color UnknownColor = new(0.98f, 0.76f, 0.02f);
 
-    private static readonly Color CopyColor = new(0.86f, 0.88f, 0.94f);
+    private static readonly Color CopyColor = new(0.98f, 0.98f, 1f);
 
     /// <summary>How long the row brightens after a copy, so the click is visibly acknowledged.</summary>
     private const double CopyFlashSeconds = 0.14;
 
+    /// <summary>Recheck cadence while a capsule is on screen, and how many times one capsule is re-read.</summary>
+    private const double TickSeconds = 0.4;
+
+    private const int RechecksPerCard = 12;
+
     /// <summary>Per view: the metas that mean "copy the raw code", and the code itself.</summary>
     private static readonly ConditionalWeakTable<object, CopyHook> CopyHooks = new();
+
+    /// <summary>Every capsule currently on screen, so the ticker can re-read the pool snapshot for the visible ones.</summary>
+    private static readonly List<Card> Cards = new();
+
+    private static bool _tickerAdded;
 
     private static Shape? _shape;
 
@@ -238,6 +250,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
             Array array = Array.CreateInstance(shape.SpanType, rebuilt.Count);
             var hooks = new CopyHook(code, server, room, password, capsule);
+            int capsuleIndex = -1;
             for (int index = 0; index < rebuilt.Count; index++)
             {
                 array.SetValue(rebuilt[index], index);
@@ -249,6 +262,13 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 else if (joinReference != null && ReferenceEquals(entry, joinReference))
                 {
                     hooks.JoinMetas.Add("ref-" + index);
+                }
+
+                if (capsuleIndex < 0
+                    && shape.DisplayText.GetValue(rebuilt[index]) is string display
+                    && string.Equals(display, capsule, StringComparison.Ordinal))
+                {
+                    capsuleIndex = index;
                 }
             }
 
@@ -274,6 +294,10 @@ internal sealed class ChatInviteCardFix : ICompatFix
             shape.References.SetValue(__instance, table);
             CopyHooks.Remove(view);
             CopyHooks.Add(view, hooks);
+
+            Cards.RemoveAll(card => !GodotObject.IsInstanceValid(card.View));
+            Cards.Add(new Card(view, capsuleIndex, hooks));
+            InstallTicker(view);
         }
         catch (Exception exception)
         {
@@ -343,7 +367,146 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "chat-invite-card", message);
 
-    private sealed class CopyHook
+
+    /// <summary>
+    /// Re-reads the pool snapshot for the capsules that are actually on screen and repaints the ones whose state moved.
+    /// The lobby keeps that snapshot fresh, so this is a read, not a request; the interval and the per-card cap keep a
+    /// finger scrolling up and down from turning it into a loop.
+    /// </summary>
+    internal static void Tick()
+    {
+        Shape? shape = _shape;
+        if (shape == null || Cards.Count == 0)
+        {
+            return;
+        }
+
+        for (int index = Cards.Count - 1; index >= 0; index--)
+        {
+            Card card = Cards[index];
+            if (!GodotObject.IsInstanceValid(card.View) || card.Rechecks >= RechecksPerCard)
+            {
+                Cards.RemoveAt(index);
+                continue;
+            }
+
+            if (!IsOnScreen(card.View))
+            {
+                continue;
+            }
+
+            card.Rechecks++;
+            (string text, Color color) = shape.Describe(card.Server, card.RoomId);
+            if (string.Equals(text, card.Text, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            card.Text = text;
+            shape.Repaint(card, text, color);
+        }
+    }
+
+    /// <summary>True when the row's rectangle meets the message area's rectangle, i.e. the player can see it.</summary>
+    private static bool IsOnScreen(Node view)
+    {
+        Rect2 row = view is Control control ? control.GetGlobalRect() : default;
+        for (Node? node = view.GetParent(); node != null; node = node.GetParent())
+        {
+            if (node is ScrollContainer scroll && scroll.IsVisibleInTree())
+            {
+                Rect2 area = scroll.GetGlobalRect();
+                return row.Intersects(area) && row.Size.Y > 0f;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Adds the recheck ticker to the chat panel once, so it lives and dies with that panel.</summary>
+    private static void InstallTicker(Node view)
+    {
+        if (_tickerAdded)
+        {
+            return;
+        }
+
+        try
+        {
+            for (Node? node = view; node != null; node = node.GetParent())
+            {
+                if (node.GetType().FullName != PanelTypeName)
+                {
+                    continue;
+                }
+
+                node.AddChild(new ChatInviteTicker { Name = "LobbyEnhanceInviteTicker" });
+                _tickerAdded = true;
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("could not start the invite recheck: " + exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
+    /// <summary>Drives <see cref="Tick"/> a few times a second while its panel is alive.</summary>
+    internal sealed partial class ChatInviteTicker : Node
+    {
+        private double _elapsed;
+
+        public override void _Process(double delta)
+        {
+            _elapsed += delta;
+            if (_elapsed < TickSeconds)
+            {
+                return;
+            }
+
+            _elapsed = 0d;
+            try
+            {
+                Tick();
+            }
+            catch (Exception)
+            {
+                // a repaint that fails must not take the panel's frame loop down with it
+            }
+        }
+    }
+
+    internal sealed class Card
+    {
+        internal Card(Node view, int capsuleIndex, CopyHook hook)
+        {
+            View = view;
+            CapsuleIndex = capsuleIndex;
+            Server = hook.Server;
+            RoomId = hook.RoomId;
+            Password = hook.Password;
+            Text = hook.Capsule;
+            Hook = hook;
+        }
+
+        internal Node View { get; }
+
+        internal int CapsuleIndex { get; }
+
+        internal CopyHook Hook { get; }
+
+        internal string Server { get; }
+
+        internal string RoomId { get; }
+
+        internal string? Password { get; }
+
+        internal string Text { get; set; }
+
+        internal int Rechecks { get; set; }
+    }
+
+    internal sealed class CopyHook
     {
         internal CopyHook(string raw, string server, string roomId, string? password, string capsule)
         {
@@ -377,6 +540,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
             ConstructorInfo viewCtor,
             FieldInfo spans,
             FieldInfo references,
+            FieldInfo label,
             MethodInfo metaClicked,
             Type spanType,
             Type referenceType,
@@ -387,6 +551,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
             ViewCtor = viewCtor;
             Spans = spans;
             References = references;
+            Label = label;
             MetaClicked = metaClicked;
             SpanType = spanType;
             ReferenceType = referenceType;
@@ -409,6 +574,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
         internal FieldInfo Spans { get; }
 
         internal FieldInfo References { get; }
+
+        internal FieldInfo Label { get; }
 
         internal MethodInfo MetaClicked { get; }
 
@@ -460,6 +627,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
             FieldInfo? spans = ReflectScope.Field(problems, view, SpansFieldName);
             FieldInfo? references = ReflectScope.Field(problems, view, ReferencesFieldName);
+            FieldInfo? labelField = ReflectScope.Field(problems, view, LabelFieldName);
 
             ConstructorInfo? ctor = view?.GetConstructors(
                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
@@ -516,6 +684,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 ctor!,
                 spans!,
                 references!,
+                labelField!,
                 metaClicked!,
                 spans!.FieldType.GetGenericArguments()[0],
                 references!.FieldType.GetGenericArguments()[1],
@@ -599,6 +768,66 @@ internal sealed class ChatInviteCardFix : ICompatFix
             catch (Exception)
             {
                 return ("? 暂时无法确认 · 点击重试", UnknownColor);
+            }
+        }
+
+        /// <summary>
+        /// Replaces one capsule's text and repaints that row. The replay mirrors upstream's own render loop: the same
+        /// order of push/emit/pop, with the same ref-{i} keys, so references keep pointing at the same spans.
+        /// </summary>
+        internal void Repaint(Card card, string text, Color color)
+        {
+            if (card.CapsuleIndex < 0 || Spans.GetValue(card.View) is not Array spans)
+            {
+                return;
+            }
+
+            object? old = spans.GetValue(card.CapsuleIndex);
+            if (old == null)
+            {
+                return;
+            }
+
+            string copy = CopyText.GetValue(old) as string ?? string.Empty;
+            object? texture = Texture.GetValue(old);
+            object? reference = Reference.GetValue(old);
+            spans.SetValue(MakeSpan(text, copy, text, color, texture as Texture2D, reference), card.CapsuleIndex);
+
+            if (Label.GetValue(card.View) is not RichTextLabel label || !GodotObject.IsInstanceValid(label))
+            {
+                return;
+            }
+
+            label.Clear();
+            for (int index = 0; index < spans.Length; index++)
+            {
+                object? span = spans.GetValue(index);
+                if (span == null)
+                {
+                    continue;
+                }
+
+                bool hasReference = Reference.GetValue(span) != null;
+                if (hasReference)
+                {
+                    label.PushMeta("ref-" + index);
+                }
+
+                label.PushColor(Color.GetValue(span) is Color spanColor ? spanColor : Colors.White);
+                if (Texture.GetValue(span) is Texture2D image)
+                {
+                    label.AddImage(image, 20, 20, Color.GetValue(span) is Color imageColor ? imageColor : Colors.White);
+                }
+                else
+                {
+                    label.AddText(DisplayText.GetValue(span) as string ?? string.Empty);
+                }
+
+                label.Pop();
+                if (hasReference)
+                {
+                    label.Pop();
+                }
             }
         }
 
