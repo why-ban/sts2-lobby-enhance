@@ -70,7 +70,6 @@ string[] expectedFixIds =
     ("touch-chat-scroll",   "LanConnectRichMessageView",        "_Ready"),
     ("touch-chat-scroll",   "LanConnectRichMessageView",        "OnGuiInput"),
     ("touch-chat-scroll",   "LanConnectRichMessageView",        "RaiseReferencePressed"),
-    ("touch-chat-scroll",   "LanConnectLobbyOverlay",            "ApplyPassiveMouseFilterRecursive"),
     ("compact-sidebar-layout", "LanConnectLobbyOverlay",         "BuildSelectedRoomDetailPanel"),
     ("chat-server-switch",  "LanConnectBasicChatPanel",         "UpdateAvailability"),
     ("announcement-source", "LobbyApiClient",                   "GetAnnouncementsAsync"),
