@@ -193,6 +193,12 @@ internal static class ChatInviteJoin
                 MinSize = new Vector2I(760, 420)
             };
 
+            // The dialog keeps the engine's default type sizes, which read as tiny inside a 760x420 box, so the body and
+            // both buttons are scaled to the window that was just enlarged
+            dialog.GetLabel().AddThemeFontSizeOverride("font_size", 26);
+            dialog.GetOkButton().AddThemeFontSizeOverride("font_size", 24);
+            dialog.GetCancelButton()?.AddThemeFontSizeOverride("font_size", 24);
+
             dialog.Confirmed += () =>
             {
                 dialog.QueueFree();

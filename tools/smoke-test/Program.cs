@@ -84,6 +84,7 @@ string[] expectedFixIds =
     ("lobby-entry-direct",  "LanConnectServerSelectionStartup", "Show"),
     ("room-chat-hint-passthrough", "LanConnectRoomChatOverlay", "RefreshFromSource"),
     ("chat-invite-card",   "LanConnectBasicChatPanel",          "BuildMessageContent"),
+    ("chat-invite-card",   "LanConnectBasicChatPanel",          "_Ready"),
     ("chat-invite-card",   "LanConnectRichMessageView",          "OnMetaClicked")
 ];
 

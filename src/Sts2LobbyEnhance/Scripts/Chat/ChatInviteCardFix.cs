@@ -49,6 +49,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     private const string InvitePrefix = "STS2INV:";
 
+    private const string TickerMetaName = "lobby_enhance_invite_ticker";
+
     private const string CopyLabel = "  ｜ 复制";
 
     // Warm and bright on purpose: the chat background is dark parchment, and the first blue this shipped with was
@@ -74,8 +76,6 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     /// <summary>Every capsule currently on screen, so the ticker can re-read the pool snapshot for the visible ones.</summary>
     private static readonly List<Card> Cards = new();
-
-    private static bool _tickerAdded;
 
     private static Shape? _shape;
 
@@ -134,6 +134,21 @@ internal sealed class ChatInviteCardFix : ICompatFix
         harmony.Patch(
             shape.ViewCtor,
             postfix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(ViewCtorPostfix)));
+
+        // The panel is the ticker's only possible host; the type is the one Applies() already validated
+        MethodInfo? panelReady = shape.BuildContent.DeclaringType?.GetMethod(
+            "_Ready",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+        if (panelReady != null)
+        {
+            harmony.Patch(
+                panelReady,
+                postfix: new HarmonyMethod(typeof(ChatInviteCardFix), nameof(PanelReadyPostfix)));
+        }
+        else
+        {
+            WarnOnce("the chat panel declares no _Ready, so the invite recheck has no host");
+        }
 
         harmony.Patch(
             shape.MetaClicked,
@@ -297,7 +312,6 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
             Cards.RemoveAll(card => !GodotObject.IsInstanceValid(card.View));
             Cards.Add(new Card(view, capsuleIndex, hooks));
-            InstallTicker(view);
         }
         catch (Exception exception)
         {
@@ -365,8 +379,32 @@ internal sealed class ChatInviteCardFix : ICompatFix
         };
     }
 
-    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "chat-invite-card", message);
+    /// <summary>
+    /// Attaches the recheck ticker to the chat panel. The view cannot host it: a row's view is constructed before it is
+    /// added to the tree, so at constructor time it has no parent to walk up from - which is exactly why the ticker never
+    /// started and both capsules froze on the state the message arrived with
+    /// </summary>
+    // ReSharper disable once InconsistentNaming
+    private static void PanelReadyPostfix(object? __instance)
+    {
+        try
+        {
+            if (__instance is not Control panel || !GodotObject.IsInstanceValid(panel) || !panel.IsInsideTree()
+                || panel.HasMeta(TickerMetaName))
+            {
+                return;
+            }
 
+            panel.AddChild(new ChatInviteTicker { Name = "LobbyEnhanceInviteTicker" });
+            panel.SetMeta(TickerMetaName, true);
+        }
+        catch (Exception exception)
+        {
+            WarnOnce("could not start the invite recheck: " + exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
+    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "chat-invite-card", message);
 
     /// <summary>
     /// Re-reads the pool snapshot for the capsules that are actually on screen and repaints the ones whose state moved.
@@ -421,34 +459,6 @@ internal sealed class ChatInviteCardFix : ICompatFix
         }
 
         return false;
-    }
-
-    /// <summary>Adds the recheck ticker to the chat panel once, so it lives and dies with that panel.</summary>
-    private static void InstallTicker(Node view)
-    {
-        if (_tickerAdded)
-        {
-            return;
-        }
-
-        try
-        {
-            for (Node? node = view; node != null; node = node.GetParent())
-            {
-                if (node.GetType().FullName != PanelTypeName)
-                {
-                    continue;
-                }
-
-                node.AddChild(new ChatInviteTicker { Name = "LobbyEnhanceInviteTicker" });
-                _tickerAdded = true;
-                return;
-            }
-        }
-        catch (Exception exception)
-        {
-            WarnOnce("could not start the invite recheck: " + exception.GetType().Name + ": " + exception.Message);
-        }
     }
 
     /// <summary>Drives <see cref="Tick"/> a few times a second while its panel is alive.</summary>
