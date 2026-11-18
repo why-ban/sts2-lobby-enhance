@@ -40,6 +40,9 @@ internal sealed class PoolRefreshFix : ICompatFix
 
     private static PoolAnchors? _anchors;
 
+    /// <summary>The anchors this repair resolved once, for callers that need the same handles (never rebuilt).</summary>
+    internal static PoolAnchors? LiveAnchors => _anchors;
+
     /// <summary>Warnings already printed, keyed by their call signature: one kind of trouble must not silence the rest</summary>
     private static readonly object WarnGate = new();
 

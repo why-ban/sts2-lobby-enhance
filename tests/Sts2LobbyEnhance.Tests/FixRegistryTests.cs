@@ -47,7 +47,8 @@ public sealed class FixRegistryTests
         "server-pool-create",
         "server-pool-create-picker",
         "lobby-entry-direct",
-        "room-chat-hint-passthrough"
+        "room-chat-hint-passthrough",
+        "chat-invite-card"
     ];
 
     private static string ScriptsDirectory =>
