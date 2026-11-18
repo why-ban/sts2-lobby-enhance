@@ -49,13 +49,18 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     private const string CopyLabel = "  ｜ 复制";
 
-    private static readonly Color AvailableColor = new(0.55f, 0.92f, 1f);
+    // Warm and bright on purpose: the chat background is dark parchment, and the first blue this shipped with was
+    // unreadable on it
+    private static readonly Color AvailableColor = new(1f, 0.78f, 0.32f);
 
-    private static readonly Color StaleColor = new(0.74f, 0.44f, 0.44f);
+    private static readonly Color StaleColor = new(1f, 0.45f, 0.42f);
 
-    private static readonly Color UnknownColor = new(0.95f, 0.8f, 0.45f);
+    private static readonly Color UnknownColor = new(1f, 0.88f, 0.62f);
 
-    private static readonly Color CopyColor = new(0.75f, 0.78f, 0.85f);
+    private static readonly Color CopyColor = new(0.86f, 0.88f, 0.94f);
+
+    /// <summary>How long the row brightens after a copy, so the click is visibly acknowledged.</summary>
+    private const double CopyFlashSeconds = 0.14;
 
     /// <summary>Per view: the metas that mean "copy the raw code", and the code itself.</summary>
     private static readonly ConditionalWeakTable<object, CopyHook> CopyHooks = new();
@@ -205,7 +210,9 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 pieces.Add(shape.MakeText(original[hit], text[..at], text[..at], string.Empty));
             }
 
-            object joinReference = shape.MakeReference(shape.MakeSegment(code));
+            // Without join anchors the capsule carries no reference at all: upstream would otherwise offer its
+            // reference preview for a click that cannot go anywhere
+            object? joinReference = ChatInviteJoin.Available ? shape.MakeReference(shape.MakeSegment(code)) : null;
             pieces.Add(shape.MakeSpan(capsule, code, capsule, color, null, joinReference));
 
             object reference = shape.MakeReference(shape.MakeSegment(code));
@@ -239,7 +246,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 {
                     hooks.Metas.Add("ref-" + index);
                 }
-                else if (ReferenceEquals(entry, joinReference))
+                else if (joinReference != null && ReferenceEquals(entry, joinReference))
                 {
                     hooks.JoinMetas.Add("ref-" + index);
                 }
@@ -256,7 +263,11 @@ internal sealed class ChatInviteCardFix : ICompatFix
                 }
             }
 
-            indexer.Invoke(table, new[] { ChatInviteJoin.MetaName, joinReference });
+            if (joinReference != null)
+            {
+                indexer.Invoke(table, new[] { ChatInviteJoin.MetaName, joinReference });
+            }
+
             indexer.Invoke(table, new[] { "sts2le-copy", reference });
 
             shape.Spans.SetValue(__instance, array);
@@ -294,6 +305,7 @@ internal sealed class ChatInviteCardFix : ICompatFix
             }
 
             DisplayServer.ClipboardSet(hook.Raw);
+            Flash(view);
             return false;
         }
         catch (Exception exception)
@@ -301,6 +313,32 @@ internal sealed class ChatInviteCardFix : ICompatFix
             WarnOnce("copying a chat invite failed: " + exception.GetType().Name + ": " + exception.Message);
             return true;
         }
+    }
+
+    /// <summary>Brightens the row for a moment: the copy itself leaves no other trace on screen.</summary>
+    private static void Flash(Node view)
+    {
+        if (view is not CanvasItem item || !GodotObject.IsInstanceValid(item))
+        {
+            return;
+        }
+
+        Color original = item.Modulate;
+        item.Modulate = new Color(1.9f, 1.9f, 1.9f, original.A);
+        SceneTreeTimer? timer = view.GetTree()?.CreateTimer(CopyFlashSeconds);
+        if (timer == null)
+        {
+            item.Modulate = original;
+            return;
+        }
+
+        timer.Timeout += () =>
+        {
+            if (GodotObject.IsInstanceValid(item))
+            {
+                item.Modulate = original;
+            }
+        };
     }
 
     private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "chat-invite-card", message);

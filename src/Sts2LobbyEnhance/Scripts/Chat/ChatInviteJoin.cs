@@ -37,6 +37,9 @@ internal static class ChatInviteJoin
 
     internal static string MetaName => JoinMeta;
 
+    /// <summary>False when the join anchors could not be resolved; the capsule then stays plain text.</summary>
+    internal static bool Available => _shape != null;
+
     /// <summary>Resolved once by the caller's <see cref="ChatInviteCardFix.Applies"/>; nothing here touches Godot.</summary>
     internal static bool TryCapture(Assembly host, List<string> problems)
     {
@@ -60,7 +63,7 @@ internal static class ChatInviteJoin
         MethodInfo? beginJoin = overlay?.GetMethods(AnyMember)
             .FirstOrDefault(method => method.Name == BeginJoinMethodName
                                       && method.GetParameters().Length == 5
-                                      && method.ReturnType == typeof(Task));
+                                      && typeof(Task).IsAssignableFrom(method.ReturnType));
 
         PropertyInfo? baseUrl = config?.GetProperty("LobbyServerBaseUrl", StaticAny)
                                ?? config?.GetProperty("LobbyServerBaseUrl", InstanceAny);
@@ -71,7 +74,7 @@ internal static class ChatInviteJoin
         MethodInfo? switchServer = runtime?.GetMethods(AnyMember)
             .FirstOrDefault(method => method.Name == "SwitchLobbyServerWithContextAsync"
                                       && method.GetParameters().Length == 2
-                                      && method.ReturnType == typeof(Task));
+                                      && typeof(Task).IsAssignableFrom(method.ReturnType));
 
         MethodInfo? acquire = runtime?.GetMethods(AnyMember)
             .FirstOrDefault(method => method.Name == "AcquireCurrentServerContext"
@@ -84,7 +87,7 @@ internal static class ChatInviteJoin
         MethodInfo? getRooms = api?.GetMethods(AnyMember)
             .FirstOrDefault(method => method.Name == "GetRoomsAsync"
                                       && method.GetParameters().Length == 1
-                                      && method.ReturnType == typeof(Task));
+                                      && typeof(Task).IsAssignableFrom(method.ReturnType));
 
         MethodInfo? showInfo = popup?.GetMethods(AnyMember)
             .FirstOrDefault(method => method.Name == "ShowInfo"
