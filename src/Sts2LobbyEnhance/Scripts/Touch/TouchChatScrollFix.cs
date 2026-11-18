@@ -15,9 +15,11 @@ namespace Sts2LobbyEnhance;
 /// whole tree once the sidebar exists, which silences the chat's own <c>ScrollContainer</c>; the in-run HUD never runs that
 /// pass, which is why the same panel scrolls there and not in the room-selection sidebar.
 ///
-/// On a phone nothing is offered in place of the removed selection: a long press does nothing, no highlight is painted and
-/// nothing is copied. Desktop never enters any of these bodies, so mouse selection, copy and reference clicks stay exactly
-/// upstream's own there, and on both platforms a tap on a message still opens its reference preview.
+/// On a phone nothing is offered in place of the removed selection: no highlight is painted, nothing is copied, and a
+/// finger held still for 400 ms opens nothing when it lifts - upstream decides "tap" by travel alone, so without that
+/// last piece a still long press would still open the reference preview. A shorter tap still opens it, a drag still only
+/// scrolls, and desktop never enters any of these bodies, so mouse selection, copy and reference clicks stay exactly
+/// upstream's own there.
 /// </summary>
 internal sealed class TouchChatScrollFix : ICompatFix
 {
@@ -26,6 +28,16 @@ internal sealed class TouchChatScrollFix : ICompatFix
     private const string ViewReadyMethodName = "_Ready";
 
     private const string ViewLabelFieldName = "_label";
+
+    private const string ViewInputMethodName = "OnGuiInput";
+
+    private const string ViewInputParameterName = "input";
+
+    private const string ReferencePressedMethodName = "RaiseReferencePressed";
+
+    private const string InputEventTypeName = "Godot.InputEvent";
+
+    private const string StringTypeName = "System.String";
 
     private const string PanelTypeName = "Sts2LanConnect.Scripts.LanConnectBasicChatPanel";
 
@@ -56,10 +68,20 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// </summary>
     private const string ScrollTargetMetaName = "lobby_enhance_chat_scroll_target";
 
+    /// <summary>
+    /// When the finger that is currently on a message went down. A still finger that has been down longer than
+    /// <see cref="LongPressMilliseconds"/> is a long press, not a tap, and must not open a reference preview
+    /// </summary>
+    private const string PressStartedMetaName = "lobby_enhance_reference_press_at";
+
+    /// <summary>The same 400 ms the chat panel uses to tell a hold from a tap</summary>
+    private const long LongPressMilliseconds = 400;
+
     private static Shape? _shape;
 
     private static int _viewWarned;
     private static int _scrollBarWarned;
+    private static int _referenceWarned;
 
     public string Id => "touch-chat-scroll";
 
@@ -112,13 +134,33 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 priority = Priority.Last
             });
 
+        // Timing only: upstream's own handler has already run, and this records when the finger went down and drops the
+        // stamp when it comes back up
+        harmony.Patch(
+            shape.ViewInput,
+            postfix: new HarmonyMethod(typeof(TouchChatScrollFix), nameof(ViewInputPostfix))
+            {
+                priority = Priority.Last
+            });
+
+        // The one funnel every activation path goes through - the touch release and the label's meta click alike - so one
+        // guard covers both
+        harmony.Patch(
+            shape.ReferencePressed,
+            prefix: new HarmonyMethod(typeof(TouchChatScrollFix), nameof(ReferencePressedPrefix))
+            {
+                priority = Priority.First
+            });
+
         Entry.Info(
-            "touch-chat-scroll: patched " + ViewTypeName + "." + ViewReadyMethodName + " and " + PanelTypeName + "." +
+            "touch-chat-scroll: patched " + ViewTypeName + "." + ViewReadyMethodName + ", " + ViewTypeName + "." +
+            ViewInputMethodName + ", " + ViewTypeName + "." + ReferencePressedMethodName + " and " + PanelTypeName + "." +
             ScrollBarStyleMethodName + ". On a mobile build a drag over the chat log scrolls it: the message label hands " +
             "the pointer on and never anchors a selection, the log's ScrollContainer hands it on too, and the theme's " +
             "focus ring on a message is emptied so nothing can be painted outside the message area. A phone offers no " +
-            "selection and no copy; on desktop every patch body returns without touching a property, so selection, copy " +
-            "and reference clicks stay as upstream built them.");
+            "selection and no copy, and a finger held still on a message for 400 ms or longer opens nothing when it lifts; " +
+            "a shorter tap still opens the reference preview. On desktop every patch body returns without touching a " +
+            "property, so selection, copy and reference clicks stay as upstream built them.");
     }
 
     /// <summary>
@@ -235,6 +277,71 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
+    /// Remembers when the finger currently on this row went down, and forgets it when the finger lifts. Runs after
+    /// upstream's handler so nothing about its tap detection changes: the only thing added here is a timestamp
+    /// </summary>
+    // ReSharper disable once InconsistentNaming
+    private static void ViewInputPostfix(object? __instance, InputEvent? input)
+    {
+        try
+        {
+            if (!Platform.IsMobile || __instance is not Node view || !GodotObject.IsInstanceValid(view)
+                || input is not InputEventScreenTouch touch)
+            {
+                return;
+            }
+
+            if (touch.Pressed)
+            {
+                view.SetMeta(PressStartedMetaName, (long)Time.GetTicksMsec());
+            }
+            else if (view.HasMeta(PressStartedMetaName))
+            {
+                // Removing a meta that is not there logs an engine error, so this is guarded
+                view.RemoveMeta(PressStartedMetaName);
+            }
+        }
+        catch (Exception exception)
+        {
+            WarnOnce(ref _viewWarned, "could not time a press on a message: " + exception.GetType().Name + ": " +
+                                      exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// A finger that stayed down for 400 ms without travelling is a long press, not a tap, so the preview it would
+    /// otherwise open on release is skipped. Both of upstream's activation paths call this one method - the touch release
+    /// in its own handler and the label's meta click - and the travel rule is already upstream's own (16 px cancels the
+    /// tap), so a drag never gets here in the first place. Desktop never reaches this guard
+    /// </summary>
+    private static bool ReferencePressedPrefix(object? __instance)
+    {
+        try
+        {
+            if (!Platform.IsMobile || __instance is not Node view || !GodotObject.IsInstanceValid(view)
+                || !view.HasMeta(PressStartedMetaName))
+            {
+                return true;
+            }
+
+            long startedAt = view.GetMeta(PressStartedMetaName).AsInt64();
+            if (startedAt <= 0L)
+            {
+                return true;
+            }
+
+            return (long)Time.GetTicksMsec() - startedAt < LongPressMilliseconds;
+        }
+        catch (Exception exception)
+        {
+            // A broken guard must not swallow a real activation, so fall through to upstream
+            WarnOnce(ref _referenceWarned, "could not tell whether a long press opened a reference: " +
+                                           exception.GetType().Name + ": " + exception.Message);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// One warning per call site. The rows are rebuilt continuously, so an unguarded log here would flood the log file
     /// from a single broken build
     /// </summary>
@@ -283,14 +390,25 @@ internal sealed class TouchChatScrollFix : ICompatFix
     /// </summary>
     internal sealed class Shape
     {
-        private Shape(MethodInfo viewReady, FieldInfo label, MethodInfo scrollBarStyle)
+        private Shape(
+            MethodInfo viewReady,
+            MethodInfo viewInput,
+            MethodInfo referencePressed,
+            FieldInfo label,
+            MethodInfo scrollBarStyle)
         {
             ViewReady = viewReady;
+            ViewInput = viewInput;
+            ReferencePressed = referencePressed;
             Label = label;
             ScrollBarStyle = scrollBarStyle;
         }
 
         internal MethodInfo ViewReady { get; }
+
+        internal MethodInfo ViewInput { get; }
+
+        internal MethodInfo ReferencePressed { get; }
 
         internal FieldInfo Label { get; }
 
@@ -312,6 +430,27 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 VoidTypeName,
                 firstParameterTypeName: null);
 
+            // OnGuiInput(InputEvent) - the row's own handler for the pointer stream
+            MethodInfo? viewInput = Declared(
+                missing,
+                view,
+                ViewInputMethodName,
+                requireStatic: false,
+                arity: 1,
+                VoidTypeName,
+                InputEventTypeName);
+
+            // RaiseReferencePressed(string, LanConnectRichMessageReference). The second parameter is a host type, so
+            // arity plus the string first parameter identifies it without naming that type here
+            MethodInfo? referencePressed = Declared(
+                missing,
+                view,
+                ReferencePressedMethodName,
+                requireStatic: false,
+                arity: 2,
+                VoidTypeName,
+                StringTypeName);
+
             FieldInfo? label = ReflectScope.Field(missing, view, ViewLabelFieldName);
             if (label != null && !InheritsFrom(label.FieldType, RichTextLabelTypeName))
             {
@@ -330,6 +469,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 ScrollBarTypeName);
 
             ReflectScope.RequireParameterNames(missing, scrollBarStyle, ScrollBarParameterName);
+            ReflectScope.RequireParameterNames(missing, viewInput, ViewInputParameterName);
 
             if (missing.Count > 0)
             {
@@ -338,7 +478,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
             }
 
             reason = string.Empty;
-            return new Shape(viewReady!, label!, scrollBarStyle!);
+            return new Shape(viewReady!, viewInput!, referencePressed!, label!, scrollBarStyle!);
         }
 
         /// <summary>
