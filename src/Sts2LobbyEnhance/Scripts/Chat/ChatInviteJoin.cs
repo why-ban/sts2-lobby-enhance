@@ -17,8 +17,6 @@ internal static class ChatInviteJoin
 
     private const string ApiClientTypeName = "Sts2LanConnect.Scripts.LobbyApiClient";
 
-    private const string OverlaySimpleName = "LanConnectLobbyOverlay";
-
     private const string PopupSimpleName = "LanConnectPopupUtil";
 
     private const string AddressSimpleName = "LanConnectLobbyServerAddress";

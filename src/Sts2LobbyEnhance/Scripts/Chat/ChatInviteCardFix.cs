@@ -494,22 +494,16 @@ internal sealed class ChatInviteCardFix : ICompatFix
             CapsuleIndex = capsuleIndex;
             Server = hook.Server;
             RoomId = hook.RoomId;
-            Password = hook.Password;
             Text = hook.Capsule;
-            Hook = hook;
         }
 
         internal Node View { get; }
 
         internal int CapsuleIndex { get; }
 
-        internal CopyHook Hook { get; }
-
         internal string Server { get; }
 
         internal string RoomId { get; }
-
-        internal string? Password { get; }
 
         internal string Text { get; set; }
 
@@ -573,7 +567,6 @@ internal sealed class ChatInviteCardFix : ICompatFix
             Color = spanType.GetProperty("Color")!;
             Texture = spanType.GetProperty("Texture")!;
             Reference = spanType.GetProperty("Reference")!;
-            SpanCtor = spanType.GetConstructors().OrderByDescending(c => c.GetParameters().Length).First();
             ReferenceCtor = referenceType.GetConstructors().First();
         }
 
@@ -608,8 +601,6 @@ internal sealed class ChatInviteCardFix : ICompatFix
         internal PropertyInfo Texture { get; }
 
         internal PropertyInfo Reference { get; }
-
-        internal ConstructorInfo SpanCtor { get; }
 
         internal ConstructorInfo ReferenceCtor { get; }
 
@@ -844,8 +835,6 @@ internal sealed class ChatInviteCardFix : ICompatFix
         internal object MakeText(object source, string display, string copy, string accessible)
         {
             object? texture = Texture.GetValue(source);
-            object? reference = null;
-            _ = reference;
             return Activator.CreateInstance(
                 SpanType,
                 display,
