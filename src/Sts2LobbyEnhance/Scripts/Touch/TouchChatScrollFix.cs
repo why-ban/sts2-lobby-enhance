@@ -5,15 +5,19 @@ using HarmonyLib;
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Phone-only: a finger drag anywhere on the chat log scrolls it, and that is the whole repair. The message row is patched
-/// where upstream finishes building it: its label gives the pointer back and stops anchoring a text selection, and the
-/// message area's <c>ScrollContainer</c> is given the pointer back as well.
+/// Phone-only: a finger drag anywhere on the chat log scrolls it, and that is the whole repair. Two things have to be
+/// undone for that, and they happen in two different places.
 ///
-/// Both halves are needed because of how the row is built. The label ships with selection on (with emulate_mouse_from_touch
-/// a press would anchor a selection and the drag would extend it instead of scrolling) and with a focus ring that the
-/// engine paints while ignoring every clip. And the lobby overlay runs a blanket "everything is passive" pass over its
-/// whole tree once the sidebar exists, which silences the chat's own <c>ScrollContainer</c>; the in-run HUD never runs that
-/// pass, which is why the same panel scrolls there and not in the room-selection sidebar.
+/// The message row: its label ships with selection on (with emulate_mouse_from_touch a press would anchor a selection and
+/// the drag would extend it instead of scrolling) and with a focus ring that the engine paints while ignoring every clip,
+/// so the row postfix gives the pointer back, leaves selection off and empties that ring.
+///
+/// The message area: the lobby overlay walks its whole tree once the sidebar is built and makes every Control passive,
+/// the chat's own <c>ScrollContainer</c> included. Silencing it means <c>ScrollContainer::gui_input</c> never runs and a
+/// drag over the log does nothing; the in-run HUD never runs that pass, which is the whole difference between the two
+/// chat surfaces. That pass is patched too, and the postfix fires for the message ScrollContainer right after it was
+/// silenced - correcting it from the row instead loses the race, because the rows are built and their postfixes run one
+/// line before the sweep.
 ///
 /// On a phone nothing is offered in place of the removed selection: no highlight is painted, nothing is copied, and a
 /// finger held still for 400 ms opens nothing when it lifts - upstream decides "tap" by travel alone, so without that
@@ -33,6 +37,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
     private const string ViewInputParameterName = "input";
 
+    /// <summary>The pass's only argument; the postfix binds to it by name (upstream: <c>Node node</c>)</summary>
+    private const string PassiveFilterParameterName = "node";
+
     private const string ReferencePressedMethodName = "RaiseReferencePressed";
 
     private const string InputEventTypeName = "Godot.InputEvent";
@@ -40,6 +47,18 @@ internal sealed class TouchChatScrollFix : ICompatFix
     private const string StringTypeName = "System.String";
 
     private const string PanelTypeName = "Sts2LanConnect.Scripts.LanConnectBasicChatPanel";
+
+    private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectLobbyOverlay";
+
+    private const string PassiveFilterMethodName = "ApplyPassiveMouseFilterRecursive";
+
+    private const string NodeTypeName = "Godot.Node";
+
+    /// <summary>
+    /// Stamped on the two nodes the chat's pointer has to reach - the message label and the message ScrollContainer - so
+    /// the passive pass can hand exactly those two back and nothing else
+    /// </summary>
+    private const string ChatPointerMetaName = "lobby_enhance_chat_pointer";
 
     private const string ScrollBarStyleMethodName = "ApplyLobbyScrollBarStyle";
 
@@ -63,12 +82,6 @@ internal sealed class TouchChatScrollFix : ICompatFix
     private const float ScrollBarTouchWidth = 44f;
 
     /// <summary>
-    /// Marks a message <c>ScrollContainer</c> that already has its pointer back. The rows are rebuilt on every message
-    /// change, so without it every rebuild would walk the same chain again
-    /// </summary>
-    private const string ScrollTargetMetaName = "lobby_enhance_chat_scroll_target";
-
-    /// <summary>
     /// When the finger that is currently on a message went down. A still finger that has been down longer than
     /// <see cref="LongPressMilliseconds"/> is a long press, not a tap, and must not open a reference preview
     /// </summary>
@@ -82,6 +95,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
     private static int _viewWarned;
     private static int _scrollBarWarned;
     private static int _referenceWarned;
+    private static int _passiveWarned;
 
     public string Id => "touch-chat-scroll";
 
@@ -134,6 +148,16 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 priority = Priority.Last
             });
 
+        // The lobby overlay silences its whole tree once the sidebar exists, chat message area included. This postfix runs
+        // for the message ScrollContainer inside that same pass, i.e. always after the node was silenced, so no ordering or
+        // rebuild can leave the log draggable-dead
+        harmony.Patch(
+            shape.PassiveFilter,
+            postfix: new HarmonyMethod(typeof(TouchChatScrollFix), nameof(PassiveFilterPostfix))
+            {
+                priority = Priority.Last
+            });
+
         // Timing only: upstream's own handler has already run, and this records when the finger went down and drops the
         // stamp when it comes back up
         harmony.Patch(
@@ -154,8 +178,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
         Entry.Info(
             "touch-chat-scroll: patched " + ViewTypeName + "." + ViewReadyMethodName + ", " + ViewTypeName + "." +
-            ViewInputMethodName + ", " + ViewTypeName + "." + ReferencePressedMethodName + " and " + PanelTypeName + "." +
-            ScrollBarStyleMethodName + ". On a mobile build a drag over the chat log scrolls it: the message label hands " +
+            ViewInputMethodName + ", " + ViewTypeName + "." + ReferencePressedMethodName + ", " + PanelTypeName + "." +
+            ScrollBarStyleMethodName + " and " + OverlayTypeName + "." + PassiveFilterMethodName + ". On a mobile build a " +
+            "drag over the chat log scrolls it: the message label hands " +
             "the pointer on and never anchors a selection, the log's ScrollContainer hands it on too, and the theme's " +
             "focus ring on a message is emptied so nothing can be painted outside the message area. A phone offers no " +
             "selection and no copy, and a finger held still on a message for 400 ms or longer opens nothing when it lifts; " +
@@ -187,8 +212,9 @@ internal sealed class TouchChatScrollFix : ICompatFix
             }
 
             // Pass keeps GuiInput (upstream's own reference handling needs it) and stops consuming the event, so the
-            // chat ScrollContainer finally sees the drag
+            // chat ScrollContainer finally sees the drag. The mark is what the passive pass hands back below
             label.MouseFilter = Control.MouseFilterEnum.Pass;
+            label.SetMeta(ChatPointerMetaName, true);
 
             // Selection off for good: with emulate_mouse_from_touch a press would otherwise anchor a selection and the
             // drag would extend it, which is the "drag selects text" symptom. Nothing on a phone turns this back on, so a
@@ -206,7 +232,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
             // left to paint outside the box the message area's own edge contains everything that is drawn in it
             label.AddThemeStyleboxOverride("focus", new StyleBoxEmpty());
 
-            RestoreScrollTarget(view);
+            MarkScrollTarget(view);
         }
         catch (Exception exception)
         {
@@ -216,14 +242,42 @@ internal sealed class TouchChatScrollFix : ICompatFix
     }
 
     /// <summary>
-    /// Gives the message area's <c>ScrollContainer</c> its pointer back. The lobby overlay runs
-    /// <c>ApplyPassiveMouseFilterRecursive</c> over its whole tree once the sidebar exists, and that pass sets
-    /// <c>MouseFilter.Ignore</c> on every Control that is not a Button, a LineEdit or a ColorRect - the chat's
-    /// ScrollContainer included. Ignore keeps it out of GuiInput, so <c>ScrollContainer::gui_input</c> never ran and a
-    /// drag over the log did nothing, while the in-run HUD (which never runs that pass) scrolled normally. The rows
-    /// themselves stay passive; the event climbs through them to the container, which is what starts the drag
+    /// The lobby overlay walks its whole tree once the sidebar is built and sets <c>MouseFilter.Ignore</c> on every Control
+    /// that is not a Button, a LineEdit or a ColorRect - the message label and the message ScrollContainer included, which
+    /// silences the whole chat surface: no GuiInput on the label, so no reference tap either, and no
+    /// <c>ScrollContainer::gui_input</c>, so no drag. The rows exist before that sweep runs (the panel builds them inside
+    /// its own <c>_Ready</c>), so correcting them from the row is overwritten; this postfix fires per visited node, i.e.
+    /// for each marked node right after the sweep silenced it, and hands it back
     /// </summary>
-    private static void RestoreScrollTarget(Node view)
+    // ReSharper disable once InconsistentNaming
+    private static void PassiveFilterPostfix(Node? node)
+    {
+        try
+        {
+            if (!Platform.IsMobile || node is not Control control || !GodotObject.IsInstanceValid(control))
+            {
+                return;
+            }
+
+            if (control.MouseFilter != Control.MouseFilterEnum.Ignore || !control.HasMeta(ChatPointerMetaName))
+            {
+                return;
+            }
+
+            control.MouseFilter = Control.MouseFilterEnum.Pass;
+        }
+        catch (Exception exception)
+        {
+            WarnOnce(ref _passiveWarned, "could not keep the chat log draggable: " + exception.GetType().Name + ": " +
+                                         exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Marks the message area's <c>ScrollContainer</c> from the row: the first one above a message row is the one whose
+    /// drag scrolls the log
+    /// </summary>
+    private static void MarkScrollTarget(Node view)
     {
         for (Node? node = view.GetParent(); node != null; node = node.GetParent())
         {
@@ -232,22 +286,11 @@ internal sealed class TouchChatScrollFix : ICompatFix
                 continue;
             }
 
-            if (container.HasMeta(ScrollTargetMetaName))
-            {
-                return;
-            }
-
-            container.SetMeta(ScrollTargetMetaName, true);
-
-            string before = container.MouseFilter.ToString();
+            container.SetMeta(ChatPointerMetaName, true);
             if (container.MouseFilter == Control.MouseFilterEnum.Ignore)
             {
                 container.MouseFilter = Control.MouseFilterEnum.Pass;
             }
-
-            Entry.Info(
-                "touch-chat-scroll: the message log's " + container.Name + " had mouse filter " + before + " and now " +
-                container.MouseFilter + ", so a finger drag over the log scrolls it.");
 
             return;
         }
@@ -395,13 +438,15 @@ internal sealed class TouchChatScrollFix : ICompatFix
             MethodInfo viewInput,
             MethodInfo referencePressed,
             FieldInfo label,
-            MethodInfo scrollBarStyle)
+            MethodInfo scrollBarStyle,
+            MethodInfo passiveFilter)
         {
             ViewReady = viewReady;
             ViewInput = viewInput;
             ReferencePressed = referencePressed;
             Label = label;
             ScrollBarStyle = scrollBarStyle;
+            PassiveFilter = passiveFilter;
         }
 
         internal MethodInfo ViewReady { get; }
@@ -414,12 +459,15 @@ internal sealed class TouchChatScrollFix : ICompatFix
 
         internal MethodInfo ScrollBarStyle { get; }
 
+        internal MethodInfo PassiveFilter { get; }
+
         internal static Shape? TryCapture(Assembly host, out string reason)
         {
             var missing = new List<string>();
 
             Type? view = ReflectScope.HostType(host, ViewTypeName, missing);
             Type? panel = ReflectScope.HostType(host, PanelTypeName, missing);
+            Type? overlay = ReflectScope.HostType(host, OverlayTypeName, missing);
 
             MethodInfo? viewReady = Declared(
                 missing,
@@ -471,6 +519,17 @@ internal sealed class TouchChatScrollFix : ICompatFix
             ReflectScope.RequireParameterNames(missing, scrollBarStyle, ScrollBarParameterName);
             ReflectScope.RequireParameterNames(missing, viewInput, ViewInputParameterName);
 
+            // ApplyPassiveMouseFilterRecursive(Node) - static on the overlay, the pass that silences the sidebar chat
+            MethodInfo? passiveFilter = Declared(
+                missing,
+                overlay,
+                PassiveFilterMethodName,
+                requireStatic: true,
+                arity: 1,
+                VoidTypeName,
+                NodeTypeName);
+
+            ReflectScope.RequireParameterNames(missing, passiveFilter, PassiveFilterParameterName);
             if (missing.Count > 0)
             {
                 reason = "missing: " + string.Join(", ", missing);
@@ -478,7 +537,7 @@ internal sealed class TouchChatScrollFix : ICompatFix
             }
 
             reason = string.Empty;
-            return new Shape(viewReady!, viewInput!, referencePressed!, label!, scrollBarStyle!);
+            return new Shape(viewReady!, viewInput!, referencePressed!, label!, scrollBarStyle!, passiveFilter!);
         }
 
         /// <summary>
