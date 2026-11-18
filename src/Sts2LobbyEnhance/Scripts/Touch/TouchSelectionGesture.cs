@@ -52,7 +52,6 @@ internal sealed class TouchSelectionGesture
     private readonly Color _rowModulate;
     private readonly bool _raisesReference;
 
-    private Control.FocusModeEnum? _focusModeBeforeSelection;
     private int? _touchIndex;
     private Vector2 _origin;
     private ulong _pressedAt;
@@ -250,18 +249,8 @@ internal sealed class TouchSelectionGesture
         _deselectOnFocusLoss = _label.DeselectOnFocusLossEnabled;
         _label.DeselectOnFocusLossEnabled = false;
 
-        // Read before enabling selection, which forces the focus mode to All
-        _focusModeBeforeSelection = _label.FocusMode;
         _label.SelectionEnabled = true;
         _label.MouseFilter = Control.MouseFilterEnum.Stop;
-
-        // Not focusable while this press is anchored: the injected press below would otherwise hand the label keyboard
-        // focus, and the theme draws that focus ring as an outline a couple of pixels OUTSIDE the label's rect. Nothing
-        // above the label clips it (a Control's clip contains its children, not its own drawing), so on touch, where the
-        // row sits flush with the message area and with the panel's edge, the ring lands outside both — the "the
-        // highlight draws over the input box" report. Selection does not need focus: the anchor comes from the synthetic
-        // press and DeselectOnFocusLoss is off for the duration
-        _label.FocusMode = Control.FocusModeEnum.None;
 
         InjectAnchorPress(labelLocal);
         _label.SelectAll();
@@ -358,14 +347,12 @@ internal sealed class TouchSelectionGesture
                 _label.DeselectOnFocusLossEnabled = restore;
             }
 
-            if (_focusModeBeforeSelection is { } restoreFocus)
-            {
-                _focusModeBeforeSelection = null;
-                _label.FocusMode = restoreFocus;
-            }
-
             _label.MouseFilter = Control.MouseFilterEnum.Pass;
             _label.SelectionEnabled = false; // turning selection off also deselects
+
+            // Selection enabled forces All and disabling it drops the row to Accessibility, so put the row back to the
+            // focus mode it is built with; otherwise the message list stops being reachable from a gamepad after one copy
+            _label.FocusMode = Control.FocusModeEnum.All;
             _label.Deselect();
         }
         catch (Exception exception)

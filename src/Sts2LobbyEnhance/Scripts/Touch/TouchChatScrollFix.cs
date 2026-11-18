@@ -166,6 +166,13 @@ internal sealed class TouchChatScrollFix : ICompatFix
             // Turning selection off also lowers focus_mode to Accessibility; All is what upstream builds this label with
             label.FocusMode = Control.FocusModeEnum.All;
 
+            // The focus ring is the only draw in a RichTextLabel that escapes clipping: the engine paints it between
+            // canvas_item_add_clip_ignore calls, a couple of pixels outside the label's own rect, so a focused row smears
+            // a light frame across the input box and past the chat window on touch. The row stays focusable on purpose
+            // (gamepad navigation and the host's focus restore keep working), the ring itself is emptied, and with nothing
+            // left to paint outside the box the message area's own edge contains everything that is drawn in it
+            label.AddThemeStyleboxOverride("focus", new StyleBoxEmpty());
+
             if (view.HasMeta(GestureAttachedMetaName))
             {
                 return;
