@@ -1,54 +1,40 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using Godot;
 using HarmonyLib;
 
 namespace Sts2LobbyEnhance;
 
 /// <summary>
-/// Desktop only: while the in-run chat is collapsed, its hint strip stops swallowing the mouse clicks that were
-/// meant for the game's own top-right buttons.
+/// The in-run chat overlay's faded hint ("按 Enter 打开聊天") sits over the game's own top-right buttons. The label itself
+/// is already <c>MouseFilter.Ignore</c> upstream, but it is wrapped in a row and a stack that are not, and one of them is
+/// explicitly <c>Stop</c>, so a click on the hint was consumed before the buttons under it could see it.
 ///
-/// The hint label is not the culprit - upstream already ships it as <c>MouseFilter = Ignore</c>. What takes the click
-/// is the chain of containers it lives in: the column holding its row is <c>Stop</c>, and the row plus the root
-/// <c>MarginContainer</c> are <c>Pass</c>, because Godot gives every <c>Container</c> <c>MOUSE_FILTER_PASS</c> by
-/// default. <c>Pass</c> is not a hole: picking returns the topmost control at that point whose filter is not
-/// <c>Ignore</c>, and the input walk then stops at the first <c>Stop</c> ancestor. The click dies inside the overlay
-/// and the button behind it is never offered the event.
-///
-/// So all three go to <c>Ignore</c> while collapsed - dropping only the <c>Stop</c> would merely move the pick up to
-/// the row - and back to exactly the values upstream chose when the panel is open. Picking recurses into children
-/// before deciding about a node itself, so the toggle bubble keeps its drags under <c>Ignore</c> parents.
-///
-/// Collapsed/expanded is read from <c>_panelFrame.Visible</c>, the flag upstream writes from
-/// <c>chat.RoomOverlayOpen</c>. The overlay itself is a <c>CanvasLayer</c>, so the clickable chain starts at
-/// <c>_root</c>, its first <c>Control</c>.
-///
-/// Mobile keeps upstream's filters, and that is a product decision rather than a technical one: the obstruction was
-/// reported on desktop, where the collapsed chat has no bubble to grab (upstream shows it only in touch pointer mode)
-/// and the strip covers the game's buttons with nothing interactive of its own. On a phone the collapsed chat is the
-/// bubble, and the player can drag the bubble out of the way.
+/// This repair walks the hint's own parent chain - the hint, its row, the stack and the overlay root - and hands each node
+/// back as <c>Ignore</c>. Nothing else is touched: the engine descends into a node's children before it checks that node's
+/// own filter, so the bubble button, the panel and its input keep receiving clicks even though their ancestors are
+/// transparent (the same rule makes the hint's own area fall through to whatever is painted underneath).
 /// </summary>
 internal sealed class RoomChatHintPassthroughFix : ICompatFix
 {
     private const string OverlayTypeName = "Sts2LanConnect.Scripts.LanConnectRoomChatOverlay";
 
-    private const string RefreshMethodName = "RefreshFromSource";
+    private const string BuildUiMethodName = "BuildUi";
+
+    private const string RootFieldName = "_root";
+
+    private const string HintLabelName = "RoomChatFadeHint";
+
+    private const string ControlTypeName = "Godot.Control";
+
+    private const string VoidTypeName = "System.Void";
 
     private static Shape? _shape;
 
     private static int _warned;
 
-    /// <summary>-1 unknown, 0 desktop, 1 mobile.</summary>
-    private static int _mobile = -1;
-
-    private static readonly ConditionalWeakTable<object, FilterState> States = new();
-
     public string Id => "room-chat-hint-passthrough";
 
-    /// <summary>
-    /// Grouped with the chat UI: a shape change in the room overlay costs the hint's click-through only.
-    /// </summary>
+    /// <summary>One overlay, one hint: a shape change here rolls back this repair and nothing else</summary>
     public FixGroup Group => FixGroup.Chat;
 
     public bool Applies(out string reason)
@@ -56,236 +42,162 @@ internal sealed class RoomChatHintPassthroughFix : ICompatFix
         Assembly? host = Reflect.FindAssembly(Entry.HostModAssemblyName);
         if (host == null)
         {
-            reason = "host mod '" + Entry.HostModAssemblyName + "' is not loaded";
+            reason = $"host mod '{Entry.HostModAssemblyName}' is not loaded";
             return false;
         }
 
-        var problems = new List<string>();
-        Shape? shape = null;
         try
         {
-            shape = Shape.TryCapture(host, problems);
+            if (!Shape.TryCapture(host, out Shape shape, out string missing))
+            {
+                reason = "missing: " + missing;
+                return false;
+            }
+
+            _shape = shape;
+            reason = string.Empty;
+            return true;
         }
         catch (Exception exception)
         {
-            problems.Add(exception.GetType().Name + ": " + exception.Message);
-        }
-
-        if (shape == null || problems.Count > 0)
-        {
-            reason = "missing: " + string.Join(", ", problems);
+            reason = $"missing: anchor capture threw {exception.GetType().Name}: {exception.Message}";
             return false;
         }
-
-        _shape = shape;
-        reason = string.Empty;
-        return true;
     }
 
     public void Apply(Harmony harmony)
     {
         Shape shape = _shape ?? throw new InvalidOperationException(
-            "room-chat-hint-passthrough: Applies() did not capture the overlay shape; refusing to patch blind.");
+            "room-chat-hint-passthrough: Apply ran without a captured shape; Applies must be consulted first.");
 
-        // RefreshFromSource runs every frame and its own body sets _panelFrame.Visible first, so a postfix sees
-        // this frame's collapsed state and not the previous one's.
         harmony.Patch(
-            shape.Refresh,
-            postfix: new HarmonyMethod(typeof(RoomChatHintPassthroughFix), nameof(RefreshPostfix)));
+            shape.BuildUi,
+            postfix: new HarmonyMethod(typeof(RoomChatHintPassthroughFix), nameof(BuildUiPostfix))
+            {
+                priority = Priority.Last
+            });
 
         Entry.Info(
-            "room-chat-hint-passthrough: while the in-run chat is collapsed its hint strip is click-through " +
-            "(root/column/row = Ignore); opening the panel restores upstream's own filters. Mobile untouched.");
+            "room-chat-hint-passthrough: patched " + OverlayTypeName + "." + BuildUiMethodName + ". The faded hint's own " +
+            "chain is set to MouseFilter.Ignore, so the line stays readable but lets every click through to the buttons " +
+            "under it; the bubble, the panel and the input keep their own filters and stay clickable.");
     }
 
-    // ReSharper disable once UnusedParameter.Local (Harmony binds by name).
-    private static void RefreshPostfix(object? __instance)
+    /// <summary>
+    /// Runs after upstream built the overlay's tree, i.e. after every filter in it was assigned once. Only the chain
+    /// between the hint label and the overlay root is touched.
+    /// </summary>
+    // ReSharper disable once InconsistentNaming
+    private static void BuildUiPostfix(object? __instance)
     {
-        Shape? shape = _shape;
-        if (shape == null || __instance is not Node overlay)
-        {
-            return;
-        }
-
-        if (MobilePlatform() || !GodotObject.IsInstanceValid(overlay) || !overlay.IsInsideTree())
-        {
-            return;
-        }
-
         try
         {
-            Sync(shape, overlay);
+            Shape? shape = _shape;
+            if (shape == null || __instance is not Node overlay || !GodotObject.IsInstanceValid(overlay))
+            {
+                return;
+            }
+
+            if (shape.Root.GetValue(__instance) is not Control root || !GodotObject.IsInstanceValid(root))
+            {
+                return;
+            }
+
+            Control? hint = FindByName(root, HintLabelName);
+            if (hint == null)
+            {
+                // A renamed hint is a shape change, not a guess: leave the tree exactly as upstream built it
+                return;
+            }
+
+            for (Node? node = hint; node != null; node = node.GetParent())
+            {
+                if (node is Control control)
+                {
+                    control.MouseFilter = Control.MouseFilterEnum.Ignore;
+                }
+
+                if (ReferenceEquals(node, root))
+                {
+                    break;
+                }
+            }
         }
         catch (Exception exception)
         {
-            // Cosmetic: leaving the hint as upstream ships it is never worse than a broken overlay.
-            WarnOnce("could not free the collapsed chat hint: " +
-                     exception.GetType().Name + ": " + exception.Message);
+            WarnOnce("could not make the chat hint transparent: " + exception.GetType().Name + ": " + exception.Message);
         }
     }
 
-    private static void Sync(Shape shape, Node overlay)
+    private static Control? FindByName(Node root, string name)
     {
-        if (shape.PanelFrame.GetValue(overlay) is not Control frame || !GodotObject.IsInstanceValid(frame))
+        if (root is Control control && string.Equals(root.Name.ToString(), name, StringComparison.Ordinal))
         {
-            return;
+            return control;
         }
 
-        FilterState state = States.GetValue(overlay, _ => new FilterState());
-        bool collapsed = !frame.Visible;
-
-        // The collapsed flag is the only input, and upstream never writes these three filters: re-applying the same
-        // values on every frame of the overlay's _Process is work with nothing to show for it.
-        if (state.Applied == collapsed)
+        foreach (Node child in root.GetChildren())
         {
-            return;
+            Control? found = FindByName(child, name);
+            if (found != null)
+            {
+                return found;
+            }
         }
 
-        if (shape.Root.GetValue(overlay) is not Control root || !GodotObject.IsInstanceValid(root))
-        {
-            return;
-        }
-
-        if (shape.Hint.GetValue(overlay) is not Control hint || !GodotObject.IsInstanceValid(hint))
-        {
-            return;
-        }
-
-        // hint -> topRow -> stack -> _root. If upstream ever reshapes this chain, the guard below leaves its
-        // behaviour completely alone instead of half-patching it.
-        if (hint.GetParent() is not Control row || row.GetParent() is not Control column ||
-            !ReferenceEquals(column.GetParent(), root))
-        {
-            return;
-        }
-
-        if (!state.Captured)
-        {
-            // Upstream does not write these three, so the first frame we see carries the values it chose.
-            state.Root = root.MouseFilter;
-            state.Column = column.MouseFilter;
-            state.Row = row.MouseFilter;
-            state.Captured = true;
-        }
-
-        root.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Root;
-        column.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Column;
-        row.MouseFilter = collapsed ? Control.MouseFilterEnum.Ignore : state.Row;
-        state.Applied = collapsed;
-
-        if (collapsed && !state.Logged)
-        {
-            state.Logged = true;
-            Entry.Info(
-                "room-chat-hint-passthrough: collapsed - the hint strip no longer blocks clicks " +
-                "(root/column/row = Ignore, restored to " + state.Root + "/" + state.Column + "/" + state.Row +
-                " when the panel is open).");
-        }
+        return null;
     }
 
-    /// <summary>
-    /// The only platform read here, cached because it crosses into the engine. Unknown resolves to mobile: then the
-    /// fix simply never runs and upstream behaviour stands unchanged.
-    /// </summary>
-    private static bool MobilePlatform()
-    {
-        int cached = Volatile.Read(ref _mobile);
-        if (cached >= 0)
-        {
-            return cached == 1;
-        }
+    private static void WarnOnce(string message) =>
+        Entry.WarnOnce(ref _warned, "room-chat-hint-passthrough", message);
 
-        int resolved;
-        try
-        {
-            resolved = OS.HasFeature("mobile") ? 1 : 0;
-        }
-        catch
-        {
-            resolved = 1;
-        }
-
-        Volatile.Write(ref _mobile, resolved);
-        return resolved == 1;
-    }
-
-    private static void WarnOnce(string message) => Entry.WarnOnce(ref _warned, "room-chat-hint-passthrough", message);
-
-    /// <summary>Per-overlay bookkeeping: the captured filters and the one log line.</summary>
-    private sealed class FilterState
-    {
-        internal bool Captured;
-
-        internal bool Logged;
-
-        /// <summary>The last collapsed state that was written into the filters; null until the first write.</summary>
-        internal bool? Applied;
-
-        /// <summary>Upstream's filters for the expanded state, restored verbatim.</summary>
-        internal Control.MouseFilterEnum Root;
-
-        internal Control.MouseFilterEnum Column;
-
-        internal Control.MouseFilterEnum Row;
-    }
-
-    /// <summary>
-    /// Every member this repair touches, resolved once in <see cref="Applies"/> and never again.
-    /// </summary>
+    /// <summary>Every anchor this repair needs, resolved once in <see cref="Applies"/>.</summary>
     internal sealed class Shape
     {
-        internal MethodInfo Refresh = null!;
-
-        internal FieldInfo Root = null!;
-
-        internal FieldInfo Hint = null!;
-
-        internal FieldInfo PanelFrame = null!;
-
-        internal static Shape? TryCapture(Assembly host, List<string> problems)
+        private Shape(MethodInfo buildUi, FieldInfo root)
         {
-            Type? overlay = ReflectScope.HostType(host, OverlayTypeName, problems);
-            if (overlay == null)
-            {
-                return null;
-            }
-
-            var shape = new Shape
-            {
-                Refresh = ReflectScope.Exact(
-                    overlay,
-                    RefreshMethodName,
-                    requireStatic: false,
-                    Array.Empty<string>(),
-                    "System.Void",
-                    problems)!,
-                Root = RequireField(problems, overlay, "_root", "MarginContainer")!,
-                Hint = RequireField(problems, overlay, "_fadeHint", "Label")!,
-                PanelFrame = RequireField(problems, overlay, "_panelFrame", "PanelContainer")!
-            };
-
-            return shape;
+            BuildUi = buildUi;
+            Root = root;
         }
 
-        private static FieldInfo? RequireField(
-            List<string> problems,
-            Type owner,
-            string name,
-            string expectedTypeName)
+        internal MethodInfo BuildUi { get; }
+
+        internal FieldInfo Root { get; }
+
+        internal static bool TryCapture(Assembly host, out Shape shape, out string missing)
         {
-            FieldInfo? field = ReflectScope.Field(problems, owner, name);
-            if (field == null)
+            shape = null!;
+            var problems = new List<string>();
+
+            Type? overlay = ReflectScope.HostType(host, OverlayTypeName, problems);
+
+            MethodInfo? buildUi = overlay?.GetMethods(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+                .FirstOrDefault(m => m.Name == BuildUiMethodName
+                                     && m.GetParameters().Length == 0
+                                     && m.ReturnType.FullName == VoidTypeName);
+
+            FieldInfo? root = ReflectScope.Field(problems, overlay, RootFieldName);
+            if (root != null && !typeof(Control).IsAssignableFrom(root.FieldType))
             {
-                return null;
+                problems.Add(OverlayTypeName + "." + RootFieldName + " is " + root.FieldType.Name + ", expected a Control");
+                root = null;
             }
 
-            if (!string.Equals(field.FieldType.Name, expectedTypeName, StringComparison.Ordinal))
+            if (buildUi == null)
             {
-                problems.Add(name + " is " + field.FieldType.FullName + ", expected " + expectedTypeName);
-                return null;
+                problems.Add(OverlayTypeName + "." + BuildUiMethodName + "() declared by the type itself not found");
             }
 
-            return field;
+            if (problems.Count > 0)
+            {
+                missing = string.Join(", ", problems);
+                return false;
+            }
+
+            shape = new Shape(buildUi!, root!);
+            missing = string.Empty;
+            return true;
         }
     }
 }

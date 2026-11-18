@@ -12,6 +12,7 @@ glow and the CJK glyph edges clean.
 
 from __future__ import annotations
 
+import json
 import math
 import sys
 from pathlib import Path
@@ -37,9 +38,27 @@ CARD_EDGE = (78, 55, 37)
 CHIP_BG = (17, 11, 10)
 DARK = (10, 6, 6)
 
+MANIFEST = Path(__file__).resolve().parent / "content" / "sts2_lobby_enhance.json"
+
+
+def manifest_version() -> str:
+    """The cover carries the version that actually ships, so a bump cannot leave this image behind."""
+    try:
+        data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise SystemExit(
+            f"Cannot read the mod version from {MANIFEST}: {error}. "
+            "Run pwsh -NoProfile -File packaging/build-content.ps1 first."
+        )
+    version = str(data.get("version") or "").strip()
+    if not version:
+        raise SystemExit(f"{MANIFEST} has no 'version' string.")
+    return version
+
+
 # --- layout (all values are 1x, multiplied by SCALE when drawn) -------------
 TITLE = "游戏大厅增强"
-SUBTITLE = "Game Lobby Enhance  ·  v2.1.0  ·  联机大厅扩展"
+SUBTITLE = f"Game Lobby Enhance  ·  v{manifest_version()}  ·  联机大厅扩展"
 EYEBROW = "SLAY THE SPIRE 2   ·   v0.113"
 FOOTER = "需游戏大厅 0.6.4  ·  联机双方都要安装"
 

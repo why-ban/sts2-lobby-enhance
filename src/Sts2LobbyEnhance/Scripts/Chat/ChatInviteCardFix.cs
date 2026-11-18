@@ -67,7 +67,8 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
     private static readonly Color UnknownColor = new(0.98f, 0.76f, 0.02f);
 
-    private static readonly Color CopyColor = new(0.98f, 0.98f, 1f);
+    /// <summary>A secondary tone that still reads on the sidebar's light card: the previous near-white was invisible there.</summary>
+    private static readonly Color CopyColor = new(0.24f, 0.33f, 0.52f);
 
     /// <summary>How long the row brightens after a copy, so the click is visibly acknowledged.</summary>
     private const double CopyFlashSeconds = 0.14;
@@ -255,7 +256,14 @@ internal sealed class ChatInviteCardFix : ICompatFix
             var pieces = new List<object>();
             if (at > 0)
             {
-                pieces.Add(shape.MakeText(original[hit], text[..at], text[..at], string.Empty));
+                string before = text[..at];
+                if (before.Length > 0 && !char.IsWhiteSpace(before[^1]))
+                {
+                    // The previous message text ran straight into the capsule: keep them apart
+                    before += " ";
+                }
+
+                pieces.Add(shape.MakeText(original[hit], before, before, string.Empty));
             }
 
             // Without join anchors the capsule carries no reference at all: upstream would otherwise offer its
@@ -268,7 +276,13 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
             if (end < text.Length)
             {
-                pieces.Add(shape.MakeText(original[hit], text[end..], text[end..], string.Empty));
+                string after = text[end..];
+                if (after.Length > 0 && !char.IsWhiteSpace(after[0]))
+                {
+                    after = " " + after;
+                }
+
+                pieces.Add(shape.MakeText(original[hit], after, after, string.Empty));
             }
 
             var rebuilt = new List<object>();
@@ -798,7 +812,9 @@ internal sealed class ChatInviteCardFix : ICompatFix
 
             try
             {
-                bool serverSeen = false;
+                // "That server answered this round and has no such room" is the stale case; a server that never answered
+                // leaves the capsule unknown, even when the pool as a whole came back empty
+                bool answered = PoolRoomStore.Instance.ServerAnswered(server);
                 string wanted = PoolAddress.ToBaseUrl(server);
                 foreach (object candidate in PoolRoomStore.Instance.Rooms)
                 {
@@ -809,20 +825,24 @@ internal sealed class ChatInviteCardFix : ICompatFix
                         continue;
                     }
 
-                    serverSeen = true;
                     if (!string.Equals(PoolRoomClient.RoomIdOf(anchors, candidate), roomId, StringComparison.Ordinal))
                     {
                         continue;
                     }
 
                     string name = Field(candidate, "RoomName") ?? "房间";
+                    if (name.Length > 10)
+                    {
+                        // A long name pushes the copy hot zone out of the narrow column
+                        name = name[..10] + "…";
+                    }
                     string mode = Field(candidate, "GameMode") ?? "STD";
                     int players = Int(candidate, "CurrentPlayers");
                     int max = Int(candidate, "MaxPlayers");
                     return ($"▶ {name} · {mode} · {players}/{max}", AvailableColor);
                 }
 
-                return serverSeen
+                return answered
                     ? ("✕ 过时的房间（无法加入）", StaleColor)
                     : ("? 暂时无法确认 · 点击重试", UnknownColor);
             }

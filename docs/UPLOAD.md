@@ -427,14 +427,14 @@ sts2-lobby-enhance-upload-kit/
 | 2.2.0 上传时用的包 | 6,509,614 B · sha256 `DD9C2DE048CFEB61734F61B4D17572B7B14BD6F8C040F8CB4DD091CC1356E8E2`（本地已被后续构建覆盖，数值留档） |
 | 2.2.0 发布包（留档） | 150,206 B · sha256 `D600E02DA784DF447693B60227538E5D43CE8DC78AFB7DA8FF536DA18A6C2006` |
 | 2.2.0 内容 | 386,043 B = dll 345,088 + 清单 1,050 + LICENSE 35,825 + NOTICES 4,080 |
-| **2.3.0（当前，待上传）** | release `dist\sts2-lobby-enhance-v2.3.0.zip` **158,576 B** · sha256 `CDF0E85E3D7176ACFBE2E9452B96B6807A00AAF643F0CDDE02BFF5993716F3BA`；内容 **404,059 B** = dll 367,104 + 清单 1,050 + LICENSE 35,825 + NOTICES 4,080；kit **6,518,146 B** · sha256 `4E379EA7E47DC804FF39ECD632D9674EA02C6464C508D81F5B3A5B649C107904`（35/35 通过） |
+| **2.3.0（当前，待上传）** | release `dist\sts2-lobby-enhance-v2.3.0.zip` **158,835 B** · sha256 `4B26415F5BD5053325BA6307E9231C183D54516F30AF776823A8B87BC7E5A093`；内容 **409,595 B** = dll 368,640 + 清单 1,050 + LICENSE 35,825 + NOTICES 4,080；kit **6,517,674 B** · sha256 `229C09F6C3DDE316FAE92C32B8CC219DD801758D60929A90433CAD231B11272F`（35/35 通过） |
 | 首次上传内容（1.7.0） | 226,838 B = dll 186,368 + 清单 651 + LICENSE 35,825 + NOTICES 3,994 |
 | 2.0.0 内容 | 160,841 B = dll 120,320 + 清单 702 + LICENSE 35,825 + NOTICES 3,994 |
 | 可见性 | public（页面匿名可访问、有订阅按钮） |
 | 必需物品 | 3749766330（游戏大厅 / STS2 LAN Connect） |
 
 > 本版原计划编号 2.1.1，上传前改定为 **2.2.0**：这一轮的内容量已超出补丁号。2.1.1 从未上传，
-> dist/ 里只有一份 release，就是本版 2.3.0 的包；上传包等 `workshop.json` 定稿后重打。
+> dist/ 里只有一份 release，就是本版 2.3.0 的包；上传包已随 `workshop.json` 定稿重打，见上表 kit 行。
 
 **以后每次更新都必须由同一个账号上传。** 工坊条目不支持转让作者；换账号只会得到
 "没有权限"或者第二条新条目。

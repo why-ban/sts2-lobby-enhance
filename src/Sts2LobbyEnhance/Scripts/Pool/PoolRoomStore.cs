@@ -39,6 +39,12 @@ internal sealed class PoolCycle
     /// <summary>First few failure reasons, so "failed=2" never has to be taken on faith.</summary>
     private readonly List<string> _errors = new();
 
+    /// <summary>
+    /// Base URLs of the servers that answered successfully in this round, including the ones that answered with zero
+    /// rooms: "answered and has no such room" and "never answered" are different facts and callers need both
+    /// </summary>
+    private readonly HashSet<string> _answered = new(StringComparer.OrdinalIgnoreCase);
+
     internal int Succeeded
     {
         get
@@ -57,6 +63,18 @@ internal sealed class PoolCycle
             lock (_gate)
             {
                 return _failed;
+            }
+        }
+    }
+
+    /// <summary>The servers that answered successfully this round, copied so a caller cannot see a half-built round.</summary>
+    internal IReadOnlyCollection<string> AnsweredServers
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _answered.ToArray();
             }
         }
     }
@@ -92,6 +110,7 @@ internal sealed class PoolCycle
             }
 
             _succeeded++;
+            _answered.Add(fetch.Server.BaseUrl);
             AddRows(anchors, fetch.Server, fetch.Rooms, fetch.LatencyMs);
         }
     }
@@ -208,6 +227,10 @@ internal sealed class PoolRoomStore
 
     private IReadOnlyList<object> _rooms = Array.Empty<object>();
 
+    /// <summary>The servers the last committed round heard from, kept beside the rooms so "no such room" can be told
+    /// apart from "that server never answered".</summary>
+    private IReadOnlyCollection<string> _answeredServers = Array.Empty<string>();
+
     private string _localVersion = string.Empty;
 
     private int _localVersionAt;
@@ -252,6 +275,7 @@ internal sealed class PoolRoomStore
                     _rooms = Array.Empty<object>();
                     _origins = new Dictionary<object, PoolOrigin>(ReferenceEqualityComparer.Instance);
                     _originByRoomId = new Dictionary<string, PoolOrigin>(StringComparer.Ordinal);
+                    _answeredServers = cycle.AnsweredServers;
                 }
 
                 return true;
@@ -282,10 +306,32 @@ internal sealed class PoolRoomStore
             _rooms = rooms;
             _origins = origins;
             _originByRoomId = byRoomId;
+            _answeredServers = cycle.AnsweredServers;
         }
 
         LastSummary = cycle.Describe();
         return true;
+    }
+
+    /// <summary>
+    /// True when the last committed round heard from this server - regardless of how many rooms it had. Callers use it to
+    /// tell "this server has no such room any more" from "this server has not answered"
+    /// </summary>
+    internal bool ServerAnswered(string baseUrl)
+    {
+        string wanted = PoolAddress.ToBaseUrl(baseUrl);
+        lock (_gate)
+        {
+            foreach (string answered in _answeredServers)
+            {
+                if (string.Equals(PoolAddress.ToBaseUrl(answered), wanted, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The server a card was drawn for, or null when the room did not come from the pool.</summary>

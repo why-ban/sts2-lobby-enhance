@@ -69,6 +69,9 @@ internal static class ChatInviteJoin
         PropertyInfo? instance = runtime?.GetProperty("Instance", StaticAny)
                                  ?? runtime?.GetProperty("Instance", InstanceAny);
 
+        // The room this client already holds, the same value upstream feeds to TargetsActiveRoom
+        PropertyInfo? activeRoomId = runtime?.GetProperty("ActiveRoomId", InstanceAny);
+
         MethodInfo? switchServer = runtime?.GetMethods(AnyMember)
             .FirstOrDefault(method => method.Name == "SwitchLobbyServerWithContextAsync"
                                       && method.GetParameters().Length == 2
@@ -110,6 +113,11 @@ internal static class ChatInviteJoin
         if (instance == null)
         {
             problems.Add(RuntimeTypeName + ".Instance");
+        }
+
+        if (activeRoomId == null)
+        {
+            problems.Add(RuntimeTypeName + ".ActiveRoomId");
         }
 
         if (switchServer == null)
@@ -156,7 +164,8 @@ internal static class ChatInviteJoin
             createClient!,
             getRooms!,
             showInfo!,
-            normalize!);
+            normalize!,
+            activeRoomId!);
         return true;
     }
 
@@ -166,11 +175,29 @@ internal static class ChatInviteJoin
     /// </summary>
     internal static bool Ask(Node view, string server, string roomId, string? password, string roomText)
     {
+        ConfirmationDialog? opened = null;
         try
         {
             if (_shape == null || view is not Node node || !GodotObject.IsInstanceValid(node) || _busy)
             {
                 return false;
+            }
+
+            Shape shape = _shape;
+
+            // Upstream's own gate before its confirm dialog (LanConnectLobbyOverlay.AcceptInviteAsync ->
+            // LanConnectInviteServerJoinCoordinator.TargetsActiveRoom): an invite that names the room this client already
+            // holds is not a join. Same room id on the same server, compared the way upstream compares them.
+            object? runtime = shape.Instance.GetValue(null);
+            if (runtime != null
+                && string.Equals(shape.ActiveRoomId.GetValue(runtime) as string, roomId, StringComparison.Ordinal))
+            {
+                string atInvite = Normalize(shape, shape.BaseUrl.GetValue(null) as string ?? string.Empty);
+                if (string.Equals(atInvite, Normalize(shape, server), StringComparison.OrdinalIgnoreCase))
+                {
+                    shape.ShowInfo.Invoke(null, new object?[] { "这是你自己正在开的房间，不需要用邀请码加入。" });
+                    return true;
+                }
             }
 
             Node? overlay = FindOverlay(node);
@@ -205,11 +232,14 @@ internal static class ChatInviteJoin
             dialog.Canceled += () => dialog.QueueFree();
 
             overlay.AddChild(dialog);
+            opened = dialog;
             dialog.PopupCentered();
             return true;
         }
         catch (Exception exception)
         {
+            // A dialog that was built but could not be shown must not be left behind in the overlay
+            opened?.QueueFree();
             WarnOnce("showing the invite confirmation failed: " + exception.GetType().Name + ": " + exception.Message);
             return false;
         }
@@ -270,6 +300,16 @@ internal static class ChatInviteJoin
             if (lease == null)
             {
                 shape.ShowInfo.Invoke(null, new object?[] { "加入失败：切换到该服务器时没有得到会话。" });
+                return;
+            }
+
+            // The invite must still point at the server the rooms are about to be read from: a switch that was undone,
+            // or a second switch landing while this one was awaited, would otherwise read another server's rooms and
+            // report "room gone" for a room that is alive. This mirrors the coordinator's own context check.
+            string atNow = Normalize(shape, shape.BaseUrl.GetValue(null) as string ?? string.Empty);
+            if (!string.Equals(atNow, invited, StringComparison.OrdinalIgnoreCase))
+            {
+                shape.ShowInfo.Invoke(null, new object?[] { "加入失败：大厅服务器在加入过程中被切走了，请再点一次邀请。" });
                 return;
             }
 
@@ -416,7 +456,8 @@ internal static class ChatInviteJoin
             MethodInfo createClient,
             MethodInfo getRooms,
             MethodInfo showInfo,
-            MethodInfo normalize)
+            MethodInfo normalize,
+            PropertyInfo activeRoomId)
         {
             BeginJoin = beginJoin;
             BaseUrl = baseUrl;
@@ -427,6 +468,7 @@ internal static class ChatInviteJoin
             GetRooms = getRooms;
             ShowInfo = showInfo;
             Normalize = normalize;
+            ActiveRoomId = activeRoomId;
         }
 
         internal MethodInfo BeginJoin { get; }
@@ -446,5 +488,8 @@ internal static class ChatInviteJoin
         internal MethodInfo ShowInfo { get; }
 
         internal MethodInfo Normalize { get; }
+
+        /// <summary><c>LanConnectLobbyRuntime.ActiveRoomId</c>: the room this client already holds, or null.</summary>
+        internal PropertyInfo ActiveRoomId { get; }
     }
 }
